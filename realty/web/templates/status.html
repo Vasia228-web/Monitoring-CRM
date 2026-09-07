@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Стан системи · Нерухомість Івано-Франківська</title>
+<style>
+:root{
+  --paper:#fbfaf8; --card:#fff; --ink:#15171c; --ink-2:#4a5058; --muted:#8a9099;
+  --line:#e4e1dc; --line-2:#ebe8e3; --accent:#1d4ed8; --accent-soft:#eef2ff;
+  --ok:#15704f; --ok-soft:#e6f2ec; --warn:#a1571c; --warn-soft:#f8eee1;
+  --bad:#a32020; --bad-soft:#f9e9e9;
+  --shadow:0 1px 2px rgba(20,22,28,.05); --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0d0f13; --card:#14171c; --ink:#e9ebef; --ink-2:#b3bac4; --muted:#7d858f;
+    --line:#232830; --line-2:#1b1f26; --accent:#7ea2ff; --accent-soft:#182034;
+    --ok:#4cb98d; --ok-soft:#14251e; --warn:#d69a52; --warn-soft:#2a2116;
+    --bad:#e4736f; --bad-soft:#2b1919; --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0d0f13; --card:#14171c; --ink:#e9ebef; --ink-2:#b3bac4; --muted:#7d858f;
+  --line:#232830; --line-2:#1b1f26; --accent:#7ea2ff; --accent-soft:#182034;
+  --ok:#4cb98d; --ok-soft:#14251e; --warn:#d69a52; --warn-soft:#2a2116;
+  --bad:#e4736f; --bad-soft:#2b1919; --shadow:none;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font:15px/1.55 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.num{font-variant-numeric:tabular-nums}
+.wrap{max-width:1120px;margin:0 auto;padding:36px 24px 80px}
+
+header{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:baseline;margin-bottom:22px}
+h1{font-size:24px;font-weight:640;letter-spacing:-.02em;margin:0}
+header .sub{color:var(--muted);font-size:13px}
+header a{color:var(--accent);text-decoration:none;font-size:13px;margin-left:auto}
+header a:hover{text-decoration:underline}
+
+h2{font-size:11px;font-weight:520;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+section{margin-bottom:30px}
+
+/* ---- стан воркера ---- */
+.worker{display:flex;flex-wrap:wrap;gap:16px 34px;align-items:center;
+  background:var(--card);border:1px solid var(--line);border-left-width:3px;
+  border-radius:10px;padding:16px 20px;box-shadow:var(--shadow)}
+.worker.active{border-left-color:var(--ok)}
+.worker.idle{border-left-color:var(--warn)}
+.worker.down{border-left-color:var(--bad)}
+.state{display:inline-flex;align-items:center;gap:9px;font-weight:620;font-size:17px}
+.state i{width:9px;height:9px;border-radius:50%;flex:none}
+.active .state{color:var(--ok)} .active .state i{background:var(--ok);
+  animation:pulse 2s ease-in-out infinite}
+.idle .state{color:var(--warn)} .idle .state i{background:var(--warn)}
+.down .state{color:var(--bad)} .down .state i{background:var(--bad)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.state i{animation:none!important}}
+.kv{font-size:13px;color:var(--muted)}
+.kv b{display:block;color:var(--ink);font-weight:560;font-size:15px;
+  font-variant-numeric:tabular-nums}
+.alert{flex:1 1 100%;background:var(--bad-soft);color:var(--bad);border-radius:8px;
+  padding:9px 12px;font-size:13.5px}
+
+/* ---- кнопки ---- */
+.controls{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+button{font:inherit;font-size:13.5px;padding:8px 14px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);
+  box-shadow:var(--shadow);transition:border-color .12s,background .12s}
+button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover:not(:disabled){background:var(--accent);color:#fff;opacity:.9}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.small{padding:5px 10px;font-size:12.5px}
+.toast{font-size:13px;color:var(--muted)}
+.toast.ok{color:var(--ok)} .toast.err{color:var(--bad)}
+
+/* ---- таблиці ---- */
+.scroll{overflow-x:auto;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:840px}
+thead th{text-align:left;font-size:10.5px;font-weight:520;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--muted);padding:11px 14px;
+  border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:12px 14px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+th.r,td.r{text-align:right}
+.src{font-weight:560}
+
+.bar{position:relative;height:5px;border-radius:3px;background:var(--line-2);
+  margin-top:5px;overflow:hidden;min-width:88px}
+.bar i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:3px}
+.bar.full i{background:var(--ok)}
+
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11.5px;
+  white-space:nowrap;font-variant-numeric:tabular-nums}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.mute{background:var(--line-2);color:var(--muted)}
+.pill.live{background:var(--accent-soft);color:var(--accent)}
+
+/* ---- панелі ---- */
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;box-shadow:var(--shadow)}
+.panel h3{font-size:12px;font-weight:560;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 12px}
+.rows{display:flex;flex-direction:column;gap:9px}
+.row{display:flex;justify-content:space-between;gap:16px;align-items:baseline;
+  font-size:13.5px}
+.row span{color:var(--muted)}
+.row b{font-weight:600;font-variant-numeric:tabular-nums}
+.hint{margin-top:12px;font-size:11.5px;color:var(--muted);line-height:1.5}
+.mono{font-family:var(--mono);font-size:12.5px}
+
+@media (max-width:640px){
+  .wrap{padding:22px 14px 60px}
+  h1{font-size:20px}
+  .worker{gap:12px 22px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Стан системи</h1>
+    <span class="sub" id="stamp">завантаження…</span>
+    <a href="/">← до оголошень</a>
+  </header>
+
+  <section>
+    <h2>Фоновий воркер</h2>
+    <div class="worker idle" id="worker">
+      <span class="state"><i></i><span id="w-state">—</span></span>
+      <span class="kv">останній сигнал<b id="w-beat">—</b></span>
+      <span class="kv">сигналів усього<b id="w-beats" class="num">—</b></span>
+      <span class="kv">процес<b id="w-pid" class="num">—</b></span>
+      <span class="kv">останній прогін<b id="w-last">—</b></span>
+      <div class="alert" id="w-alert" hidden></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Ручний запуск</h2>
+    <div class="controls">
+      <button class="primary" data-run="all">Запустити збір по всіх майданчиках</button>
+      {% for s in sources %}
+        <button data-run="{{ s }}">{{ s }}</button>
+      {% endfor %}
+      <span class="toast" id="toast"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Джерела</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Джерело</th>
+            <th class="r">Зібрано</th>
+            <th>Покриття</th>
+            <th class="r">Лишилось</th>
+            <th class="r">Успішних запитів</th>
+            <th class="r">Блокувань 24г</th>
+            <th class="r">Нових 24г</th>
+            <th>Останній успіх</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="sources"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Якість даних і витрати на модель</h2>
+    <div class="panels">
+      <div class="panel">
+        <h3>Дедуплікація</h3>
+        <div class="rows">
+          <div class="row"><span>Оголошень у базі</span><b id="q-listings">—</b></div>
+          <div class="row"><span>Унікальних квартир</span><b id="q-props">—</b></div>
+          <div class="row"><span>Склеєних дублікатів</span><b id="q-merged">—</b></div>
+          <div class="row"><span>На кількох майданчиках</span><b id="q-multi">—</b></div>
+          <div class="row"><span>Ще не зведено</span><b id="q-unassigned">—</b></div>
+        </div>
+        <p class="hint">«Ще не зведено» — нові оголошення після останнього
+          <span class="mono">cli.py dedup</span>.</p>
+      </div>
+      <div class="panel">
+        <h3>LLM-фолбек</h3>
+        <div class="rows">
+          <div class="row"><span>Викликів за 24 год</span><b id="l-calls24">—</b></div>
+          <div class="row"><span>Викликів усього</span><b id="l-calls">—</b></div>
+          <div class="row"><span>Токенів (вхід / вихід)</span><b id="l-tokens">—</b></div>
+          <div class="row"><span>Вартість усього</span><b id="l-cost">—</b></div>
+        </div>
+        <p class="hint">Рахується з моменту ввімкнення телеметрії. Модель викликається,
+          лише коли парсер не дістав ціну, площу або кімнати.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Останні прогони</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Початок</th><th>Джерело</th><th>Звідки</th><th>Статус</th>
+            <th class="r">Трив.</th><th class="r">Стор.</th><th class="r">Нових</th>
+            <th class="r">Запити</th><th class="r">LLM</th>
+          </tr>
+        </thead>
+        <tbody id="runs"></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STATE_LABEL = {active: "Працює", idle: "Очікує", down: "Не відповідає"};
+
+function fmt(n){ return n === null || n === undefined ? "—" : Number(n).toLocaleString("uk-UA"); }
+function time(iso){
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const today = new Date().toDateString() === d.toDateString();
+  return d.toLocaleTimeString("uk-UA", {hour: "2-digit", minute: "2-digit"}) +
+         (today ? "" : " " + d.toLocaleDateString("uk-UA", {day: "2-digit", month: "2-digit"}));
+}
+function dur(sec){
+  if (sec === null || sec === undefined) return "—";
+  if (sec < 60) return sec + " с";
+  return Math.floor(sec / 60) + " хв " + (sec % 60) + " с";
+}
+function rateClass(v){ return v === null ? "mute" : v >= 95 ? "ok" : v >= 80 ? "warn" : "bad"; }
+
+function render(d){
+  $("stamp").textContent = "оновлено " + time(d.generated_at) + " · автооновлення кожні 5 с";
+
+  const w = d.worker;
+  const box = $("worker");
+  box.className = "worker " + w.state;
+  $("w-state").textContent = STATE_LABEL[w.state] || w.state;
+  $("w-beat").textContent = w.beat_at ? time(w.beat_at) + " (" + w.age_min + " хв тому)" : "—";
+  $("w-beats").textContent = fmt(w.heartbeats);
+  $("w-pid").textContent = w.pid ?? "—";
+  $("w-last").textContent = time(w.last_run);
+  const alert = $("w-alert");
+  alert.hidden = !w.alert;
+  if (w.alert) alert.textContent = w.alert;
+
+  $("sources").innerHTML = d.sources.map(s => {
+    const pct = s.coverage === null ? 0 : Math.min(100, s.coverage);
+    const rate = s.success_rate;
+    return `<tr>
+      <td class="src">${s.name}${s.running ? ' <span class="pill live">збирає…</span>' : ""}</td>
+      <td class="r num">${fmt(s.collected)}</td>
+      <td>
+        <div class="num" style="font-size:12px;color:var(--muted)">${s.coverage === null ? "—" : s.coverage + "%"}</div>
+        <div class="bar ${pct >= 99 ? "full" : ""}"><i style="width:${pct}%"></i></div>
+      </td>
+      <td class="r num">${s.remaining === null ? "—" : fmt(s.remaining)}</td>
+      <td class="r"><span class="pill ${rateClass(rate)}">${rate === null ? "немає даних" : rate + "%"}</span></td>
+      <td class="r num">${s.blocked_24h ? `<span class="pill bad">${s.blocked_24h}</span>` : "0"}</td>
+      <td class="r num">${fmt(s.new_24h)}</td>
+      <td>${time(s.last_success)}</td>
+      <td class="r"><button class="small" data-run="${s.name}" ${s.running ? "disabled" : ""}>Запустити</button></td>
+    </tr>`;
+  }).join("");
+
+  const q = d.quality;
+  $("q-listings").textContent = fmt(q.listings);
+  $("q-props").textContent = fmt(q.properties);
+  $("q-merged").textContent = fmt(q.merged);
+  $("q-multi").textContent = fmt(q.multi_source);
+  $("q-unassigned").textContent = fmt(q.unassigned);
+
+  const a = d.llm.all_time, h = d.llm.last_24h;
+  $("l-calls24").textContent = fmt(h.calls);
+  $("l-calls").textContent = fmt(a.calls);
+  $("l-tokens").textContent = fmt(a.in_tokens) + " / " + fmt(a.out_tokens);
+  $("l-cost").textContent = "$" + a.cost_usd.toFixed(4);
+
+  $("runs").innerHTML = d.runs.length ? d.runs.map(r => {
+    const cls = r.status === "ok" ? "ok" : r.status === "running" ? "live" : "bad";
+    const label = {ok: "успіх", running: "виконується", failed: "помилка"}[r.status] || r.status;
+    return `<tr>
+      <td>${time(r.started_at)}</td>
+      <td class="src">${r.source}</td>
+      <td style="color:var(--muted)">${r.trigger}</td>
+      <td><span class="pill ${cls}">${label}</span></td>
+      <td class="r">${dur(r.seconds)}</td>
+      <td class="r num">${fmt(r.pages)}</td>
+      <td class="r num">${fmt(r.new)}</td>
+      <td class="r num">${fmt(r.requests_ok)}${r.requests_failed ? ` <span class="pill bad">${r.requests_failed}</span>` : ""}</td>
+      <td class="r num">${r.llm_calls ? r.llm_calls + " · $" + r.llm_cost_usd.toFixed(4) : "—"}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="9" style="color:var(--muted);padding:26px;text-align:center">Прогонів ще не було</td></tr>`;
+}
+
+let timer = null;
+async function refresh(){
+  try{
+    const r = await fetch("/api/status", {cache: "no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+  }catch(e){
+    $("stamp").textContent = "не вдалося оновити: " + e.message;
+  }
+}
+
+function toast(text, kind){
+  const el = $("toast");
+  el.textContent = text;
+  el.className = "toast " + (kind || "");
+  clearTimeout(timer);
+  timer = setTimeout(() => { el.textContent = ""; el.className = "toast"; }, 6000);
+}
+
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-run]");
+  if (!btn) return;
+  const source = btn.dataset.run;
+  btn.disabled = true;
+  toast("Запускаю " + (source === "all" ? "збір по всіх майданчиках" : source) + "…");
+  try{
+    const r = await fetch("/api/status/run", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({source}),
+    });
+    const data = await r.json();
+    if (data.ok) toast("Запущено: " + source + " (процес " + data.pid + ")", "ok");
+    else toast(data.error || "не вдалося запустити", "err");
+  }catch(e){
+    toast("не вдалося запустити: " + e.message, "err");
+  }finally{
+    setTimeout(() => { btn.disabled = false; refresh(); }, 1200);
+  }
+});
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

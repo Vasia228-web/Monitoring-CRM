@@ -1,0 +1,13 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+.env
+probes/_*
+logs/
+probes/_*.html
+probes/_*.json
+probes/_*.txt
+*.db
+*.db.backup-*
+.DS_Store

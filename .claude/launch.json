@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "realty-web",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "cli.py",
+        "serve"
+      ],
+      "port": 8000,
+      "autoPort": true
+    }
+  ]
+}
