@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON, Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text,
-    UniqueConstraint, Index,
+    UniqueConstraint, Index, case,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -43,6 +43,12 @@ class Condition(str, enum.Enum):
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def effective_active():
+    """Чинна актуальність: ручне рішення сильніше за автоматичне."""
+    return case((Listing.manual_active.isnot(None), Listing.manual_active),
+                else_=Listing.is_active)
 
 
 class Listing(Base):
@@ -87,6 +93,14 @@ class Listing(Base):
     built_year: Mapped[int | None] = mapped_column(Integer)
     description: Mapped[str | None] = mapped_column(Text)
     complex_name: Mapped[str | None] = mapped_column(String(256))  # ЖК
+
+    # --- Актуальність ---------------------------------------------------------
+    # `is_active` виставляє перевірка посилань, `manual_active` — людина.
+    # Ручне рішення завжди сильніше за автоматичне; None означає «не чіпали».
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    manual_active: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    delisted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_checked: Mapped[datetime | None] = mapped_column(DateTime, index=True)
 
     # Прапорці якості даних — щоб не видавати оцінку за факт.
     price_estimated: Mapped[bool] = mapped_column(Boolean, default=False)

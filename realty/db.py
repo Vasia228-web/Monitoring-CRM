@@ -81,7 +81,16 @@ def _add_missing_columns() -> None:
             if col.name in have:
                 continue
             ddl = col.type.compile(engine.dialect)
-            default = " DEFAULT 0" if ddl.upper().startswith(("BOOL", "INT")) else ""
+            # Значення за замовчуванням беремо з самої колонки: сліпий DEFAULT 0
+            # для `is_active` позначив би всю базу як неактуальну.
+            default = ""
+            arg = getattr(col.default, "arg", None) if col.default is not None else None
+            if isinstance(arg, bool):
+                default = f" DEFAULT {1 if arg else 0}"
+            elif isinstance(arg, (int, float)):
+                default = f" DEFAULT {arg}"
+            elif ddl.upper().startswith(("BOOL", "INT")) and not col.nullable:
+                default = " DEFAULT 0"
             with engine.begin() as conn:
                 conn.execute(text(
                     f"ALTER TABLE {table.name} ADD COLUMN {col.name} {ddl}{default}"

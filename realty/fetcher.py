@@ -149,6 +149,18 @@ class Fetcher:
             self.cache.set(key, text)
         return text
 
+    def probe(self, url: str, delay: float | None = None) -> int:
+        """Код відповіді без винятків — для перевірки, чи оголошення живе."""
+        self.limiter.wait(url, delay)
+        try:
+            r = self.client.get(url)
+        except Exception:
+            ops.record_request(self.label, ok=False)
+            return 0
+        ops.record_request(self.label, ok=r.status_code < 400,
+                           blocked=r.status_code in BLOCKING_CODES)
+        return r.status_code
+
     def get_json(self, url: str, params: dict | None = None,
                  delay: float | None = None) -> dict | list:
         text = self.get(url, params, headers={"Accept": "application/json"}, delay=delay)
@@ -230,6 +242,22 @@ class BrowserFetcher:
             page.close()
         self.cache.set("render:" + url, html)
         return html
+
+    def probe(self, url: str, delay: float | None = None) -> int:
+        """Код відповіді без винятків — для перевірки, чи оголошення живе."""
+        self._ensure()
+        self.limiter.wait(url, delay)
+        page = self._ctx.new_page()
+        try:
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            code = resp.status if resp is not None else 0
+        except Exception:
+            code = 0
+        finally:
+            page.close()
+        ops.record_request(self.label, ok=0 < code < 400,
+                           blocked=code in BLOCKING_CODES)
+        return code
 
     def close(self) -> None:
         for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):

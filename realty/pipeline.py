@@ -14,6 +14,7 @@ from .llm import LLMExtractor
 from .models import Condition, Listing, MarketType, PriceEvent
 from .normalize import compute_price_per_sqm, to_uah, to_usd
 from .sources import REGISTRY
+from .verify import sweep_after_full_run
 from .sources.base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class RunReport:
     updated: int = 0
     skipped: int = 0
     enriched: int = 0
+    delisted: int = 0
     llm_calls: int = 0
     llm_cost_usd: float = 0.0
     llm_tokens: tuple[int, int] = (0, 0)
@@ -57,7 +59,9 @@ class RunReport:
             "-" * 62,
             f"  Додано: {self.inserted}   Оновлено: {self.updated}   "
             f"Пропущено: {self.skipped}",
-            f"  Дібрано зі сторінок деталей: {self.enriched}   "
+            (f"  Знято з продажу: {self.delisted}" if self.delisted else "")
+            + (f"\n" if self.delisted else "")
+            + f"  Дібрано зі сторінок деталей: {self.enriched}   "
             f"LLM-викликів: {self.llm_calls}"
             + (f" ({self.llm_tokens[0]}+{self.llm_tokens[1]} токенів, "
                f"${self.llm_cost_usd:.4f})" if self.llm_calls else ""),
@@ -379,6 +383,11 @@ class Pipeline:
                 failure = f"{type(e).__name__}: {str(e)[:300]}"
                 src.stats["errors"] += 1
                 log.exception("Джерело %s перервано: %s", name, failure)
+                # Повний обхід бачив усю видачу джерела, тому все, чого в ній
+                # не було, більше не продається. Тільки за успішного прогону:
+                # після збою список побаченого неповний.
+                if self.mode == "full" and failure is None and not src.stats.get("errors"):
+                    self.report.delisted += sweep_after_full_run(name, src.seen_ids)
             finally:
                 # Запис прогону закривається завжди — інакше він назавжди
                 # лишиться «виконується» і дашборд показуватиме хибний

@@ -31,6 +31,9 @@ class BaseSource(abc.ABC):
         # Ідентифікатори, які вже є в базі: за ними інкрементальний прогін
         # розуміє, чи є на сторінці щось нове.
         self.known_ids: set[str] = known_ids or set()
+        # Що фактично побачили в цьому прогоні — потрібно, щоб після повного
+        # обходу зрозуміти, які оголошення з видачі зникли.
+        self.seen_ids: set[str] = set()
         self._fetcher = fetcher
         self._browser = browser
         self._page_new = 0
@@ -122,6 +125,7 @@ class BaseSource(abc.ABC):
                 self.stats["seen"] += 1
                 if not rec.get("original_url"):
                     continue
+                self.seen_ids.add(str(rec.get("external_id")))
                 if str(rec.get("external_id")) not in self.known_ids:
                     self.stats["new"] += 1
                     self._page_new += 1

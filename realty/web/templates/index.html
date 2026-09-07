@@ -134,6 +134,14 @@ td.r{text-align:right}
 .src{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
 .src i{font-style:normal;opacity:.6}
 
+tr.gone td{opacity:.55}
+tr.gone .price{text-decoration:line-through;text-decoration-thickness:1px}
+button.mark{font:inherit;font-size:12px;padding:3px 9px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:var(--chip);color:var(--ok);white-space:nowrap}
+button.mark.off{color:var(--warn)}
+button.mark:hover{border-color:var(--accent)}
+button.mark:disabled{opacity:.5;cursor:progress}
+button.mark:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .empty{padding:70px 20px;text-align:center;color:var(--muted)}
 .empty b{display:block;color:var(--ink);font-size:16px;font-weight:560;margin-bottom:6px}
 .empty code{background:var(--line-2);padding:2px 7px;border-radius:5px;font-size:13px}
@@ -215,6 +223,15 @@ td.r{text-align:right}
     </div>
 
     <label class="field">
+      <span>Актуальність</span>
+      <select name="status" data-auto>
+        <option value="active"   {% if f.status=='active' %}selected{% endif %}>Актуальні</option>
+        <option value="inactive" {% if f.status=='inactive' %}selected{% endif %}>Неактуальні</option>
+        <option value="all"      {% if f.status=='all' %}selected{% endif %}>Усі</option>
+      </select>
+    </label>
+
+    <label class="field">
       <span>Ринок</span>
       <select name="market" data-auto>
         <option value="">Будь-який</option>
@@ -261,7 +278,7 @@ td.r{text-align:right}
   {% macro sortable(asc, desc, title) -%}
     {% set nxt = desc if f.sort == asc else asc %}
     {% set on = f.sort in (asc, desc) %}
-    <a class="{{ 'on' if on }}" href="?condition={{ f.condition }}&market={{ f.market }}&source={{ f.source }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&sort={{ nxt }}">
+    <a class="{{ 'on' if on }}" href="?condition={{ f.condition }}&market={{ f.market }}&source={{ f.source }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&status={{ f.status }}&sort={{ nxt }}">
       {{ title }}<span class="car">{% if f.sort == asc %}▲{% elif f.sort == desc %}▼{% endif %}</span>
     </a>
   {%- endmacro %}
@@ -283,7 +300,8 @@ td.r{text-align:right}
       </thead>
       <tbody>
       {% for r in rows %}
-        <tr>
+        {% set act = r.manual_active if r.manual_active is not none else r.is_active %}
+        <tr class="{{ 'gone' if not act }}">
           <td data-l="Ціна">
             <div class="price num">
               {% if r.price_usd %}${{ r.price_usd | money }}{% else %}—{% endif %}
@@ -343,6 +361,15 @@ td.r{text-align:right}
           <td data-l="Джерело">
             <span class="src">{{ r.source }}{% if r.llm_extracted %} <i>llm</i>{% endif %}</span>
           </td>
+          <td data-l="Актуальність">
+            {% set act = r.manual_active if r.manual_active is not none else r.is_active %}
+            <button class="mark {{ 'off' if not act }}" data-id="{{ r.id }}"
+                    data-active="{{ '1' if act else '0' }}"
+                    data-manual="{{ '1' if r.manual_active is not none else '0' }}"
+                    title="{% if r.manual_active is not none %}позначено вручну{% elif not act %}знято з продажу автоматично{% else %}перевірено автоматично{% endif %}">
+              {{ 'Актуальна' if act else 'Неактуальна' }}{% if r.manual_active is not none %} ·{% endif %}
+            </button>
+          </td>
         </tr>
       {% endfor %}
       </tbody>
@@ -372,6 +399,31 @@ td.r{text-align:right}
 <script>
   // З увімкненим JS фільтри застосовуються одразу, тож кнопка зайва.
   document.querySelector('button.apply')?.classList.add('hidden');
+  // Перемикач актуальності: клік ставить ручну позначку, Alt+клік знімає її
+  // й повертає оголошення під автоматичне визначення.
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button.mark');
+    if (!btn) return;
+    var next = ev.altKey ? null : btn.dataset.active !== '1';
+    btn.disabled = true;
+    fetch('/api/listings/' + btn.dataset.id + '/status', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({active: next}),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'не вдалося');
+      btn.dataset.active = d.active ? '1' : '0';
+      btn.dataset.manual = d.manual_active === null ? '0' : '1';
+      btn.classList.toggle('off', !d.active);
+      btn.textContent = (d.active ? 'Актуальна' : 'Неактуальна') +
+                        (d.manual_active === null ? '' : ' ·');
+      btn.closest('tr').classList.toggle('gone', !d.active);
+    }).catch(function (e) {
+      btn.textContent = 'помилка';
+      console.error(e);
+    }).finally(function () { btn.disabled = false; });
+  });
+
   var form = document.querySelector('form.filters');
   document.querySelectorAll('.filters [data-auto]').forEach(function (el) {
     el.addEventListener('change', function () { form.requestSubmit(); });

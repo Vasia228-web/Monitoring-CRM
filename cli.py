@@ -6,6 +6,7 @@
   python cli.py backfill               # дозібрати записи з прогалинами
   python cli.py schedule install       # фоновий розклад (launchd)
   python cli.py dedup                  # звести дублі між сайтами
+  python cli.py verify --limit 200     # перевірити, які оголошення ще живі
   python cli.py serve --port 8000      # веб-інтерфейс
   python cli.py stats                  # що вже є в базі
 """
@@ -40,6 +41,29 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     report = Pipeline(sources=names, use_llm=not args.no_llm, mode=args.mode,
                       trigger=args.trigger).run()
     print(report.render())
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    from realty.db import init_db
+    from realty.verify import CHECKABLE, verify_batch
+
+    init_db()
+    names = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    st = verify_batch(limit=args.limit, sources=names)
+    print("\n" + "=" * 52)
+    print("ПЕРЕВІРКА АКТУАЛЬНОСТІ")
+    print("=" * 52)
+    print(f"  перевірено:        {st['checked']}")
+    print(f"  живі:              {st['alive']}")
+    print(f"  знято з продажу:   {st['delisted']}")
+    print(f"  повернулись:       {st['restored']}")
+    print(f"  без висновку:      {st['unknown']}")
+    if st.get("skipped_blocked"):
+        print(f"  пропущено:         {st['skipped_blocked']} "
+              f"(джерело відмовляє: {', '.join(st['blocked_sources'])})")
+    print("=" * 52)
+    print(f"  (blago не перевіряється: сайт не відрізняє видалене планування)")
     return 0
 
 
@@ -146,6 +170,11 @@ def main() -> int:
     bf.add_argument("--limit", type=int, default=300)
     bf.add_argument("--no-llm", action="store_true")
     bf.set_defaults(func=cmd_backfill)
+
+    vf = sub.add_parser("verify", help="перевірити, які оголошення ще живі")
+    vf.add_argument("--limit", type=int, default=200, help="скільки перевірити за раз")
+    vf.add_argument("--sources", help="через кому; типово — усі, що вміємо перевіряти")
+    vf.set_defaults(func=cmd_verify)
 
     dd = sub.add_parser("dedup", help="звести однакові квартири в майстер-записи")
     dd.add_argument("--dry-run", action="store_true", help="лише порахувати, без запису")

@@ -5,14 +5,16 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
+from fastapi import Body, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
 from ..db import SessionLocal, init_db
 from ..ops import init_ops
-from ..models import Condition, Listing, MarketType, PriceEvent, Property
+from ..models import (
+    Condition, Listing, MarketType, PriceEvent, Property, effective_active,
+)
 
 BASE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
@@ -88,8 +90,15 @@ MAX_ROWS = 1000  # спільна стеля для сторінки та JSON
 
 
 def _query(session, *, condition: str, market: str, source: str, rooms: str,
-           price_min: float | None, price_max: float | None, sort: str):
+           price_min: float | None, price_max: float | None, sort: str,
+           status: str = "active"):
     stmt = select(Listing)
+    # Типово показуємо лише актуальні: зняті з продажу псують і перегляд,
+    # і будь-яку статистику. «all» лишає їх видимими навмисно.
+    if status == "active":
+        stmt = stmt.where(effective_active().is_(True))
+    elif status == "inactive":
+        stmt = stmt.where(effective_active().is_(False))
     if condition in {c.value for c in Condition}:
         stmt = stmt.where(Listing.condition == Condition(condition))
     if market in {m.value for m in MarketType}:
@@ -132,6 +141,9 @@ def _stats(session) -> dict:
                                   .where(Listing.price_usd.isnot(None))))
     median_sqm = _median(sqm)
     updated = session.scalar(select(func.max(Listing.last_seen)))
+    inactive = session.scalar(
+        select(func.count()).select_from(Listing).where(effective_active().is_(False))
+    ) or 0
     properties = session.scalar(select(func.count()).select_from(Property)) or 0
     multi = session.scalar(select(func.count()).select_from(Property)
                            .where(Property.sources_count > 1)) or 0
@@ -139,6 +151,7 @@ def _stats(session) -> dict:
         "total": total,
         "properties": properties,
         "multi_source": multi,
+        "inactive": inactive,
         "by_source": by_source,
         "median_sqm": round(median_sqm) if median_sqm else None,
         "median_price": round(_median(prices)) if prices else None,
@@ -156,12 +169,13 @@ def index(
     price_min: str | None = Query(None),
     price_max: str | None = Query(None),
     sort: str = Query(DEFAULT_SORT),
+    status: str = Query("active", description="active | inactive | all"),
     limit: int = Query(500, le=MAX_ROWS),
 ):
     price_min, price_max = _num(price_min), _num(price_max)
     with SessionLocal() as s:
         stmt = _query(s, condition=condition, market=market, source=source, rooms=rooms,
-                      price_min=price_min, price_max=price_max, sort=sort)
+                      price_min=price_min, price_max=price_max, sort=sort, status=status)
         # Скільки збігів насправді — щоб у зведенні не показувати ліміт сторінки
         # як «стільки знайдено».
         matched = s.scalar(
@@ -170,12 +184,14 @@ def index(
         rows = s.scalars(stmt.limit(limit)).all()
         stats = _stats(s)
         sources = sorted(stats["by_source"])
-        active = any((condition, market, source, rooms, price_min, price_max))
+        active = any((condition, market, source, rooms, price_min, price_max)) \
+            or status != "active"
     return templates.TemplateResponse(request, "index.html", {
         "rows": rows, "stats": stats, "sources": sources, "active_filters": active,
         "matched": matched, "limit": limit,
         "f": {"condition": condition, "market": market, "source": source, "rooms": rooms,
-              "price_min": price_min or "", "price_max": price_max or "", "sort": sort},
+              "price_min": price_min or "", "price_max": price_max or "", "sort": sort,
+              "status": status},
         "Condition": Condition, "MarketType": MarketType,
     })
 
@@ -184,13 +200,14 @@ def index(
 def api_listings(
     condition: str = "", market: str = "", source: str = "", rooms: str = "",
     price_min: str | None = None, price_max: str | None = None,
-    sort: str = DEFAULT_SORT, limit: int = Query(500, le=MAX_ROWS),
+    sort: str = DEFAULT_SORT, status: str = "active",
+    limit: int = Query(500, le=MAX_ROWS),
 ):
     """JSON-зріз тих самих даних."""
     price_min, price_max = _num(price_min), _num(price_max)
     with SessionLocal() as s:
         stmt = _query(s, condition=condition, market=market, source=source, rooms=rooms,
-                      price_min=price_min, price_max=price_max, sort=sort)
+                      price_min=price_min, price_max=price_max, sort=sort, status=status)
         rows = s.scalars(stmt.limit(limit)).all()
         return JSONResponse([{
             "source": r.source,
@@ -206,7 +223,36 @@ def api_listings(
             "condition": r.condition.value,
             "original_url": r.original_url,
             "price_estimated": r.price_estimated,
+            "is_active": r.is_active,
+            "manual_active": r.manual_active,
+            "active": r.manual_active if r.manual_active is not None else r.is_active,
+            "delisted_at": r.delisted_at.isoformat() if r.delisted_at else None,
         } for r in rows])
+
+
+@app.post("/api/listings/{listing_id}/status")
+def api_set_status(listing_id: int, payload: dict = Body(default={})):
+    """Ручна позначка актуальності.
+
+    `active`: true — актуальна, false — неактуальна, null — зняти позначку
+    й повернутись до автоматичного визначення.
+    """
+    value = payload.get("active", None)
+    if value not in (True, False, None):
+        return JSONResponse({"ok": False, "error": "active має бути true, false або null"},
+                            status_code=400)
+    with SessionLocal() as s:
+        row = s.get(Listing, listing_id)
+        if row is None:
+            return JSONResponse({"ok": False, "error": "оголошення не знайдено"},
+                                status_code=404)
+        row.manual_active = value
+        s.commit()
+        return JSONResponse({
+            "ok": True, "id": row.id, "manual_active": row.manual_active,
+            "is_active": row.is_active,
+            "active": row.manual_active if row.manual_active is not None else row.is_active,
+        })
 
 
 @app.get("/api/properties")
