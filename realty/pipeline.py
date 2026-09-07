@@ -108,7 +108,13 @@ class Pipeline:
                 return self._get_browser(cfg.delay).render(url, settle_ms=2000)
             return self._get_http(cfg.delay if cfg else 1.5).get(url)
         except FetchError as e:
-            log.debug("LLM-фолбек: сторінку %s не завантажено (%s)", url, e)
+            log.debug("Сторінку %s не завантажено (%s)", url, e)
+            return None
+        except Exception as e:
+            # Мережевий шар може кинути що завгодно; добір із деталей — річ
+            # необов'язкова й ніколи не має зупиняти збір.
+            log.warning("Сторінку %s не завантажено (%s): %s", url, type(e).__name__,
+                        str(e)[:160])
             return None
 
     @staticmethod
@@ -312,13 +318,15 @@ class Pipeline:
         return (self.llm.calls, self.llm.in_tokens, self.llm.out_tokens, self.llm.cost_usd)
 
     def _record_source_run(self, run_id: int, name: str, stats: dict,
-                           llm_before: tuple, counts_before: tuple) -> None:
+                           llm_before: tuple, counts_before: tuple,
+                           message: str | None = None) -> None:
         """Закриває запис прогону в телеметрії (окрема база, не основна)."""
         calls, tin, tout, cost = self._llm_snapshot()
         req = ops.take_counts(name)
         ops.finish_run(
             run_id,
-            status="failed" if stats.get("errors") else "ok",
+            status="failed" if (stats.get("errors") or message) else "ok",
+            message=message or stats.get("last_error"),
             pages=stats.get("pages", 0), kept=stats.get("kept", 0),
             new=stats.get("new", 0), errors=stats.get("errors", 0),
             inserted=self.report.inserted - counts_before[0],
@@ -359,16 +367,31 @@ class Pipeline:
             src = cls(browser=browser, mode=self.mode, known_ids=known,
                       start_page=self.start_pages.get(name, 0), on_page=self.on_page)
             batch: list[dict] = []
-            for rec in src.run():
-                if not rec:
-                    continue
-                batch.append(self.complete(rec, src))
-
-            self._write(batch)
-            self.report.per_source[name] = dict(src.stats)
-            self._record_source_run(run_id, name, src.stats, llm_before, before)
-            if src._fetcher is not None:
-                src._fetcher.close()  # браузер спільний — закриємо в кінці прогону
+            failure: str | None = None
+            try:
+                for rec in src.run():
+                    if not rec:
+                        continue
+                    batch.append(self.complete(rec, src))
+            except Exception as e:
+                # Одне джерело не має забирати з собою решту: те, що встигли
+                # зібрати, зберігаємо, помилку записуємо, йдемо далі.
+                failure = f"{type(e).__name__}: {str(e)[:300]}"
+                src.stats["errors"] += 1
+                log.exception("Джерело %s перервано: %s", name, failure)
+            finally:
+                # Запис прогону закривається завжди — інакше він назавжди
+                # лишиться «виконується» і дашборд показуватиме хибний
+                # зелений сигнал.
+                try:
+                    self._write(batch)
+                except Exception:
+                    log.exception("Не вдалося записати пакет %s", name)
+                self.report.per_source[name] = dict(src.stats)
+                self._record_source_run(run_id, name, src.stats, llm_before, before,
+                                        message=failure)
+                if src._fetcher is not None:
+                    src._fetcher.close()  # браузер спільний — закриємо в кінці
 
         self._record_llm_cost()
         for obj in (self._http, self._browser):

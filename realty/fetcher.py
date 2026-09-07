@@ -207,9 +207,13 @@ class BrowserFetcher:
         try:
             try:
                 resp = page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-            except Exception:
+            except Exception as e:
                 ops.record_request(self.label, ok=False)
-                raise
+                # Playwright кидає власні помилки (обрив мережі, таймаут). Якщо
+                # їх не привести до FetchError, вони пролітають повз усі
+                # перехоплювачі й валять увесь прогін — так і сталося
+                # на ERR_INTERNET_DISCONNECTED під час збору OLX.
+                raise FetchError(f"{type(e).__name__} для {url}: {str(e)[:200]}") from e
             code = resp.status if resp is not None else 0
             ops.record_request(self.label, ok=code < 400,
                                blocked=code in BLOCKING_CODES)

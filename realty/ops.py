@@ -13,7 +13,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, Integer, String, Text, create_engine, func, select,
+    Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect,
+    select, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -23,6 +24,9 @@ OPS_DB_URL = os.getenv("OPS_DB_URL", f"sqlite:///{DATA_DIR / 'ops.db'}")
 # Після скількох хвилин мовчання воркер вважається таким, що впав.
 IDLE_AFTER_MIN = int(os.getenv("WORKER_IDLE_MIN", "15"))
 DOWN_AFTER_MIN = int(os.getenv("WORKER_DOWN_MIN", "240"))
+# Скільки прогін може тривати, перш ніж вважати його покинутим. Повний збір
+# одного джерела законно триває годинами, звичайний — хвилини.
+STALE_AFTER_MIN = {"fresh": 90, "full": 600}
 
 
 class OpsBase(DeclarativeBase):
@@ -76,6 +80,7 @@ class RunRecord(OpsBase):
     llm_out_tokens: Mapped[int] = mapped_column(Integer, default=0)
     llm_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
+    pid: Mapped[int | None] = mapped_column(Integer)
     message: Mapped[str | None] = mapped_column(Text)
 
 
@@ -98,6 +103,29 @@ OpsSession = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 def init_ops() -> None:
     OpsBase.metadata.create_all(engine)
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """Доливає нові колонки в уже створені таблиці телеметрії.
+
+    `create_all` наявних таблиць не чіпає, тож без цього нове поле призводить
+    до «no such column» на робочій базі.
+    """
+    insp = inspect(engine)
+    for table in OpsBase.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have:
+                continue
+            ddl = col.type.compile(engine.dialect)
+            default = " DEFAULT 0" if ddl.upper().startswith(("BOOL", "INT", "FLOAT")) else ""
+            with engine.begin() as conn:
+                conn.execute(text(
+                    f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl}{default}'
+                ))
 
 
 @contextmanager
@@ -151,7 +179,8 @@ def take_counts(source: str | None = None) -> dict[str, int]:
 def start_run(source: str, mode: str = "fresh", trigger: str = "manual") -> int:
     init_ops()
     with ops_session() as s:
-        run = RunRecord(source=source, mode=mode, trigger=trigger, status="running")
+        run = RunRecord(source=source, mode=mode, trigger=trigger, status="running",
+                        pid=os.getpid())
         s.add(run)
         s.flush()
         return run.id
@@ -190,9 +219,47 @@ def beat(note: str | None = None, busy: bool | None = None) -> None:
 # --- Зведення для дашборда ----------------------------------------------------
 
 
+def _process_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)          # сигнал 0 нічого не робить, лише перевіряє
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True              # процес є, просто чужий
+    return True
+
+
+def reap_stale_runs() -> int:
+    """Закриває прогони, які нікуди не ведуть.
+
+    Прогін лишається «виконується», якщо процес упав так, що не встиг себе
+    закрити — наприклад, від обриву мережі. Без цього дашборд назавжди
+    показує хибний зелений сигнал.
+    """
+    init_ops()
+    closed = 0
+    with ops_session() as s:
+        for run in s.scalars(select(RunRecord).where(RunRecord.status == "running")):
+            age_min = (_now() - run.started_at).total_seconds() / 60
+            limit = STALE_AFTER_MIN.get(run.mode, 90)
+            if _process_alive(run.pid) and age_min < limit:
+                continue
+            run.status = "failed"
+            run.finished_at = _now()
+            reason = ("процес завершився, не закривши прогін"
+                      if not _process_alive(run.pid)
+                      else f"прогін триває понад {limit} хв")
+            run.message = (run.message or "") + f" [{reason}]"
+            closed += 1
+    return closed
+
+
 def worker_health() -> dict:
     """Active / Idle / Down + коли востаннє подавав ознаки життя."""
     init_ops()
+    reap_stale_runs()
     with ops_session() as s:
         hb = s.get(Heartbeat, 1)
         running = s.scalar(
@@ -206,8 +273,13 @@ def worker_health() -> dict:
                 "alert": "воркер жодного разу не подавав ознак життя"}
 
     age = (_now() - hb.beat_at).total_seconds() / 60
-    if running or hb.busy or age <= IDLE_AFTER_MIN:
-        state = "active" if (running or hb.busy) else "idle"
+    # `busy` без свіжого сигналу означає, що воркер помер посеред роботи,
+    # а не що він працює.
+    busy = hb.busy and age <= IDLE_AFTER_MIN
+    if running or busy:
+        state = "active"
+    elif age <= IDLE_AFTER_MIN:
+        state = "idle"
     elif age <= DOWN_AFTER_MIN:
         state = "idle"
     else:
@@ -215,6 +287,9 @@ def worker_health() -> dict:
     alert = None
     if state == "down":
         alert = f"немає сигналу {int(age)} хв — перевірте `cli.py schedule status`"
+    elif hb.busy and age > IDLE_AFTER_MIN:
+        alert = (f"воркер позначений як зайнятий, але мовчить {int(age)} хв — "
+                 f"схоже, прогін обірвався")
     return {"state": state, "beat_at": hb.beat_at, "age_min": round(age, 1),
             "counter": hb.counter, "pid": hb.pid, "running": running,
             "last_run": last_run, "alert": alert}
@@ -284,6 +359,7 @@ def recent_runs(limit: int = 12) -> list[dict]:
         "finished_at": as_utc_iso(r.finished_at),
         "seconds": round((r.finished_at - r.started_at).total_seconds())
                    if r.finished_at else None,
+        "pid": r.pid,
         "pages": r.pages, "new": r.new, "inserted": r.inserted, "updated": r.updated,
         "errors": r.errors,
         "requests_ok": r.requests_ok, "requests_failed": r.requests_failed,

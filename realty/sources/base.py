@@ -132,4 +132,7 @@ class BaseSource(abc.ABC):
                 yield out
         except Exception as e:
             self.stats["errors"] += 1
+            # Текст помилки потрібен дашборду: інакше прогін позначений як
+            # невдалий, але без жодної підказки, що саме сталося.
+            self.stats["last_error"] = f"{type(e).__name__}: {str(e)[:300]}"
             log.exception("Джерело %s впало: %s", self.name, e)
