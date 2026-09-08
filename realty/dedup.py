@@ -159,7 +159,12 @@ def match_score(a: Shape, b: Shape) -> int:
     if overlap >= STREET_OVERLAP:
         score += 3
         if a.house and b.house:
-            score += 3 if (a.house & b.house) else -6
+            if not (a.house & b.house):
+                # Одна вулиця, різні будинки — це різні будівлі, і жодні інші
+                # збіги цього не переважують. Аудит знайшов об'єкт із 23
+                # оголошень на вул. Хіміків у будинках 2, 24, 28 і 92.
+                return -99
+            score += 3
     elif a.street and b.street:
         # Різні вулиці — така сама заборона, як різний поверх. Штрафу мало:
         # на реальних даних бонуси за поверх, площу й ціну дотягували пару

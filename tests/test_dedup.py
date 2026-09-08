@@ -169,3 +169,16 @@ def test_doubled_price_is_not_the_same_flat():
     a = _sh(1, "domria", area=39.0, floor=9, street="миру", house="100", price=89000.0)
     b = _sh(2, "domria", area=39.0, floor=9, street="миру", price=38000.0)
     assert match_score(a, b) < MERGE_THRESHOLD
+
+
+def test_same_street_different_houses_never_merge():
+    """Регресія: аудит знайшов об'єкт із 23 оголошень на вул. Хіміків —
+    будинки 2, 24, 28 і 92 склеїлись через збіг поверху, площі й ціни."""
+    a = _sh(1, "domria", area=39.0, floor=7, street="хіміків", house="92", price=31200.0)
+    b = _sh(2, "domria", area=39.0, floor=7, street="хіміків", house="2", price=31500.0)
+    assert match_score(a, b) < MERGE_THRESHOLD
+
+    # А той самий будинок із різною нумерацією джерел — усе ще одна квартира.
+    c = _sh(3, "lun", area=39.0, floor=7, street="хіміків",
+            house=frozenset({"2", "20"}), price=31500.0)
+    assert match_score(a if False else b, c) >= MERGE_THRESHOLD
