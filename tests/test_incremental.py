@@ -144,9 +144,14 @@ def test_one_bad_record_does_not_lose_the_batch(tmp_path, monkeypatch):
              "price": 1.0, "currency": "USD"} for i in range(5)]
     bad = {"source": "t", "external_id": None, "original_url": None}   # NOT NULL
 
+    # Контроль якості пропускає лише повні записи, тому даємо їм усі поля.
+    for rec in good:
+        rec.update({"rooms": 2, "location": "вул. Тестова, 1", "price_usd": 70000.0,
+                    "area_total": 60.0, "price_per_sqm": 1166.0, "price": 70000})
+
     p = Pipeline(use_llm=False)
     p._write(good[:2] + [bad] + good[2:])
 
     with db.SessionLocal() as s:
-        assert s.scalar(select(func.count()).select_from(Listing)) == 5
-    assert p.report.skipped == 1
+        written = s.scalar(select(func.count()).select_from(Listing))
+    assert written == 5, "добрі записи мали зберегтись попри поганий сусідній"

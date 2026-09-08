@@ -25,5 +25,14 @@ echo "--- перевірка актуальності ---" >>"$LOG"
 # ручними запусками.
 echo "--- дедуплікація ---" >>"$LOG"
 .venv/bin/python cli.py dedup >>"$LOG" 2>&1 || true
+
+# Контроль якості: щодня легка рутина, у понеділок — глибша з перерахунком
+# порогів, першого числа місяця — повна звірка.
+DOW=$(date +%u); DOM=$(date +%d)
+if [ "$DOM" = "01" ]; then ROUTINE=monthly
+elif [ "$DOW" = "1" ]; then ROUTINE=weekly
+else ROUTINE=daily; fi
+echo "--- контроль якості ($ROUTINE) ---" >>"$LOG"
+.venv/bin/python cli.py quality "$ROUTINE" >>"$LOG" 2>&1 || true
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') завершено, код $code ===" >>"$LOG"
 exit $code

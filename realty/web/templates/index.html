@@ -134,6 +134,9 @@ td.r{text-align:right}
 .src{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
 .src i{font-style:normal;opacity:.6}
 
+.qflag{display:block;font-size:11px;margin-top:4px;padding:2px 7px;border-radius:5px;
+  background:var(--chip);color:var(--warn);line-height:1.45}
+.qflag.rejected{color:var(--bad,#a32020)}
 tr.gone td{opacity:.55}
 tr.gone .price{text-decoration:line-through;text-decoration-thickness:1px}
 button.mark{font:inherit;font-size:12px;padding:3px 9px;border-radius:999px;cursor:pointer;
@@ -232,6 +235,16 @@ button.mark:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     </label>
 
     <label class="field">
+      <span>Якість</span>
+      <select name="quality" data-auto>
+        <option value="clean"    {% if f.quality=='clean' %}selected{% endif %}>Перевірені</option>
+        <option value="review"   {% if f.quality=='review' %}selected{% endif %}>На перегляді</option>
+        <option value="rejected" {% if f.quality=='rejected' %}selected{% endif %}>Відхилені</option>
+        <option value="all"      {% if f.quality=='all' %}selected{% endif %}>Усі</option>
+      </select>
+    </label>
+
+    <label class="field">
       <span>Ринок</span>
       <select name="market" data-auto>
         <option value="">Будь-який</option>
@@ -278,7 +291,7 @@ button.mark:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   {% macro sortable(asc, desc, title) -%}
     {% set nxt = desc if f.sort == asc else asc %}
     {% set on = f.sort in (asc, desc) %}
-    <a class="{{ 'on' if on }}" href="?condition={{ f.condition }}&market={{ f.market }}&source={{ f.source }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&status={{ f.status }}&sort={{ nxt }}">
+    <a class="{{ 'on' if on }}" href="?condition={{ f.condition }}&market={{ f.market }}&source={{ f.source }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&status={{ f.status }}&quality={{ f.quality }}&sort={{ nxt }}">
       {{ title }}<span class="car">{% if f.sort == asc %}▲{% elif f.sort == desc %}▼{% endif %}</span>
     </a>
   {%- endmacro %}
@@ -333,6 +346,9 @@ button.mark:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
             {% if r.district and r.district != r.location %}
               <span class="sub">{{ r.district }}</span>
             {% endif %}
+            {% if r.quality_status and r.quality_status != 'ok' %}
+              <span class="qflag {{ r.quality_status }}">{{ r.quality_reason or r.quality_status }}</span>
+            {% endif %}
           </td>
 
           <td data-l="Параметри">
@@ -380,6 +396,8 @@ button.mark:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     {% endif %}
 
     <p class="legend">
+      Типово показані лише записи, що пройшли контроль якості; підозрілі й відхилені
+      доступні через фільтр «Якість» із причиною.
       «Не вказано» означає, що продавець не заповнив це поле в джерелі — сюди не пишуться здогади.
       Відсоток біля ціни за м² показує відхилення від медіани по всій базі.
     </p>

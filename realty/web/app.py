@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from ..db import SessionLocal, init_db
 from ..ops import init_ops
 from ..models import (
-    Condition, Listing, MarketType, PriceEvent, Property, effective_active,
+    Condition, Listing, MarketType, PriceEvent, Property, effective_active, is_clean,
 )
 
 BASE = Path(__file__).resolve().parent
@@ -91,8 +91,13 @@ MAX_ROWS = 1000  # спільна стеля для сторінки та JSON
 
 def _query(session, *, condition: str, market: str, source: str, rooms: str,
            price_min: float | None, price_max: float | None, sort: str,
-           status: str = "active"):
+           status: str = "active", quality: str = "clean"):
     stmt = select(Listing)
+    # Записи з невизначеним чи підозрілим статусом не потрапляють у видачу.
+    if quality == "clean":
+        stmt = stmt.where(is_clean())
+    elif quality in ("review", "rejected", "pending"):
+        stmt = stmt.where(Listing.quality_status == quality)
     # Типово показуємо лише актуальні: зняті з продажу псують і перегляд,
     # і будь-яку статистику. «all» лишає їх видимими навмисно.
     if status == "active":
@@ -135,10 +140,12 @@ def _stats(session) -> dict:
         session.execute(select(Listing.source, func.count(Listing.id))
                         .group_by(Listing.source)).all()
     )
+    # Медіани рахуємо лише по записах, що пройшли контроль: інакше викиди
+    # й сміття тягнуть за собою всі оцінки.
     sqm = list(session.scalars(select(Listing.price_per_sqm)
-                               .where(Listing.price_per_sqm.isnot(None))))
+                               .where(Listing.price_per_sqm.isnot(None), is_clean())))
     prices = list(session.scalars(select(Listing.price_usd)
-                                  .where(Listing.price_usd.isnot(None))))
+                                  .where(Listing.price_usd.isnot(None), is_clean())))
     median_sqm = _median(sqm)
     updated = session.scalar(select(func.max(Listing.last_seen)))
     inactive = session.scalar(
@@ -147,8 +154,11 @@ def _stats(session) -> dict:
     properties = session.scalar(select(func.count()).select_from(Property)) or 0
     multi = session.scalar(select(func.count()).select_from(Property)
                            .where(Property.sources_count > 1)) or 0
+    quality_counts = dict(session.execute(
+        select(Listing.quality_status, func.count()).group_by(Listing.quality_status)).all())
     return {
         "total": total,
+        "quality": quality_counts,
         "properties": properties,
         "multi_source": multi,
         "inactive": inactive,
@@ -170,12 +180,14 @@ def index(
     price_max: str | None = Query(None),
     sort: str = Query(DEFAULT_SORT),
     status: str = Query("active", description="active | inactive | all"),
+    quality: str = Query("clean", description="clean | review | rejected | all"),
     limit: int = Query(500, le=MAX_ROWS),
 ):
     price_min, price_max = _num(price_min), _num(price_max)
     with SessionLocal() as s:
         stmt = _query(s, condition=condition, market=market, source=source, rooms=rooms,
-                      price_min=price_min, price_max=price_max, sort=sort, status=status)
+                      price_min=price_min, price_max=price_max, sort=sort, status=status,
+                      quality=quality)
         # Скільки збігів насправді — щоб у зведенні не показувати ліміт сторінки
         # як «стільки знайдено».
         matched = s.scalar(
@@ -185,13 +197,13 @@ def index(
         stats = _stats(s)
         sources = sorted(stats["by_source"])
         active = any((condition, market, source, rooms, price_min, price_max)) \
-            or status != "active"
+            or status != "active" or quality != "clean"
     return templates.TemplateResponse(request, "index.html", {
         "rows": rows, "stats": stats, "sources": sources, "active_filters": active,
         "matched": matched, "limit": limit,
         "f": {"condition": condition, "market": market, "source": source, "rooms": rooms,
               "price_min": price_min or "", "price_max": price_max or "", "sort": sort,
-              "status": status},
+              "status": status, "quality": quality},
         "Condition": Condition, "MarketType": MarketType,
     })
 
@@ -200,14 +212,15 @@ def index(
 def api_listings(
     condition: str = "", market: str = "", source: str = "", rooms: str = "",
     price_min: str | None = None, price_max: str | None = None,
-    sort: str = DEFAULT_SORT, status: str = "active",
+    sort: str = DEFAULT_SORT, status: str = "active", quality: str = "clean",
     limit: int = Query(500, le=MAX_ROWS),
 ):
     """JSON-зріз тих самих даних."""
     price_min, price_max = _num(price_min), _num(price_max)
     with SessionLocal() as s:
         stmt = _query(s, condition=condition, market=market, source=source, rooms=rooms,
-                      price_min=price_min, price_max=price_max, sort=sort, status=status)
+                      price_min=price_min, price_max=price_max, sort=sort, status=status,
+                      quality=quality)
         rows = s.scalars(stmt.limit(limit)).all()
         return JSONResponse([{
             "source": r.source,
@@ -227,6 +240,8 @@ def api_listings(
             "manual_active": r.manual_active,
             "active": r.manual_active if r.manual_active is not None else r.is_active,
             "delisted_at": r.delisted_at.isoformat() if r.delisted_at else None,
+            "quality_status": r.quality_status,
+            "quality_reason": r.quality_reason,
         } for r in rows])
 
 

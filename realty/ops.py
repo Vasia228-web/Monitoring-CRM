@@ -80,6 +80,13 @@ class RunRecord(OpsBase):
     llm_out_tokens: Mapped[int] = mapped_column(Integer, default=0)
     llm_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
+    # Контроль якості цього прогону.
+    q_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    q_review: Mapped[int] = mapped_column(Integer, default=0)
+    q_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    llm_passed: Mapped[int] = mapped_column(Integer, default=0)
+    llm_failed: Mapped[int] = mapped_column(Integer, default=0)
+
     pid: Mapped[int | None] = mapped_column(Integer)
     message: Mapped[str | None] = mapped_column(Text)
 
@@ -92,6 +99,13 @@ class Heartbeat(OpsBase):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     beat_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     counter: Mapped[int] = mapped_column(Integer, default=0)
+    # Контроль якості цього прогону.
+    q_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    q_review: Mapped[int] = mapped_column(Integer, default=0)
+    q_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    llm_passed: Mapped[int] = mapped_column(Integer, default=0)
+    llm_failed: Mapped[int] = mapped_column(Integer, default=0)
+
     pid: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(String(200))
     busy: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -337,13 +351,30 @@ def llm_totals(hours: int | None = None) -> dict:
     stmt = select(
         func.sum(RunRecord.llm_calls), func.sum(RunRecord.llm_in_tokens),
         func.sum(RunRecord.llm_out_tokens), func.sum(RunRecord.llm_cost_usd),
+        func.sum(RunRecord.llm_passed), func.sum(RunRecord.llm_failed),
     )
     if hours:
         stmt = stmt.where(RunRecord.started_at >= _now() - timedelta(hours=hours))
     with ops_session() as s:
-        calls, tin, tout, cost = s.execute(stmt).one()
+        calls, tin, tout, cost, passed, failed = s.execute(stmt).one()
     return {"calls": int(calls or 0), "in_tokens": int(tin or 0),
-            "out_tokens": int(tout or 0), "cost_usd": round(float(cost or 0), 4)}
+            "out_tokens": int(tout or 0), "cost_usd": round(float(cost or 0), 4),
+            "passed": int(passed or 0), "failed": int(failed or 0)}
+
+
+def quality_totals(hours: int = 24) -> dict:
+    """Скільки записів прийнято, відхилено й поставлено на перегляд."""
+    init_ops()
+    since = _now() - timedelta(hours=hours)
+    with ops_session() as s:
+        rows = s.execute(
+            select(RunRecord.source, func.sum(RunRecord.q_accepted),
+                   func.sum(RunRecord.q_review), func.sum(RunRecord.q_rejected))
+            .where(RunRecord.started_at >= since, RunRecord.source != "all")
+            .group_by(RunRecord.source)
+        ).all()
+    return {src: {"accepted": int(a or 0), "review": int(r or 0), "rejected": int(x or 0)}
+            for src, a, r, x in rows}
 
 
 def recent_runs(limit: int = 12) -> list[dict]:
@@ -363,6 +394,9 @@ def recent_runs(limit: int = 12) -> list[dict]:
         "pages": r.pages, "new": r.new, "inserted": r.inserted, "updated": r.updated,
         "errors": r.errors,
         "requests_ok": r.requests_ok, "requests_failed": r.requests_failed,
-        "requests_blocked": r.requests_blocked, "llm_calls": r.llm_calls,
+        "requests_blocked": r.requests_blocked,
+        "q_accepted": r.q_accepted, "q_review": r.q_review, "q_rejected": r.q_rejected,
+        "llm_passed": r.llm_passed, "llm_failed": r.llm_failed,
+        "llm_calls": r.llm_calls,
         "llm_cost_usd": round(r.llm_cost_usd, 4), "message": r.message,
     } for r in runs]

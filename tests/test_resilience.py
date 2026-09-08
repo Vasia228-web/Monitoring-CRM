@@ -88,7 +88,7 @@ def test_dead_run_is_reaped():
         s.delete(run)
 
 
-def test_busy_flag_without_heartbeat_is_not_active():
+def test_busy_flag_without_heartbeat_is_not_active(isolated_ops):
     """Регресія: після падіння дашборд показував «Працює», хоча процесів нуль."""
     ops.beat("проба", busy=True)
     with ops.ops_session() as s:
@@ -100,3 +100,16 @@ def test_busy_flag_without_heartbeat_is_not_active():
     assert health["alert"], "мовчазний «зайнятий» воркер має давати тривогу"
 
     ops.beat("відновлено", busy=False)
+
+@pytest.fixture
+def isolated_ops(tmp_path, monkeypatch):
+    """Своя база телеметрії: справжній фоновий прогін не має ламати тест."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path/'ops.db'}", future=True)
+    monkeypatch.setattr(ops, "engine", engine)
+    monkeypatch.setattr(ops, "OpsSession", sessionmaker(bind=engine, expire_on_commit=False,
+                                                        future=True))
+    ops.OpsBase.metadata.create_all(engine)
+    return ops

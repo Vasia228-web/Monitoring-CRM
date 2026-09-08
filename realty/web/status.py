@@ -60,6 +60,9 @@ def _data_quality() -> dict:
         stale = s.scalar(
             select(func.count()).select_from(Listing).where(Listing.property_id.is_(None))
         ) or 0
+        by_quality = dict(s.execute(
+            select(Listing.quality_status, func.count())
+            .group_by(Listing.quality_status)).all())
     return {
         "listings": listings,
         "properties": properties,
@@ -67,6 +70,7 @@ def _data_quality() -> dict:
         "multi_source": multi,
         "unassigned": stale,                  # ще не пройшли дедуплікацію
         "per_source": per_source,
+        "quality": by_quality,
     }
 
 
@@ -120,6 +124,7 @@ def build_status() -> dict:
         "sources": sources,
         "quality": quality,
         "llm": {"all_time": ops.llm_totals(), "last_24h": ops.llm_totals(24)},
+        "quality_24h": ops.quality_totals(24),
         "jobs": live,
         "runs": ops.recent_runs(10),
     }

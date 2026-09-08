@@ -7,6 +7,8 @@
   python cli.py schedule install       # фоновий розклад (launchd)
   python cli.py dedup                  # звести дублі між сайтами
   python cli.py verify --limit 200     # перевірити, які оголошення ще живі
+  python cli.py quality diagnose       # що не так із даними
+  python cli.py quality audit          # аудит дедуплікації
   python cli.py serve --port 8000      # веб-інтерфейс
   python cli.py stats                  # що вже є в базі
 """
@@ -41,6 +43,68 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     report = Pipeline(sources=names, use_llm=not args.no_llm, mode=args.mode,
                       trigger=args.trigger).run()
     print(report.render())
+    return 0
+
+
+def cmd_quality(args: argparse.Namespace) -> int:
+    import json
+
+    from realty.db import init_db
+    from realty.quality import audit, diagnose, housekeeping
+    from realty.quality.rules import compute_thresholds, load_thresholds, save_thresholds
+
+    init_db()
+    action = args.action
+
+    if action == "diagnose":
+        d = diagnose.run()
+        print(json.dumps(d, ensure_ascii=False, indent=1, default=str))
+        return 0
+
+    if action == "thresholds":
+        from realty.db import SessionLocal
+
+        if args.recompute:
+            with SessionLocal() as s:
+                t = compute_thresholds(s)
+            save_thresholds(t)
+        else:
+            t = load_thresholds()
+        print(f"\nПОРОГИ (вибірка {t.sample_size}, {t.computed_at[:16]})")
+        print("=" * 66)
+        for name, label in (("price_usd", "ціна, $"), ("price_per_sqm", "$/м²"),
+                            ("area_total", "площа, м²")):
+            b = getattr(t, name)
+            print(f"  {label:<12} перегляд {b.review_low:>9,.0f}..{b.review_high:>9,.0f}"
+                  f"   відхилення {b.reject_low:>8,.0f}..{b.reject_high:>10,.0f}")
+        return 0
+
+    if action == "revalidate":
+        r = housekeeping.revalidate(limit=args.limit)
+        print(f"\nРЕВАЛІДАЦІЯ: перевірено {r['checked']}")
+        print(f"  було:  {r['before']}")
+        print(f"  стало: {r['after']}")
+        return 0
+
+    if action == "audit":
+        a = audit.run(limit=args.limit or 500)
+        print("\nАУДИТ ДЕДУПЛІКАЦІЇ")
+        print("=" * 52)
+        print(f"  оголошень:                    {a['listings']}")
+        print(f"  пропущених пар (майже дублі): {a['missed_pairs']}")
+        print(f"    з них нижче порога:         {a['missed_below_threshold']}")
+        print(f"  злиття з низькою впевненістю: {a['low_confidence_merges']}")
+        print(f"  суперечливих об'єктів:        {a['wrong_merges']}")
+        for w in a["wrong_examples"][:5]:
+            print(f"    об'єкт {w['property_id']} ({w['members']}): {w['problems']}")
+        return 0
+
+    routine = housekeeping.ROUTINES.get(action)
+    if routine is None:
+        print(f"невідома дія: {action}")
+        return 1
+    result = routine()
+    print(json.dumps(result, ensure_ascii=False, indent=1, default=str)[:3000])
     return 0
 
 
@@ -170,6 +234,13 @@ def main() -> int:
     bf.add_argument("--limit", type=int, default=300)
     bf.add_argument("--no-llm", action="store_true")
     bf.set_defaults(func=cmd_backfill)
+
+    ql = sub.add_parser("quality", help="контроль якості даних")
+    ql.add_argument("action", choices=("diagnose", "thresholds", "revalidate",
+                                       "audit", "daily", "weekly", "monthly"))
+    ql.add_argument("--limit", type=int, help="скільки записів обробити")
+    ql.add_argument("--recompute", action="store_true", help="перерахувати пороги")
+    ql.set_defaults(func=cmd_quality)
 
     vf = sub.add_parser("verify", help="перевірити, які оголошення ще живі")
     vf.add_argument("--limit", type=int, default=200, help="скільки перевірити за раз")

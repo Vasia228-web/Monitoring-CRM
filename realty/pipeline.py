@@ -14,6 +14,7 @@ from .llm import LLMExtractor
 from .models import Condition, Listing, MarketType, PriceEvent
 from .normalize import compute_price_per_sqm, to_uah, to_usd
 from .sources import REGISTRY
+from .quality.staging import QualityGate
 from .verify import sweep_after_full_run
 from .sources.base import BaseSource
 
@@ -42,6 +43,7 @@ class RunReport:
     skipped: int = 0
     enriched: int = 0
     delisted: int = 0
+    quality: dict = field(default_factory=dict)
     llm_calls: int = 0
     llm_cost_usd: float = 0.0
     llm_tokens: tuple[int, int] = (0, 0)
@@ -73,7 +75,7 @@ class RunReport:
 class Pipeline:
     def __init__(self, sources: list[str] | None = None, use_llm: bool = True,
                  mode: str = "fresh", start_pages: dict[str, int] | None = None,
-                 on_page=None, trigger: str = "cli") -> None:
+                 on_page=None, trigger: str = "cli", gate: QualityGate | None = None) -> None:
         self.source_names = sources or enabled_sources()
         # "fresh" — щоденний інкрементальний прогін по свіжих оголошеннях;
         # "full"  — одноразовий історичний збір без стелі глибини.
@@ -82,6 +84,8 @@ class Pipeline:
         self.on_page = on_page
         # Звідки прийшов прогін: розклад, кнопка в дашборді чи термінал.
         self.trigger = trigger
+        # Карантин: нічого не потрапляє в базу, не пройшовши перевірку.
+        self.gate = gate if gate is not None else QualityGate()
         self.report = RunReport()
         self.llm = LLMExtractor() if use_llm else None
         self._http: Fetcher | None = None
@@ -241,6 +245,7 @@ class Pipeline:
         for start in range(0, len(batch), self.CHUNK):
             chunk = batch[start:start + self.CHUNK]
             with session_scope() as s:
+                chunk = self.gate.screen(s, chunk)
                 for rec in chunk:
                     try:
                         with s.begin_nested():
@@ -311,10 +316,22 @@ class Pipeline:
             if src._fetcher is not None:
                 src._fetcher.close()
         self._record_llm_cost()
+        self.report.quality = self.gate.report.as_dict() if self.gate else {}
         for obj in (self._http, self._browser):
             if obj is not None:
                 obj.close()
         return self.report
+
+    def _quality_delta(self, source: str) -> dict:
+        """Скільки записів цього джерела пройшло контроль у цьому прогоні."""
+        st = self.gate.report.by_source.get(source, {}) if self.gate else {}
+        llm = self.llm
+        return {
+            "q_accepted": st.get("accepted", 0), "q_review": st.get("review", 0),
+            "q_rejected": st.get("rejected", 0),
+            "llm_passed": getattr(llm, "passed", 0),
+            "llm_failed": getattr(llm, "failed", 0),
+        }
 
     def _llm_snapshot(self) -> tuple[int, int, int, float]:
         if not self.llm:
@@ -341,6 +358,7 @@ class Pipeline:
             llm_in_tokens=tin - llm_before[1],
             llm_out_tokens=tout - llm_before[2],
             llm_cost_usd=round(cost - llm_before[3], 6),
+            **self._quality_delta(name),
         )
         ops.beat(f"завершено: {name}", busy=False)
 
@@ -403,6 +421,7 @@ class Pipeline:
                     src._fetcher.close()  # браузер спільний — закриємо в кінці
 
         self._record_llm_cost()
+        self.report.quality = self.gate.report.as_dict() if self.gate else {}
         for obj in (self._http, self._browser):
             if obj is not None:
                 obj.close()

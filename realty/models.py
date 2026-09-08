@@ -45,6 +45,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Статуси, з якими запис вважається придатним до показу й статистики.
+CLEAN_STATUSES = ("ok",)
+
+
+def is_clean():
+    """Умова «запис пройшов контроль якості»."""
+    return Listing.quality_status.in_(CLEAN_STATUSES)
+
+
 def effective_active():
     """Чинна актуальність: ручне рішення сильніше за автоматичне."""
     return case((Listing.manual_active.isnot(None), Listing.manual_active),
@@ -101,6 +110,14 @@ class Listing(Base):
     manual_active: Mapped[bool | None] = mapped_column(Boolean, index=True)
     delisted_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_checked: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+
+    # --- Контроль якості ------------------------------------------------------
+    # Запис не потрапляє у видачу, доки не пройшов перевірку. `pending` —
+    # щойно зібраний, `ok` — чистий, `review` — підозрілий і чекає людину,
+    # `rejected` — не пускаємо, але й не видаляємо.
+    quality_status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    quality_reason: Mapped[str | None] = mapped_column(Text)
+    quality_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # Прапорці якості даних — щоб не видавати оцінку за факт.
     price_estimated: Mapped[bool] = mapped_column(Boolean, default=False)

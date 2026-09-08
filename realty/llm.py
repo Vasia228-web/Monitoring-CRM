@@ -129,6 +129,10 @@ class LLMExtractor:
         self.sent_chars = 0
         self.in_tokens = 0
         self.out_tokens = 0
+        # Скільки відповідей моделі пройшли перевірку схеми й адекватності.
+        self.passed = 0
+        self.failed = 0
+        self.reject_reasons: list[str] = []
         self._failed: set[str] = set()      # сторінки, які вже дали помилку
         self._client = None
         self._unavailable_reason: str | None = None
@@ -196,6 +200,19 @@ class LLMExtractor:
                      url or "(без URL)", len(text),
                      getattr(usage, "input_tokens", "?"),
                      getattr(usage, "output_tokens", "?"))
+
+            # Схема гарантує типи, але не здоровий глузд: ціна 0 чи 40 кімнат
+            # формально валідні. Такі відповіді далі не йдуть.
+            from .quality.rules import validate_llm_output
+
+            ok, problems = validate_llm_output(resp.parsed_output)
+            if not ok:
+                self.failed += 1
+                self.reject_reasons.extend(problems)
+                log.warning("Відповідь моделі відхилено (%s): %s",
+                            url[:60], "; ".join(problems))
+                return None
+            self.passed += 1
             return resp.parsed_output
         except Exception as e:
             msg = str(e)

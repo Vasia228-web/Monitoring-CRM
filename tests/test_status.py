@@ -143,7 +143,7 @@ def test_second_run_of_the_same_source_is_refused(client, monkeypatch):
 
 # --- здоров'я воркера ---------------------------------------------------------
 
-def test_worker_state_reflects_silence(monkeypatch):
+def test_worker_state_reflects_silence(isolated_ops, monkeypatch):
     ops.init_ops()
     ops.beat("тест", busy=False)
     assert ops.worker_health()["state"] in {"idle", "active"}
@@ -205,3 +205,16 @@ def test_tests_do_not_write_into_the_project(tmp_path, monkeypatch):
     TestClient(app).post("/api/status/run", json={"source": "domria"})
     assert (tmp_path / "logs" / "manual-domria.log").exists()
     assert not (Path(__file__).resolve().parent.parent / "logs" / "manual-domria.log").exists()
+
+@pytest.fixture
+def isolated_ops(tmp_path, monkeypatch):
+    """Своя база телеметрії: справжній фоновий прогін не має ламати тест."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path/'ops.db'}", future=True)
+    monkeypatch.setattr(ops, "engine", engine)
+    monkeypatch.setattr(ops, "OpsSession", sessionmaker(bind=engine, expire_on_commit=False,
+                                                        future=True))
+    ops.OpsBase.metadata.create_all(engine)
+    return ops
