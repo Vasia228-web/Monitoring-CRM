@@ -350,12 +350,34 @@ def _split_conflicted(members: list[int], by_id: dict[int, Shape]) -> list[list[
 def conflicts(shapes: list[Shape]) -> list[tuple[str, str]]:
     """Пари несумісних адрес усередині одного кластера — має бути порожньо."""
     known = [(sh.street, sh.house) for sh in shapes if sh.street]
+
+    # Номери будинків зв'язуємо транзитивно: запис «Княгинин, 44 корпус 13»
+    # доводить, що 44 і 13 — той самий будинок, навіть якщо інші джерела
+    # згадують лише одне з чисел. Без цього одна квартира виглядала б як
+    # конфлікт «13 проти 44».
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for _, houses in known:
+        tokens = sorted(houses)
+        for other in tokens[1:]:
+            parent[find(other)] = find(tokens[0])
+
     bad = []
     for i, (sa, ha) in enumerate(known):
         for sb, hb in known[i + 1:]:
-            # Розбіжність у номері будинку сама по собі не конфлікт: джерела
-            # нумерують по-різному («Княгинин, 44 корпус 13» і «Будинок 13»).
             if street_overlap(sa, sb) < STREET_OVERLAP:
+                bad.append((f"{sa} {sorted(ha)}".strip(), f"{sb} {sorted(hb)}".strip()))
+            elif ha and hb and not ({find(x) for x in ha} & {find(x) for x in hb}):
+                # Та сама вулиця, номери з різних будівель. Записи без номера
+                # («вул. Хіміків» без цифри) працювали містком і зводили в
+                # один об'єкт будинки 2, 24, 28 і 92.
                 bad.append((f"{sa} {sorted(ha)}".strip(), f"{sb} {sorted(hb)}".strip()))
     return bad
 

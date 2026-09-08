@@ -182,3 +182,18 @@ def test_same_street_different_houses_never_merge():
     c = _sh(3, "lun", area=39.0, floor=7, street="хіміків",
             house=frozenset({"2", "20"}), price=31500.0)
     assert match_score(a if False else b, c) >= MERGE_THRESHOLD
+
+
+def test_house_numbers_are_linked_transitively():
+    """«Княгинин, 44 корпус 13» доводить, що 44 і 13 — той самий будинок.
+
+    Без транзитивного зв'язку одна квартира за $135 000, яку джерела
+    описують то як «13», то як «44», виглядала б як конфлікт.
+    """
+    both = _sh(1, "domria", street="княгинин", house=frozenset({"13", "44"}))
+    only13 = _sh(2, "lun", street="княгинин", house="13")
+    only44 = _sh(3, "domria", street="княгинин", house="44")
+    assert not conflicts([both, only13, only44])
+
+    # А без сполучної ланки різні номери лишаються конфліктом.
+    assert conflicts([only13, only44])
