@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>Стан системи · Нерухомість Івано-Франківська</title>
 <style>
 :root{
@@ -36,8 +37,16 @@ body{margin:0;background:var(--paper);color:var(--ink);
 header{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:baseline;margin-bottom:22px}
 h1{font-size:24px;font-weight:640;letter-spacing:-.02em;margin:0}
 header .sub{color:var(--muted);font-size:13px}
-header a{color:var(--accent);text-decoration:none;font-size:13px;margin-left:auto}
-header a:hover{text-decoration:underline}
+.topbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:24px;
+  padding-bottom:14px;border-bottom:1px solid var(--line)}
+.brand{font-weight:640;font-size:15px;letter-spacing:-.01em;margin-right:6px}
+.nav{display:flex;gap:4px;flex-wrap:wrap}
+.nav a{font-size:13.5px;padding:6px 12px;border-radius:8px;text-decoration:none;
+  color:var(--ink-2);border:1px solid transparent}
+.nav a:hover{background:var(--line-2);color:var(--ink)}
+.nav a.on{background:var(--card);border-color:var(--line);color:var(--ink);
+  font-weight:540;box-shadow:var(--shadow)}
+.topbar .spacer{flex:1}
 
 h2{font-size:11px;font-weight:520;letter-spacing:.06em;text-transform:uppercase;
   color:var(--muted);margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
@@ -127,10 +136,19 @@ th.r,td.r{text-align:right}
 <body>
 <div class="wrap">
 
+  <nav class="topbar">
+    <span class="brand">Нерухомість Івано-Франківська</span>
+    <span class="nav">
+      <a href="/">Моніторинг</a>
+      <a href="/processing">В обробці</a>
+    </span>
+    <span class="spacer"></span>
+    <span class="nav"><a href="/status" class="on">Стан системи</a></span>
+  </nav>
+
   <header>
     <h1>Стан системи</h1>
     <span class="sub" id="stamp">завантаження…</span>
-    <a href="/">← до оголошень</a>
   </header>
 
   <section>

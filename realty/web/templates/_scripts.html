@@ -1,0 +1,50 @@
+<script>
+  // Селекти застосовуються одразу; ціна — лише кнопкою «Застосувати» або Enter,
+  // інакше список смикається на кожну введену цифру.
+  var form = document.querySelector('form.filters');
+  document.querySelectorAll('.filters [data-auto]').forEach(function (el) {
+    el.addEventListener('change', function () { form.requestSubmit(); });
+  });
+  form?.querySelectorAll('input[type=number]').forEach(function (el) {
+    el.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); form.requestSubmit(); }
+    });
+  });
+  // Порожні поля не потрапляють в адресу — так посилання лишається читабельним
+  // і його можна передати іншій людині.
+  form?.addEventListener('submit', function () {
+    form.querySelectorAll('select, input').forEach(function (el) {
+      if (el.type !== 'radio' && el.value === '') el.disabled = true;
+    });
+    setTimeout(function () {
+      form.querySelectorAll('[disabled]').forEach(function (el) { el.disabled = false; });
+    }, 0);
+  });
+
+  // «Взято в обробку»: статус зберігається в базі, тож переживає перезапуск
+  // і видно його з будь-якого пристрою.
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button.take');
+    if (!btn) return;
+    var next = btn.dataset.taken !== '1';
+    btn.disabled = true;
+    fetch('/api/listings/' + btn.dataset.id + '/processing', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({in_progress: next}),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'не вдалося');
+      if (document.body.dataset.page === 'processing' && !d.in_progress) {
+        btn.closest('tr').remove();     // на сторінці обробки об'єкту вже не місце
+        return;
+      }
+      btn.dataset.taken = d.in_progress ? '1' : '0';
+      btn.classList.toggle('on', d.in_progress);
+      btn.textContent = d.in_progress ? 'В обробці' : 'Взяти в обробку';
+      btn.closest('tr').classList.toggle('taken', d.in_progress);
+    }).catch(function (e) {
+      btn.textContent = 'помилка';
+      console.error(e);
+    }).finally(function () { btn.disabled = false; });
+  });
+</script>

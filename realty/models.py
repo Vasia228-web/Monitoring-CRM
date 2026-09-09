@@ -111,6 +111,14 @@ class Listing(Base):
     delisted_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_checked: Mapped[datetime | None] = mapped_column(DateTime, index=True)
 
+    # --- Робочий процес -------------------------------------------------------
+    # «Взято в обробку» — позначка користувача про те, що об'єктом займаються.
+    # Свідомо окреме поле, а не `manual_active`: те відповідає за життєвий цикл
+    # оголошення (чи воно ще продається) і читається шаром контролю якості при
+    # розрахунку порогів. Змішати їх означало б зламати детекцію знятих.
+    in_progress: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    in_progress_at: Mapped[datetime | None] = mapped_column(DateTime)
+
     # --- Контроль якості ------------------------------------------------------
     # Запис не потрапляє у видачу, доки не пройшов перевірку. `pending` —
     # щойно зібраний, `ok` — чистий, `review` — підозрілий і чекає людину,

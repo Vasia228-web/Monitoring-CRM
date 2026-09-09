@@ -34,23 +34,27 @@ def test_blago_is_not_checkable():
     assert MAX_CONSECUTIVE_BLOCKS >= 1
 
 
-def test_manual_mark_overrides_automatic(client):
-    listing = client.get("/api/listings?limit=1").json()[0]
-    lid = client.get("/api/listings?limit=1&status=all").json()[0]
-    # беремо id через сторінку, бо /api/listings його не віддає
+def _first_listing_id(client) -> int:
     import re
-    lid = int(re.search(r'data-id="(\d+)"', client.get("/").text).group(1))
 
+    return int(re.search(r'data-id="(\d+)"', client.get("/").text).group(1))
+
+
+def test_manual_mark_overrides_automatic(client):
+    """Ручна позначка життєвого циклу лишилась як API поверх автоперевірки.
+
+    UI-фільтр «Актуальність» прибрано, але саме поле нікуди не поділось: його
+    читає шар контролю якості, рахуючи пороги лише по живих оголошеннях.
+    """
+    lid = _first_listing_id(client)
     try:
         r = client.post(f"/api/listings/{lid}/status", json={"active": False}).json()
         assert r["ok"] and r["active"] is False and r["manual_active"] is False
         assert r["is_active"] is True, "ручна позначка не має чіпати автоматичну"
 
-        # фільтри бачать зміну
-        ids = lambda q: [x["original_url"] for x in
-                         client.get(f"/api/listings?{q}&limit=1000").json()]
-        url = client.get(f"/api/listings?status=inactive&limit=1000").json()
-        assert any(x["active"] is False for x in url)
+        # Зняте з продажу зникає зі списку — без жодного фільтра.
+        shown = client.get("/api/listings?limit=1000").json()
+        assert all(x.get("active", True) for x in shown)
 
         back = client.post(f"/api/listings/{lid}/status", json={"active": None}).json()
         assert back["manual_active"] is None and back["active"] is True
@@ -58,24 +62,25 @@ def test_manual_mark_overrides_automatic(client):
         client.post(f"/api/listings/{lid}/status", json={"active": None})
 
 
-def test_status_filter_narrows(client):
-    all_rows = client.get("/api/listings?status=all&limit=1000").json()
-    active = client.get("/api/listings?status=active&limit=1000").json()
-    inactive = client.get("/api/listings?status=inactive&limit=1000").json()
-    assert all(x["active"] for x in active)
-    assert all(not x["active"] for x in inactive)
-    assert len(active) <= len(all_rows)
+def test_removed_filters_are_gone_from_api_and_ui(client):
+    """Критерій приймання: фільтрів «Якість» і «Актуальні» немає ніде."""
+    page = client.get("/").text
+    assert 'name="status"' not in page and 'name="quality"' not in page
+
+    # Невідомі параметри просто ігноруються, а не змінюють вибірку.
+    base = client.get("/api/listings?limit=100").json()
+    with_old = client.get("/api/listings?limit=100&status=inactive&quality=rejected").json()
+    assert [r["original_url"] for r in base] == [r["original_url"] for r in with_old]
 
 
-def test_active_is_the_default(client):
-    """Зняті з продажу не мають потрапляти у звичайний перегляд і статистику."""
-    default = client.get("/api/listings?limit=50").json()
-    assert all(x["active"] for x in default)
+def test_only_live_and_clean_records_are_shown(client):
+    """Зняті з продажу й такі, що не пройшли контроль, у видачу не потрапляють."""
+    rows = client.get("/api/listings?limit=200").json()
+    assert rows and all(r.get("active", True) for r in rows)
 
 
 def test_bad_status_value_rejected(client):
-    import re
-    lid = int(re.search(r'data-id="(\d+)"', client.get("/").text).group(1))
+    lid = _first_listing_id(client)
     r = client.post(f"/api/listings/{lid}/status", json={"active": "нi"})
     assert r.status_code == 400
     assert client.post("/api/listings/999999999/status", json={"active": True}).status_code == 404

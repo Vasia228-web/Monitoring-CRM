@@ -75,51 +75,7 @@ def _num(value: str | None) -> float | None:
         return None
 
 
-SORTS = {
-    "price_asc": Listing.price_usd.asc().nullslast(),
-    "price_desc": Listing.price_usd.desc().nullslast(),
-    "rooms_asc": Listing.rooms.asc().nullslast(),
-    "rooms_desc": Listing.rooms.desc().nullslast(),
-    "sqm_asc": Listing.price_per_sqm.asc().nullslast(),
-    "sqm_desc": Listing.price_per_sqm.desc().nullslast(),
-    "date_asc": Listing.published_at.asc().nullslast(),
-    "date_desc": Listing.published_at.desc().nullslast(),
-}
-DEFAULT_SORT = "date_desc"
-MAX_ROWS = 1000  # спільна стеля для сторінки та JSON
-
-
-def _query(session, *, condition: str, market: str, source: str, rooms: str,
-           price_min: float | None, price_max: float | None, sort: str,
-           status: str = "active", quality: str = "clean"):
-    stmt = select(Listing)
-    # Записи з невизначеним чи підозрілим статусом не потрапляють у видачу.
-    if quality == "clean":
-        stmt = stmt.where(is_clean())
-    elif quality in ("review", "rejected", "pending"):
-        stmt = stmt.where(Listing.quality_status == quality)
-    # Типово показуємо лише актуальні: зняті з продажу псують і перегляд,
-    # і будь-яку статистику. «all» лишає їх видимими навмисно.
-    if status == "active":
-        stmt = stmt.where(effective_active().is_(True))
-    elif status == "inactive":
-        stmt = stmt.where(effective_active().is_(False))
-    if condition in {c.value for c in Condition}:
-        stmt = stmt.where(Listing.condition == Condition(condition))
-    if market in {m.value for m in MarketType}:
-        stmt = stmt.where(Listing.market_type == MarketType(market))
-    if source:
-        stmt = stmt.where(Listing.source == source)
-    if rooms:
-        if rooms == "4+":
-            stmt = stmt.where(Listing.rooms >= 4)
-        elif rooms.isdigit():
-            stmt = stmt.where(Listing.rooms == int(rooms))
-    if price_min is not None:
-        stmt = stmt.where(Listing.price_usd >= price_min)
-    if price_max is not None:
-        stmt = stmt.where(Listing.price_usd <= price_max)
-    return stmt.order_by(SORTS.get(sort, SORTS[DEFAULT_SORT]))
+from .queries import DEFAULT_SORT, MAX_ROWS, SORTS, listing_query
 
 
 def _median(values: list[float]) -> float | None:
@@ -169,6 +125,39 @@ def _stats(session) -> dict:
     }
 
 
+def _render_list(request: Request, template: str, *, in_progress: bool | None,
+                 condition: str, market: str, source: str, rooms: str,
+                 price_min: str | None, price_max: str | None, sort: str, limit: int):
+    """Спільна збірка будь-якої сторінки зі списком оголошень."""
+    lo, hi = _num(price_min), _num(price_max)
+    warning = None
+    if lo is not None and hi is not None and lo > hi:
+        # Порожній список без пояснення виглядає як поломка, а не як фільтр.
+        warning = (f"Ціна «від» (${lo:,.0f}) більша за «до» (${hi:,.0f}) — "
+                   f"нічого не може потрапити в такий діапазон.")
+        lo = hi = None
+
+    stmt = listing_query(condition=condition, market=market, source=source,
+                         rooms=rooms, price_min=lo, price_max=hi, sort=sort,
+                         in_progress=in_progress)
+    with SessionLocal() as s:
+        matched = s.scalar(
+            select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+        rows = s.scalars(stmt.limit(limit)).all()
+        stats = _stats(s)
+        in_work = s.scalar(select(func.count()).select_from(Listing)
+                           .where(Listing.in_progress.is_(True))) or 0
+    return templates.TemplateResponse(request, template, {
+        "rows": rows, "stats": stats, "sources": sorted(stats["by_source"]),
+        "matched": matched, "limit": limit, "warning": warning,
+        "in_work": in_work,
+        "active_filters": any((condition, market, source, rooms, price_min, price_max)),
+        "f": {"condition": condition, "market": market, "source": source,
+              "rooms": rooms, "price_min": price_min or "", "price_max": price_max or "",
+              "sort": sort},
+    })
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
@@ -179,48 +168,44 @@ def index(
     price_min: str | None = Query(None),
     price_max: str | None = Query(None),
     sort: str = Query(DEFAULT_SORT),
-    status: str = Query("active", description="active | inactive | all"),
-    quality: str = Query("clean", description="clean | review | rejected | all"),
     limit: int = Query(500, le=MAX_ROWS),
 ):
-    price_min, price_max = _num(price_min), _num(price_max)
-    with SessionLocal() as s:
-        stmt = _query(s, condition=condition, market=market, source=source, rooms=rooms,
-                      price_min=price_min, price_max=price_max, sort=sort, status=status,
-                      quality=quality)
-        # Скільки збігів насправді — щоб у зведенні не показувати ліміт сторінки
-        # як «стільки знайдено».
-        matched = s.scalar(
-            select(func.count()).select_from(stmt.order_by(None).subquery())
-        ) or 0
-        rows = s.scalars(stmt.limit(limit)).all()
-        stats = _stats(s)
-        sources = sorted(stats["by_source"])
-        active = any((condition, market, source, rooms, price_min, price_max)) \
-            or status != "active" or quality != "clean"
-    return templates.TemplateResponse(request, "index.html", {
-        "rows": rows, "stats": stats, "sources": sources, "active_filters": active,
-        "matched": matched, "limit": limit,
-        "f": {"condition": condition, "market": market, "source": source, "rooms": rooms,
-              "price_min": price_min or "", "price_max": price_max or "", "sort": sort,
-              "status": status, "quality": quality},
-        "Condition": Condition, "MarketType": MarketType,
-    })
+    return _render_list(request, "index.html", in_progress=None,
+                        condition=condition, market=market, source=source, rooms=rooms,
+                        price_min=price_min, price_max=price_max, sort=sort, limit=limit)
+
+
+@app.get("/processing", response_class=HTMLResponse)
+def processing(
+    request: Request,
+    condition: str = Query(""),
+    market: str = Query(""),
+    source: str = Query(""),
+    rooms: str = Query(""),
+    price_min: str | None = Query(None),
+    price_max: str | None = Query(None),
+    sort: str = Query(DEFAULT_SORT),
+    limit: int = Query(500, le=MAX_ROWS),
+):
+    """Тільки об'єкти, взяті в обробку — той самий набір даних і сортування."""
+    return _render_list(request, "processing.html", in_progress=True,
+                        condition=condition, market=market, source=source, rooms=rooms,
+                        price_min=price_min, price_max=price_max, sort=sort, limit=limit)
 
 
 @app.get("/api/listings")
 def api_listings(
     condition: str = "", market: str = "", source: str = "", rooms: str = "",
     price_min: str | None = None, price_max: str | None = None,
-    sort: str = DEFAULT_SORT, status: str = "active", quality: str = "clean",
+    sort: str = DEFAULT_SORT, in_progress: bool | None = None,
     limit: int = Query(500, le=MAX_ROWS),
 ):
     """JSON-зріз тих самих даних."""
     price_min, price_max = _num(price_min), _num(price_max)
+    stmt = listing_query(condition=condition, market=market, source=source, rooms=rooms,
+                         price_min=price_min, price_max=price_max, sort=sort,
+                         in_progress=in_progress)
     with SessionLocal() as s:
-        stmt = _query(s, condition=condition, market=market, source=source, rooms=rooms,
-                      price_min=price_min, price_max=price_max, sort=sort, status=status,
-                      quality=quality)
         rows = s.scalars(stmt.limit(limit)).all()
         return JSONResponse([{
             "source": r.source,
@@ -240,9 +225,33 @@ def api_listings(
             "manual_active": r.manual_active,
             "active": r.manual_active if r.manual_active is not None else r.is_active,
             "delisted_at": r.delisted_at.isoformat() if r.delisted_at else None,
-            "quality_status": r.quality_status,
-            "quality_reason": r.quality_reason,
+            "in_progress": r.in_progress,
+            "in_progress_at": r.in_progress_at.isoformat() if r.in_progress_at else None,
         } for r in rows])
+
+
+@app.post("/api/listings/{listing_id}/processing")
+def api_set_processing(listing_id: int, payload: dict = Body(default={})):
+    """Взяти об'єкт в обробку або прибрати з неї.
+
+    Зняття статусу нічого не видаляє: запис лишається в базі разом з історією
+    цін і просто повертається в загальний список.
+    """
+    value = payload.get("in_progress", True)
+    if value not in (True, False):
+        return JSONResponse({"ok": False, "error": "in_progress має бути true або false"},
+                            status_code=400)
+    with SessionLocal() as s:
+        row = s.get(Listing, listing_id)
+        if row is None:
+            return JSONResponse({"ok": False, "error": "оголошення не знайдено"},
+                                status_code=404)
+        row.in_progress = bool(value)
+        row.in_progress_at = datetime.now() if value else None
+        s.commit()
+        return JSONResponse({"ok": True, "id": row.id, "in_progress": row.in_progress,
+                             "in_progress_at": row.in_progress_at.isoformat()
+                             if row.in_progress_at else None})
 
 
 @app.post("/api/listings/{listing_id}/status")

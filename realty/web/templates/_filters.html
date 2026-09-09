@@ -1,0 +1,57 @@
+<form class="filters" method="get">
+    <div class="field">
+      <span>Стан</span>
+      <div class="seg">
+        {% for val, cap in [('','Будь-який'), ('renovated','З ремонтом'), ('needs_repair','Без ремонту')] %}
+          <label>
+            <input type="radio" name="condition" value="{{ val }}" data-auto
+                   {% if f.condition == val %}checked{% endif %}>
+            <span>{{ cap }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <label class="field">
+      <span>Ринок</span>
+      <select name="market" data-auto>
+        <option value="">Будь-який</option>
+        <option value="primary"   {% if f.market=='primary' %}selected{% endif %}>Новобудова</option>
+        <option value="secondary" {% if f.market=='secondary' %}selected{% endif %}>Вторинний</option>
+        <option value="unknown"   {% if f.market=='unknown' %}selected{% endif %}>Не вказано</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Кімнат</span>
+      <select name="rooms" data-auto>
+        <option value="">Будь-яка</option>
+        {% for r in ['1','2','3','4+'] %}
+          <option value="{{ r }}" {% if f.rooms==r %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Джерело</span>
+      <select name="source" data-auto>
+        <option value="">Усі</option>
+        {% for s in sources %}
+          <option value="{{ s }}" {% if f.source==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Ціна від, $</span>
+      <input class="num" type="number" name="price_min" value="{{ f.price_min }}" min="0" step="5000">
+    </label>
+    <label class="field">
+      <span>до, $</span>
+      <input class="num" type="number" name="price_max" value="{{ f.price_max }}" min="0" step="5000">
+    </label>
+
+    <input type="hidden" name="sort" value="{{ f.sort }}">
+    <button class="apply" type="submit">Застосувати</button>
+    {% if active_filters %}<a class="reset" href="/">Скинути</a>{% endif %}
+  </form>

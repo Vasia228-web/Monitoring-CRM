@@ -1,0 +1,16 @@
+  <section class="summary">
+    <div class="metric">
+      <span class="v num">{{ stats.total }}</span>
+      <span class="k">оголошень{% if matched != stats.total %} · <b>{{ matched }}</b> за фільтром{% endif %}</span>
+    </div>
+    <div class="metric">
+      <span class="v num">${{ stats.median_sqm | money }}</span>
+      <span class="k">медіана за м²</span>
+    </div>
+    <div class="metric">
+      <span class="v num">${{ stats.median_price | money }}</span>
+      <span class="k">медіана за об'єкт</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="updated">оновлено {{ stats.updated | relative_date }}</div>
+  </section>

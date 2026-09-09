@@ -1,0 +1,17 @@
+{% extends "_layout.html" %}
+{% set page = 'processing' %}
+{% block title %}В обробці · Нерухомість Івано-Франківська{% endblock %}
+
+{% block content %}
+  <p class="lede">
+    Об'єкти, взяті в обробку. Той самий набір даних і те саме сортування,
+    що й у моніторингу. «Прибрати з обробки» лише знімає позначку —
+    запис і його історія цін лишаються недоторканими.
+  </p>
+
+  {% if warning %}<div class="warn">{{ warning }}</div>{% endif %}
+  {% include "_filters.html" %}
+  {% include "_table.html" %}
+{% endblock %}
+
+{% block scripts %}{% include "_scripts.html" %}{% endblock %}
