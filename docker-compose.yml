@@ -1,0 +1,29 @@
+# Веб і фоновий воркер як два сервіси на спільному постійному диску.
+# `restart: unless-stopped` піднімає їх після падіння й після перезавантаження.
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      # Секрети приходять зі змінних оточення хостингу, не з репозиторію.
+      AUTH_USER: ${AUTH_USER:?потрібен логін для доступу}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?потрібен пароль для доступу}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - realty-data:/data
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "cli.py", "schedule", "worker", "--hours", "3"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - realty-data:/data
+    depends_on:
+      - web
+
+volumes:
+  realty-data:

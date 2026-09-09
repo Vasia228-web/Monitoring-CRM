@@ -40,7 +40,7 @@
       }
       btn.dataset.taken = d.in_progress ? '1' : '0';
       btn.classList.toggle('on', d.in_progress);
-      btn.textContent = d.in_progress ? 'В обробці' : 'Взяти в обробку';
+      btn.textContent = d.in_progress ? 'В обробці' : 'Взяти';
       btn.closest('tr').classList.toggle('taken', d.in_progress);
     }).catch(function (e) {
       btn.textContent = 'помилка';

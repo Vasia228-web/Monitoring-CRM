@@ -53,6 +53,7 @@ templates.env.filters["money"] = _money
 async def lifespan(_: FastAPI):
     init_db()
     init_ops()
+    warn_if_open()
     yield
 
 
@@ -63,6 +64,23 @@ app = FastAPI(title="Нерухомість Івано-Франківська", 
 from .status import router as status_router  # noqa: E402
 
 app.include_router(status_router)
+
+# Захист усього інтерфейсу. Вмикається наявністю AUTH_USER/AUTH_PASSWORD,
+# тож локальна розробка не потребує пароля, а публічний хостинг — потребує.
+from .auth import BasicAuthMiddleware, robots_txt, warn_if_open  # noqa: E402
+
+app.add_middleware(BasicAuthMiddleware)
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots():
+    return robots_txt()
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Перевірка живучості для хостингу — без пароля й без звернень до бази."""
+    return {"ok": True}
 
 def _num(value: str | None) -> float | None:
     """Порожнє поле форми приходить як `price_min=` — це не число, але й не

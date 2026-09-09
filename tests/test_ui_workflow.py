@@ -172,3 +172,57 @@ def test_navigation_is_on_every_page(client):
 def test_pages_are_closed_from_search_engines(client):
     for url in ("/", "/processing", "/status"):
         assert "noindex" in client.get(url).text, url
+
+
+# --- доступ ззовні ------------------------------------------------------------
+
+def test_everything_is_behind_a_password(monkeypatch):
+    """Панель із даними й ручними тригерами не має бути відкритою."""
+    from fastapi.testclient import TestClient
+
+    from realty.web.app import app
+
+    monkeypatch.setenv("AUTH_USER", "u")
+    monkeypatch.setenv("AUTH_PASSWORD", "p")
+    c = TestClient(app)
+
+    for url in ("/", "/processing", "/status", "/api/listings", "/api/status"):
+        assert c.get(url).status_code == 401, url
+    assert c.post("/api/status/run", json={"source": "olx"}).status_code == 401
+    assert c.get("/", auth=("u", "p")).status_code == 200
+    assert c.get("/", auth=("u", "невірний")).status_code == 401
+
+
+def test_health_and_robots_stay_open(monkeypatch):
+    """Хостингу треба перевіряти живучість, а пошуковикам — бачити заборону."""
+    from fastapi.testclient import TestClient
+
+    from realty.web.app import app
+
+    monkeypatch.setenv("AUTH_USER", "u")
+    monkeypatch.setenv("AUTH_PASSWORD", "p")
+    c = TestClient(app)
+    assert c.get("/healthz").status_code == 200
+    assert "Disallow: /" in c.get("/robots.txt").text
+
+
+def test_no_secrets_in_deployment_files():
+    root = Path(__file__).resolve().parent.parent
+    for name in ("Dockerfile", "docker-compose.yml"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "sk-ant-" not in text, name
+        assert "${" in text or "ENV" in text, f"{name}: секрети мають іти через оточення"
+
+
+def test_non_ascii_password_works(monkeypatch):
+    """Регресія: compare_digest не приймає не-ASCII, і пароль із кирилицею
+    давав 500 замість 401."""
+    from fastapi.testclient import TestClient
+
+    from realty.web.app import app
+
+    monkeypatch.setenv("AUTH_USER", "користувач")
+    monkeypatch.setenv("AUTH_PASSWORD", "пароль")
+    c = TestClient(app)
+    assert c.get("/", auth=("користувач", "пароль")).status_code == 200
+    assert c.get("/", auth=("користувач", "інше")).status_code == 401

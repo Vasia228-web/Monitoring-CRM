@@ -259,7 +259,7 @@ def main() -> int:
     sh.set_defaults(func=cmd_schedule)
 
     sv = sub.add_parser("serve", help="запустити веб-інтерфейс")
-    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--host", default=os.getenv("HOST", "127.0.0.1"))
     # Порт може задати середовище (PORT) — так його передає планувальник
     # прев'ю. Явний --port лишається пріоритетним.
     sv.add_argument("--port", type=int,
