@@ -185,6 +185,20 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analytics(args: argparse.Namespace) -> int:
+    import json
+
+    from realty.analytics import inventory, report
+    from realty.db import init_db
+
+    init_db()
+    if args.action == "inventory":
+        data = inventory.run()
+        print(json.dumps(data, indent=2, ensure_ascii=False, default=str)
+              if args.json else report.render(data))
+    return 0
+
+
 def cmd_stats(_: argparse.Namespace) -> int:
     from sqlalchemy import func, select
 
@@ -266,6 +280,12 @@ def main() -> int:
                     default=int(os.getenv("PORT", "8000")))
     sv.add_argument("--reload", action="store_true")
     sv.set_defaults(func=cmd_serve)
+
+    an = sub.add_parser("analytics", help="аналітика по зібраній базі")
+    an.add_argument("action", choices=["inventory"],
+                    help="inventory — що взагалі можна побудувати чесно")
+    an.add_argument("--json", action="store_true", help="сирі числа замість таблиці")
+    an.set_defaults(func=cmd_analytics)
 
     st = sub.add_parser("stats", help="підсумки по базі")
     st.set_defaults(func=cmd_stats)
