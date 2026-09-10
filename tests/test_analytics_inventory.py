@@ -152,3 +152,32 @@ def test_report_renders_on_an_empty_database(tmp_path, monkeypatch):
                         sessionmaker(bind=engine, future=True))
     text = report.render()
     assert "ІНВЕНТАРИЗАЦІЯ" in text
+
+
+def test_check_rate_is_measured_not_assumed(session, monkeypatch):
+    """Швидкість обходу бази береться з фактичних позначок перевірки.
+
+    Розмір порції в налаштуваннях і реальна швидкість — різні речі: частина
+    прогонів упирається в блокування або не доходить до кінця. Від цієї цифри
+    залежить прогноз, коли з'явиться крива виживання, тож вигадувати її не можна.
+    """
+    now = datetime(2026, 9, 10, 12, 0)
+    monkeypatch.setattr(inventory, "_now", lambda: now)
+    for _ in range(10):
+        _listing(session, last_checked=now - timedelta(hours=5))
+    for _ in range(90):
+        _listing(session, last_checked=None)
+    session.flush()
+
+    rate = inventory.check_rate(session)
+    assert rate["total"] == 100
+    assert rate["per_day"] == 10
+    assert rate["checked"] == 10
+    assert rate["full_cycle_days"] == 10.0
+
+
+def test_check_rate_says_nothing_rather_than_guessing(session):
+    """Жодної перевірки за добу — повертаємо None, а не поділ на нуль."""
+    _listing(session, last_checked=None)
+    session.flush()
+    assert inventory.check_rate(session)["full_cycle_days"] is None

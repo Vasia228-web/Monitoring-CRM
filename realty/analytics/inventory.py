@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import statistics as st
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
@@ -98,6 +98,25 @@ def lifecycle(session) -> dict:
         "observed_days_median": round(st.median(observed), 1) if observed else None,
         "age_at_delist_median": round(st.median(published_age), 1) if published_age else None,
     }
+
+
+def check_rate(session) -> dict:
+    """Як швидко перевірка актуальності обходить базу.
+
+    Від цього залежить, коли накопичаться зникнення оголошень — а без них не
+    буде ні кривої виживання, ні строку продажу. Темп міряємо по фактичних
+    позначках перевірки, а не беремо з налаштувань: у налаштуваннях розмір
+    порції, а реальна швидкість залежить від того, скільки прогонів дійшло
+    до кінця.
+    """
+    total = session.scalar(select(func.count(Listing.id))) or 0
+    day_ago = _now() - timedelta(days=1)
+    recent = session.scalar(
+        select(func.count(Listing.id)).where(Listing.last_checked >= day_ago)) or 0
+    checked = session.scalar(
+        select(func.count(Listing.id)).where(Listing.last_checked.isnot(None))) or 0
+    return {"total": total, "checked": checked, "per_day": recent,
+            "full_cycle_days": round(total / recent, 1) if recent else None}
 
 
 def segments(session, min_size: int = REPORT_MIN) -> dict:
@@ -217,5 +236,6 @@ def run() -> dict:
     with SessionLocal() as s:
         return {"masters": masters(s), "history": price_history_depth(s),
                 "lifecycle": lifecycle(s), "segments": segments(s),
+                "check_rate": check_rate(s),
                 "survivorship": survivorship(s),
                 "sources": source_composition(s), "area_effect": area_effect(s)}

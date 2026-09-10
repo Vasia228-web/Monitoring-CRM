@@ -49,6 +49,10 @@ def render(data: dict | None = None) -> str:
     median = lc["observed_days_median"]
     add(f"  Медіана прожитого до зняття      "
         f"{median if median is not None else '—'} днів (за {lc['delisted']} спостережень)")
+    cr = d.get("check_rate") or {}
+    add(f"  Темп перевірки за добу           {cr.get('per_day', '—')}")
+    add(f"  Повний обхід бази займе          "
+        f"{cr.get('full_cycle_days') or '—'} днів")
 
     add("\n4. СЕГМЕНТИ (кімнатність × стан × ринок), майстер-об'єкти")
     header = "об'єктів"

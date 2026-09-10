@@ -224,9 +224,20 @@
          <span class="num">{{ liquidity.events }}</span> — потрібно щонайменше
          <span class="num">{{ liquidity.needed }}</span>. Крива по такій кількості
          подій була б плоскою лінією без змісту.</p>
-      <p>Перевірка живості проходить базу приблизно за 10 днів, тож перші
-         придатні криві з'являться, коли накопичаться зникнення — орієнтовно за
-         2–3 місяці спостережень. Зараз під наглядом
+      <p>Зникнення помічає перевірка живості оголошень.
+         {% if sweep.full_cycle_days %}
+           За останню добу вона перевірила
+           <span class="num">{{ sweep.per_day }}</span>
+           {{ sweep.per_day | plural('оголошення', 'оголошення', 'оголошень') }},
+           тобто повний обхід бази займає близько
+           <span class="num">{{ sweep.full_cycle_days }}</span>
+           {{ sweep.full_cycle_days | round | int | plural('дня', 'днів', 'днів') }}.
+         {% else %}
+           За останню добу вона не встигла перевірити жодного оголошення —
+           поки темп накопичення зникнень оцінити нема з чого.
+         {% endif %}
+         Перевірено хоч раз: <span class="num">{{ sweep.checked }}</span>
+         з {{ sweep.total }}. Зараз під наглядом
          <span class="num">{{ liquidity.n }}</span> {{ liquidity.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}.</p>
       <p class="legend" style="margin:0">{{ liquidity.disclaimer }}</p>
     </div>

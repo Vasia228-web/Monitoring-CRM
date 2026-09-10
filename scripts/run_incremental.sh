@@ -34,5 +34,10 @@ elif [ "$DOW" = "1" ]; then ROUTINE=weekly
 else ROUTINE=daily; fi
 echo "--- контроль якості ($ROUTINE) ---" >>"$LOG"
 .venv/bin/python cli.py quality "$ROUTINE" >>"$LOG" 2>&1 || true
+# Зворотний відлік до моменту, коли аналітика зможе показати прогноз і строк
+# продажу. Нічого не рахує наперед — просто робить видимим, скільки лишилось.
+echo "--- готовність аналітики ---" >>"$LOG"
+.venv/bin/python cli.py analytics forecast >>"$LOG" 2>&1 || true
+
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') завершено, код $code ===" >>"$LOG"
 exit $code

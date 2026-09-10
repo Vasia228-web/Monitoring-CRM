@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
 from ..analytics import cache, forecast
+from ..analytics.inventory import check_rate
 from ..analytics.objects import analyse
 from ..analytics.segments import (
     COND_LABEL, MARKET_LABEL, days_distribution, primary_vs_secondary, rooms_label,
@@ -49,6 +50,7 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
         snapshot = cache.get(s)
         forecast_state = forecast.state(s, cfg)
         in_work = _in_work(s)
+        sweep = check_rate(s)
 
     universe = snapshot.universe
     segments = _filtered(snapshot.segments, rooms=rooms, condition=condition, market=market)
@@ -74,6 +76,7 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
         "sources": snapshot.sources_matched,
         "composition": snapshot.sources_composition,
         "below": snapshot.below, "covered": covered, "liquidity": liquidity,
+        "sweep": sweep,
         "universe_size": len(universe),
         "forecast": forecast_state,
         "cfg": cfg,
