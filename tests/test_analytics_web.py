@@ -187,3 +187,17 @@ def test_snapshot_is_rebuilt_after_deduplication_changes_masters(tmp_path):
     assert second is not first
     assert len(second.universe) == 2
     cache_mod.invalidate()
+
+
+def test_wide_analytics_table_scrolls_inside_its_own_container(client):
+    """Таблиця джерел не має розтягувати сторінку на вузькому екрані.
+
+    Мобільні правила перетворюють рядки списку оголошень на картки; якби вони
+    діяли й тут, широка таблиця виштовхнула б сторінку за межі екрана.
+    """
+    html = client.get("/analytics").text
+    assert 'class="tablewrap scroll"' in html
+    layout = Path(__file__).resolve().parent.parent / "realty/web/templates/_layout.html"
+    css = layout.read_text()
+    assert ".tablewrap:not(.scroll){overflow:visible}" in css
+    assert ".tablewrap:not(.scroll) thead{display:none}" in css

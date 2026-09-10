@@ -45,9 +45,14 @@
       </div>
       <div class="ticks">
         <span>${{ lo | round | int | money }}</span>
-        <span>середня половина схожих: ${{ price_band.q1 | money }} – ${{ price_band.q3 | money }}</span>
         <span>${{ hi | round | int | money }}</span>
       </div>
+      <p class="scale-note">
+        Середня половина схожих об'єктів коштує
+        ${{ price_band.q1 | money }} – ${{ price_band.q3 | money }},
+        медіана ${{ price_band.median | money }} · {{ price_band.n }}
+        {{ price_band.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}
+      </p>
     {% endif %}
 
     <p class="seg-note">

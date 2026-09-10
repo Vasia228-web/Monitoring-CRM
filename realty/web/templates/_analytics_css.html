@@ -22,8 +22,11 @@
 .bar .name{font-size:13.5px;color:var(--ink-2);line-height:1.35}
 .bar .name b{display:block;color:var(--ink);font-weight:560}
 .bar .track{position:relative;height:22px;background:var(--line-2);border-radius:5px}
-.bar .iqr{position:absolute;top:0;bottom:0;background:var(--accent-soft);border-radius:5px}
-.bar .med{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--accent);border-radius:2px}
+.bar .iqr{position:absolute;top:0;bottom:0;border-radius:5px;
+  background:var(--accent-soft);
+  background:color-mix(in srgb, var(--accent) 20%, transparent)}
+.bar .med{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--accent);
+  border-radius:2px}
 .bar .val{text-align:right;font-size:14px;font-weight:580;white-space:nowrap}
 .bar .val small{display:block;font-size:11px;font-weight:400;color:var(--muted);margin-top:1px}
 
@@ -60,11 +63,20 @@
 .verdict .seg-note{font-size:12.5px;color:var(--muted);margin:12px 0 0;line-height:1.6}
 .verdict .scale{position:relative;height:30px;margin:20px 0 6px;
   background:var(--line-2);border-radius:6px}
-.verdict .scale .iqr{position:absolute;top:0;bottom:0;background:var(--accent-soft)}
-.verdict .scale .med{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--muted)}
-.verdict .scale .you{position:absolute;top:-5px;bottom:-5px;width:3px;background:var(--accent);
+.verdict .scale .iqr{position:absolute;top:0;bottom:0;border-radius:6px;
+  background:var(--accent-soft);
+  background:color-mix(in srgb, var(--accent) 18%, transparent)}
+.verdict .scale .med{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink-2)}
+.verdict .scale .med::after{content:"медіана";position:absolute;top:-15px;left:50%;
+  transform:translateX(-50%);font-size:10px;color:var(--ink-2);white-space:nowrap}
+.verdict .scale .you{position:absolute;top:-6px;bottom:-6px;width:3px;background:var(--accent);
   border-radius:2px}
-.verdict .ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+.verdict .scale .you::after{content:"цей об'єкт";position:absolute;bottom:-16px;left:50%;
+  transform:translateX(-50%);font-size:10px;color:var(--accent);white-space:nowrap;font-weight:560}
+.verdict .scale{margin-bottom:26px}
+.verdict .ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);
+  font-variant-numeric:tabular-nums}
+.verdict .scale-note{font-size:12px;color:var(--muted);margin:8px 0 0;line-height:1.6}
 
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;
   background:var(--line);border:1px solid var(--line);border-radius:var(--radius);
