@@ -1,0 +1,10 @@
+{% extends "_layout.html" %}
+{% block title %}Об'єкт не знайдено{% endblock %}
+{% block content %}
+<header><h1>Об'єкт не знайдено</h1></header>
+<div class="empty">
+  <b>Майстер-запис #{{ property_id }} відсутній</b>
+  Можливо, дедуплікацію ще не запускали для цього оголошення або запис було
+  перебудовано. <a class="addr" href="/">Повернутись до списку</a>.
+</div>
+{% endblock %}

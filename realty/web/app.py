@@ -46,8 +46,26 @@ def _money(value) -> str:
     return f"{value:,.0f}".replace(",", "\u202f")
 
 
+def _plural(count, one: str, few: str, many: str) -> str:
+    """Українська форма числівника: 1 об'єкт, 2 об'єкти, 5 об'єктів.
+
+    Числа в інтерфейсі читає людина, і «2 змін» одразу виглядає як недогляд —
+    а недогляд у підписі підриває довіру до самої цифри.
+    """
+    n = abs(int(count or 0))
+    if n % 100 in range(11, 15):
+        return many
+    last = n % 10
+    if last == 1:
+        return one
+    if last in (2, 3, 4):
+        return few
+    return many
+
+
 templates.env.filters["relative_date"] = _relative_date
 templates.env.filters["money"] = _money
+templates.env.filters["plural"] = _plural
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -64,6 +82,11 @@ app = FastAPI(title="Нерухомість Івано-Франківська", 
 from .status import router as status_router  # noqa: E402
 
 app.include_router(status_router)
+
+# Аналітичний шар: сегменти й сторінка окремої квартири.
+from .analytics_routes import router as analytics_router  # noqa: E402
+
+app.include_router(analytics_router)
 
 # Захист усього інтерфейсу. Вмикається наявністю AUTH_USER/AUTH_PASSWORD,
 # тож локальна розробка не потребує пароля, а публічний хостинг — потребує.
@@ -270,6 +293,33 @@ def api_set_processing(listing_id: int, payload: dict = Body(default={})):
         return JSONResponse({"ok": True, "id": row.id, "in_progress": row.in_progress,
                              "in_progress_at": row.in_progress_at.isoformat()
                              if row.in_progress_at else None})
+
+
+@app.post("/api/properties/{property_id}/processing")
+def api_set_property_processing(property_id: int, payload: dict = Body(default={})):
+    """Той самий статус, але на весь майстер-об'єкт одразу.
+
+    Ріелтор працює з квартирою, а не з окремим оголошенням, тож на сторінці
+    об'єкта одна кнопка ставить статус на всі склеєні оголошення. Як і для
+    окремого оголошення, зняття статусу нічого не видаляє.
+    """
+    value = payload.get("in_progress", True)
+    if value not in (True, False):
+        return JSONResponse({"ok": False, "error": "in_progress має бути true або false"},
+                            status_code=400)
+    with SessionLocal() as s:
+        rows = s.scalars(select(Listing)
+                         .where(Listing.property_id == property_id)).all()
+        if not rows:
+            return JSONResponse({"ok": False, "error": "об'єкт не знайдено"},
+                                status_code=404)
+        now = datetime.now() if value else None
+        for row in rows:
+            row.in_progress = bool(value)
+            row.in_progress_at = now
+        s.commit()
+        return JSONResponse({"ok": True, "property_id": property_id,
+                             "listings": len(rows), "in_progress": bool(value)})
 
 
 @app.post("/api/listings/{listing_id}/status")

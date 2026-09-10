@@ -1,0 +1,279 @@
+{% extends "_layout.html" %}
+{% block title %}Аналітика ринку — Івано-Франківськ{% endblock %}
+{% block head %}{% include "_analytics_css.html" %}{% endblock %}
+
+{% block content %}
+<header>
+  <h1>Аналітика ринку</h1>
+  <p class="lede">
+    Порахована на {{ universe_size }} унікальних об'єктах — оголошення з різних
+    майданчиків зведені в один запис, тому та сама квартира не рахується двічі.
+    Основна цифра скрізь — медіана; поруч із нею міжквартильний розмах, щоб було
+    видно розкид.
+  </p>
+</header>
+
+<form class="filters" method="get">
+  <label class="field"><span>Кімнат</span>
+    <select name="rooms" data-auto>
+      <option value="">усі</option>
+      {% for value, label in rooms_options %}
+        <option value="{{ value }}" {{ 'selected' if f.rooms == value }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field"><span>Стан</span>
+    <select name="condition" data-auto>
+      <option value="">будь-який</option>
+      {% for value, label in condition_options %}
+        <option value="{{ value }}" {{ 'selected' if f.condition == value }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field"><span>Ринок</span>
+    <select name="market" data-auto>
+      <option value="">будь-який</option>
+      {% for value, label in market_options %}
+        <option value="{{ value }}" {{ 'selected' if f.market == value }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button class="apply" type="submit">Застосувати</button>
+  {% if f.rooms or f.condition or f.market %}
+    <a class="reset" href="/analytics">скинути</a>
+  {% endif %}
+</form>
+
+{% if empty %}
+  <section class="sect">
+    <div class="gap">
+      <span class="badge">Недостатньо даних</span>
+      <p>Ця комбінація фільтрів не лишає жодного сегмента з вибіркою
+         щонайменше <span class="num">{{ cfg.min_sample }}</span> об'єктів.
+         Статистика по меншій вибірці нічого не описує, тому вона не показується.</p>
+      <p>Послабте фільтри або <a class="analyse" href="/analytics">скиньте їх</a>.</p>
+    </div>
+  </section>
+{% else %}
+
+<section class="sect">
+  <h2>Ціна за м² по сегментах</h2>
+  <p class="cap">
+    Смуга — міжквартильний розмах (середня половина об'єктів), риска — медіана.
+    Показані {{ segments|length }} сегментів на <b>{{ covered }}</b> об'єктах.
+    Сегменти з вибіркою менше {{ cfg.min_sample }} об'єктів у таблицю не потрапляють:
+    зараз таких {{ below.segments }} на {{ below.objects }} {{ below.objects | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}.
+  </p>
+  {% set top = segments | map(attribute='q3') | max %}
+  <div class="bars">
+    {% for r in segments %}
+      <div class="bar">
+        <span class="name">
+          <b>{{ r.rooms_label }}</b>{{ r.condition_label }}, {{ r.market_label }}
+        </span>
+        <span class="track">
+          <i class="iqr" style="left:{{ (100 * r.q1 / top) | round(1) }}%;
+             width:{{ (100 * (r.q3 - r.q1) / top) | round(1) }}%"></i>
+          <i class="med" style="left:{{ (100 * r.median_ppsqm / top) | round(1) }}%"></i>
+        </span>
+        <span class="val num">${{ r.median_ppsqm | money }}
+          <small>{{ r.n }} {{ r.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }} · {{ r.q1 }}–{{ r.q3 }}</small>
+        </span>
+      </div>
+    {% endfor %}
+  </div>
+  <p class="legend">
+    Викиди відсічені до агрегації межами Тьюкі в логарифмічному просторі
+    (k = {{ cfg.outlier_k }}) — метод обрано тому, що ціни розподілені зі скосом
+    вправо. Середнє арифметичне по цих же сегментах вище за медіану, і саме
+    тому основна цифра тут — медіана.
+  </p>
+</section>
+
+{% if pairs %}
+<section class="sect">
+  <h2>Новобудова проти вторинки</h2>
+  <p class="cap">
+    Порівняння в межах однакової кімнатності й стану — інакше різниця показувала б
+    склад вибірки, а не ринок. Пара з'являється лише тоді, коли обидві сторони
+    набирають {{ cfg.min_sample }} об'єктів.
+  </p>
+  <div class="pairs">
+    {% for p in pairs %}
+      <div class="pair">
+        <h3>{{ p.rooms_label }}, {{ p.condition_label }}</h3>
+        <div class="row"><span>новобудова</span>
+          <b class="num">${{ p.primary.median | money }}</b></div>
+        <div class="row"><span>{{ p.primary.n }} {{ p.primary.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}</span>
+          <span class="num">{{ p.primary.q1 }}–{{ p.primary.q3 }}</span></div>
+        <div class="row"><span>вторинка</span>
+          <b class="num">${{ p.secondary.median | money }}</b></div>
+        <div class="row"><span>{{ p.secondary.n }} {{ p.secondary.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}</span>
+          <span class="num">{{ p.secondary.q1 }}–{{ p.secondary.q3 }}</span></div>
+        <div class="gapv">
+          {% if p.gap_pct > 0 %}Новобудова дорожча на <b>{{ p.gap_pct }}%</b>
+          {% elif p.gap_pct < 0 %}Вторинка дорожча на <b>{{ -p.gap_pct }}%</b>
+          {% else %}Різниці між ринками немає{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="sect">
+  <h2>Порівняння майданчиків</h2>
+  <p class="cap">{{ sources.note }}
+    {% if sources.excluded_note %}<br>{{ sources.excluded_note }}{% endif %}
+  </p>
+  {% if sources.table %}
+    <div class="tablewrap">
+      <table class="grid">
+        <thead>
+          <tr><th>Сегмент</th>
+            {% for s in sources.sources %}<th>{{ s }}</th>{% endfor %}
+            <th>розкид</th></tr>
+        </thead>
+        <tbody>
+          {% for row in sources.table %}
+            <tr>
+              <td>{{ row.rooms_label }}, {{ row.condition_label }}, {{ row.market_label }}</td>
+              {% for s in sources.sources %}
+                {% set cell = row.cells.get(s) %}
+                <td class="{{ 'best' if row.cheapest == s }}">
+                  {% if cell %}
+                    <b class="num">${{ cell.median | money }}</b>
+                    <small>n = {{ cell.n }}</small>
+                  {% else %}<span style="color:var(--muted)">—</span>{% endif %}
+                </td>
+              {% endfor %}
+              <td class="num">{{ row.spread_pct }}%</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="legend">
+      Прочерк означає, що в цього майданчика в цьому сегменті менше
+      {{ sources.threshold }} об'єктів — цифра була б випадковою, тому її немає.
+      Зеленим — найдешевша медіана в сегменті.
+    </p>
+  {% else %}
+    <div class="gap">
+      <span class="badge">Недостатньо даних</span>
+      <p>Немає жодного сегмента, де хоча б два майданчики мають вибірку
+         ≥ {{ sources.threshold }} об'єктів. Порівнювати загальні медіани по
+         майданчиках не можна: це показало б різницю в асортименті.</p>
+    </div>
+  {% endif %}
+</section>
+
+<section class="sect">
+  <h2>Скільки об'єкти висять на ринку</h2>
+  <p class="cap">
+    Це <b>вік оголошення</b>, а не строк продажу: усі ці об'єкти ще продаються.
+    Строк продажу — окрема величина, і рахується вона нижче, коли з'явиться
+    достатньо зафіксованих зникнень.
+  </p>
+  {% if days %}
+    {% set dmax = days | map(attribute='q3') | max %}
+    <div class="bars">
+      {% for r in days %}
+        <div class="bar">
+          <span class="name"><b>{{ r.rooms_label }}</b>{{ r.condition_label }}, {{ r.market_label }}</span>
+          <span class="track">
+            <i class="iqr" style="left:{{ (100 * r.q1 / dmax) | round(1) }}%;
+               width:{{ (100 * (r.q3 - r.q1) / dmax) | round(1) }}%"></i>
+            <i class="med" style="left:{{ (100 * r.median / dmax) | round(1) }}%"></i>
+          </span>
+          <span class="val num">{{ r.median }} дн.
+            <small>{{ r.n }} {{ r.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }} · {{ r.q1 }}–{{ r.q3 }}</small></span>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="gap"><span class="badge">Недостатньо даних</span>
+      <p>Немає сегмента з достатньою вибіркою для цієї комбінації фільтрів.</p></div>
+  {% endif %}
+</section>
+
+<section class="sect">
+  <h2>Строк продажу та ліквідність</h2>
+  <p class="cap">
+    Рахується методом Каплана—Меєра — він враховує об'єкти, які ще не продані.
+    Проста медіана по вже знятих систематично занижує строк: на синтетичній
+    перевірці з відомою відповіддю 90 днів вона дала 33 дні, а метод — 85.
+  </p>
+  {% if liquidity.available %}
+    <div class="facts">
+      <div><span class="v num">{{ liquidity.median_days or '—' }} дн.</span>
+        <span class="k">медіанний строк на ринку</span></div>
+      <div><span class="v num">{{ liquidity.q25_days or '—' }} дн.</span>
+        <span class="k">чверть об'єктів зникає раніше</span></div>
+      <div><span class="v num">{{ liquidity.events }}</span>
+        <span class="k">зафіксованих зникнень</span></div>
+      <div><span class="v num">{{ liquidity.censored }}</span>
+        <span class="k">ще на ринку (враховані)</span></div>
+    </div>
+    {% if liquidity.median_note %}<p class="legend">{{ liquidity.median_note }}</p>{% endif %}
+    <p class="legend">{{ liquidity.disclaimer }}</p>
+  {% else %}
+    <div class="gap">
+      <span class="badge">Недостатньо даних</span>
+      <p>Зафіксованих зникнень оголошень поки
+         <span class="num">{{ liquidity.events }}</span> — потрібно щонайменше
+         <span class="num">{{ liquidity.needed }}</span>. Крива по такій кількості
+         подій була б плоскою лінією без змісту.</p>
+      <p>Перевірка живості проходить базу приблизно за 10 днів, тож перші
+         придатні криві з'являться, коли накопичаться зникнення — орієнтовно за
+         2–3 місяці спостережень. Зараз під наглядом
+         <span class="num">{{ liquidity.n }}</span> {{ liquidity.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}.</p>
+      <p class="legend" style="margin:0">{{ liquidity.disclaimer }}</p>
+    </div>
+  {% endif %}
+</section>
+
+<section class="sect">
+  <h2>Прогноз ціни</h2>
+  <p class="cap">
+    Горизонт прогнозу не задається бажанням — він рахується з глибини історії.
+    Стеля: не довше за третину періоду, який ми справді спостерігали.
+  </p>
+  {% if forecast.readiness.ready %}
+    <p>{{ forecast.message }}</p>
+  {% else %}
+    <div class="gap">
+      <span class="badge">Недостатньо даних</span>
+      <p>{{ forecast.message }}</p>
+      <p>Дата публікації оголошення тут не годиться за вісь часу: у базі є
+         оголошення 2022 року, але ми бачимо лише ті старі, що досі висять —
+         тобто саме непродані. Тренд по них був би трендом відбору, а не ринку.</p>
+      <ul class="roadmap">
+        {% for row in forecast.schedule %}
+          <li>
+            <span class="mark">{{ '✓' if row.reached }}</span>
+            <span class="when">{{ row.date.strftime('%d.%m.%Y') }}</span>
+            <span>{{ row.history_months }} міс. історії → горизонт
+              <b>{{ row.horizon_months }} міс.</b> — {{ row.note }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+      <p class="legend" style="margin:12px 0 0">
+        Прогноз на 36 місяців не з'явиться і після цих дат: екстраполяція на
+        довше за третину спостереженої історії перестає бути прогнозом.
+        Сезонність не заявляється, доки не набереться {{ forecast.seasonality_years }}
+        повні річні цикли.
+      </p>
+    </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('form.filters select[data-auto]').forEach(function (el) {
+  el.addEventListener('change', function () { el.form.requestSubmit(); });
+});
+</script>
+{% endblock %}

@@ -55,6 +55,9 @@
             {% if r.district and r.district != r.location %}
               <span class="sub">{{ r.district }}</span>
             {% endif %}
+            {% if r.property_id %}
+              <a class="sub analyse" href="/property/{{ r.property_id }}">аналіз об'єкта →</a>
+            {% endif %}
             {% if r.quality_status and r.quality_status != 'ok' %}
               <span class="qflag {{ r.quality_status }}">{{ r.quality_reason or r.quality_status }}</span>
             {% endif %}

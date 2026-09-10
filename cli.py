@@ -196,6 +196,36 @@ def cmd_analytics(args: argparse.Namespace) -> int:
         data = inventory.run()
         print(json.dumps(data, indent=2, ensure_ascii=False, default=str)
               if args.json else report.render(data))
+        return 0
+
+    if args.action == "forecast":
+        from realty.analytics import forecast
+        from realty.db import SessionLocal
+
+        with SessionLocal() as s:
+            state = forecast.state(s)
+        print(state["message"])
+        print("\nКоли який горизонт стане доступним:")
+        for row in state["schedule"]:
+            mark = "✓" if row["reached"] else " "
+            print(f"  {mark} {row['date']:%d.%m.%Y}  {row['history_months']:>2} міс. "
+                  f"історії → горизонт {row['horizon_months']} міс. ({row['note']})")
+        return 0
+
+    if args.action == "segments":
+        from realty.analytics import cache
+        from realty.db import SessionLocal
+
+        with SessionLocal() as s:
+            snapshot = cache.get(s, force=True)
+        print(f"{'сегмент':<44}{'n':>6}{'медіана':>10}{'IQR':>16}")
+        for r in snapshot.segments:
+            name = f"{r['rooms_label']}, {r['condition_label']}, {r['market_label']}"
+            print(f"  {name:<42}{r['n']:>6}{r['median_ppsqm']:>10}"
+                  f"{f'{r["q1"]}–{r["q3"]}':>16}")
+        print(f"\nПоза статистикою: {snapshot.below['segments']} сегментів "
+              f"на {snapshot.below['objects']} об'єктів "
+              f"(поріг {snapshot.below['threshold']}).")
     return 0
 
 
@@ -282,8 +312,10 @@ def main() -> int:
     sv.set_defaults(func=cmd_serve)
 
     an = sub.add_parser("analytics", help="аналітика по зібраній базі")
-    an.add_argument("action", choices=["inventory"],
-                    help="inventory — що взагалі можна побудувати чесно")
+    an.add_argument("action", choices=["inventory", "segments", "forecast"],
+                    help="inventory — що взагалі можна побудувати чесно; "
+                         "segments — медіани по сегментах; "
+                         "forecast — межі прогнозу й коли вони зсунуться")
     an.add_argument("--json", action="store_true", help="сирі числа замість таблиці")
     an.set_defaults(func=cmd_analytics)
 

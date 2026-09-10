@@ -27,21 +27,29 @@
     var btn = ev.target.closest('button.take');
     if (!btn) return;
     var next = btn.dataset.taken !== '1';
+    // На сторінці об'єкта кнопка одна й діє на всі склеєні оголошення,
+    // у списку — на конкретне оголошення в рядку.
+    var url = btn.dataset.property
+      ? '/api/properties/' + btn.dataset.property + '/processing'
+      : '/api/listings/' + btn.dataset.id + '/processing';
     btn.disabled = true;
-    fetch('/api/listings/' + btn.dataset.id + '/processing', {
+    fetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({in_progress: next}),
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (!d.ok) throw new Error(d.error || 'не вдалося');
-      if (document.body.dataset.page === 'processing' && !d.in_progress) {
-        btn.closest('tr').remove();     // на сторінці обробки об'єкту вже не місце
+      var row = btn.closest('tr');
+      if (document.body.dataset.page === 'processing' && !d.in_progress && row) {
+        row.remove();                   // на сторінці обробки об'єкту вже не місце
         return;
       }
       btn.dataset.taken = d.in_progress ? '1' : '0';
       btn.classList.toggle('on', d.in_progress);
-      btn.textContent = d.in_progress ? 'В обробці' : 'Взяти';
-      btn.closest('tr').classList.toggle('taken', d.in_progress);
+      btn.textContent = btn.dataset.property
+        ? (d.in_progress ? 'В обробці — прибрати' : 'Взяти в обробку')
+        : (d.in_progress ? 'В обробці' : 'Взяти');
+      if (row) row.classList.toggle('taken', d.in_progress);
     }).catch(function (e) {
       btn.textContent = 'помилка';
       console.error(e);

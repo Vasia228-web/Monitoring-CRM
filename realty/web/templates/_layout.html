@@ -209,6 +209,7 @@ button.take:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 tr.taken td{background:var(--accent-soft)}
 .empty a{color:var(--accent)}
 </style>
+{% block head %}{% endblock %}
 </head>
 <body data-page="{{ page }}">
 <div class="wrap">
@@ -219,6 +220,7 @@ tr.taken td{background:var(--accent-soft)}
     <span class="nav">
       <a href="/" class="{{ 'on' if page == 'list' }}">Моніторинг</a>
       <a href="/processing" class="{{ 'on' if page == 'processing' }}">В обробці<span class="count">{{ in_work or 0 }}</span></a>
+      <a href="/analytics" class="{{ 'on' if page == 'analytics' }}">Аналітика</a>
     </span>
     <span class="spacer"></span>
     <span class="nav"><a href="/status" class="{{ 'on' if page == 'status' }}">Стан системи</a></span>
