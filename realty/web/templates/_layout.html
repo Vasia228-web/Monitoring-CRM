@@ -87,8 +87,13 @@ select:focus,input:focus{outline:none;border-color:var(--accent);
 button.apply{font:inherit;font-size:14px;padding:8px 16px;border-radius:8px;cursor:pointer;
   border:1px solid var(--accent);background:var(--accent);color:#fff}
 button.apply.hidden{display:none}
-.reset{font-size:13px;color:var(--muted);text-decoration:none;padding-bottom:9px;margin-left:auto}
-.reset:hover{color:var(--accent)}
+.reset{font-size:13px;color:var(--ink-2);text-decoration:none;padding:8px 14px;
+  border:1px solid var(--line);border-radius:8px;background:var(--card);
+  margin-left:auto;white-space:nowrap}
+.reset:hover{color:var(--accent);border-color:var(--accent)}
+/* Кнопка лишається на місці завжди — інакше вона стрибає, щойно з'явиться
+   перший фільтр. Коли скидати нічого, вона просто приглушена. */
+.reset.off{opacity:.4;pointer-events:none}
 
 /* ---------- таблиця ---------- */
 .tablewrap{overflow-x:auto;margin-top:22px}
@@ -221,9 +226,11 @@ tr.taken td{background:var(--accent-soft)}
   <nav class="topbar">
     <span class="brand">Нерухомість Івано-Франківська</span>
     <span class="nav">
-      <a href="/" class="{{ 'on' if page == 'list' }}">Моніторинг</a>
-      <a href="/processing" class="{{ 'on' if page == 'processing' }}">В обробці<span class="count">{{ in_work or 0 }}</span></a>
-      <a href="/analytics" class="{{ 'on' if page == 'analytics' }}">Аналітика</a>
+      {# Посилання несуть поточні фільтри — інакше перехід між вкладками
+         стирав би все, що людина щойно вибрала. #}
+      <a href="{{ carry('/', f) }}" class="{{ 'on' if page == 'list' }}">Моніторинг</a>
+      <a href="{{ carry('/processing', f) }}" class="{{ 'on' if page == 'processing' }}">В обробці<span class="count">{{ in_work or 0 }}</span></a>
+      <a href="{{ carry('/analytics', f) }}" class="{{ 'on' if page == 'analytics' }}">Аналітика</a>
     </span>
     <span class="spacer"></span>
     <span class="nav"><a href="/status" class="{{ 'on' if page == 'status' }}">Стан системи</a></span>

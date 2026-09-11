@@ -74,7 +74,7 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
 
     covered = sum(r["n"] for r in segments)
     return templates.TemplateResponse(request, "analytics.html", {
-        "page": "analytics", "in_work": in_work,
+        "page": "analytics", "in_work": in_work, "path": "/analytics",
         "segments": segments, "pairs": pairs, "days": days,
         "sources": snapshot.sources_matched,
         "composition": snapshot.sources_composition,
@@ -106,7 +106,8 @@ def property_page(request: Request, property_id: int):
         if data is None:
             return templates.TemplateResponse(
                 request, "property_missing.html",
-                {"page": "list", "in_work": in_work, "property_id": property_id},
+                {"page": "list", "in_work": in_work, "property_id": property_id,
+                 "path": "/", "f": {}},
                 status_code=404)
         # Оголошення потрібні шаблону для кнопки «взяти в обробку».
         data["rows"] = s.scalars(select(Listing)
@@ -116,6 +117,7 @@ def property_page(request: Request, property_id: int):
         # інакше статус, поставлений зі списку, не було б видно на цій сторінці.
         data["in_progress"] = any(r.in_progress for r in data["rows"])
     data.update({"page": "list", "in_work": in_work, "forecast": forecast_state,
+                 "path": "/", "f": {},
                  "cfg": cfg, "rooms_label": rooms_label(data["item"].band),
                  "condition_label": COND_LABEL[data["item"].condition],
                  "market_label": MARKET_LABEL[data["item"].market]})

@@ -63,6 +63,12 @@ def _plural(count, one: str, few: str, many: str) -> str:
     return many
 
 
+from .navstate import carry, reset_url  # noqa: E402
+
+# Доступні в кожному шаблоні: навігація має нести стан, а не скидати його.
+templates.env.globals["carry"] = carry
+templates.env.globals["reset_url"] = reset_url
+
 templates.env.filters["relative_date"] = _relative_date
 templates.env.filters["money"] = _money
 templates.env.filters["plural"] = _plural
@@ -168,7 +174,8 @@ def _stats(session) -> dict:
 
 def _render_list(request: Request, template: str, *, in_progress: bool | None,
                  condition: str, market: str, source: str, rooms: str,
-                 price_min: str | None, price_max: str | None, sort: str, limit: int):
+                 price_min: str | None, price_max: str | None, sort: str, limit: int,
+                 path: str = "/"):
     """Спільна збірка будь-якої сторінки зі списком оголошень."""
     lo, hi = _num(price_min), _num(price_max)
     warning = None
@@ -192,7 +199,11 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         "rows": rows, "stats": stats, "sources": sorted(stats["by_source"]),
         "matched": matched, "limit": limit, "warning": warning,
         "in_work": in_work,
-        "active_filters": any((condition, market, source, rooms, price_min, price_max)),
+        # Сортування теж є станом: без нього кнопка скидання зникала саме тоді,
+        # коли вибірка вже не була типовою.
+        "active_filters": any((condition, market, source, rooms, price_min,
+                               price_max, sort != DEFAULT_SORT)),
+        "path": path,
         "f": {"condition": condition, "market": market, "source": source,
               "rooms": rooms, "price_min": price_min or "", "price_max": price_max or "",
               "sort": sort},
@@ -211,7 +222,7 @@ def index(
     sort: str = Query(DEFAULT_SORT),
     limit: int = Query(500, le=MAX_ROWS),
 ):
-    return _render_list(request, "index.html", in_progress=None,
+    return _render_list(request, "index.html", in_progress=None, path="/",
                         condition=condition, market=market, source=source, rooms=rooms,
                         price_min=price_min, price_max=price_max, sort=sort, limit=limit)
 
@@ -229,7 +240,7 @@ def processing(
     limit: int = Query(500, le=MAX_ROWS),
 ):
     """Тільки об'єкти, взяті в обробку — той самий набір даних і сортування."""
-    return _render_list(request, "processing.html", in_progress=True,
+    return _render_list(request, "processing.html", in_progress=True, path="/processing",
                         condition=condition, market=market, source=source, rooms=rooms,
                         price_min=price_min, price_max=price_max, sort=sort, limit=limit)
 

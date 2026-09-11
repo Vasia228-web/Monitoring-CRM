@@ -162,11 +162,20 @@ def test_filters_and_sort_live_in_the_url(client):
 
 
 def test_navigation_is_on_every_page(client):
-    """Кнопки переходу — у спільному layout, а не продубльовані вручну."""
+    """Кнопки переходу — у спільному layout, а не продубльовані вручну.
+
+    Перевіряємо наявність самих вкладок, а не точний вигляд адреси: посилання
+    несуть із собою поточні фільтри, і вимога голого `href="/"` саме й
+    закріплювала ту поведінку, через яку стан губився при переході.
+    """
+    import re
+
     for url in ("/", "/processing", "/status"):
         page = client.get(url).text
-        assert 'href="/status"' in page, url
-        assert 'href="/"' in page and 'href="/processing"' in page, url
+        tabs = dict(re.findall(
+            r'<a href="(/[^"?]*)[^"]*"[^>]*>(Моніторинг|В обробці|Аналітика|Стан системи)',
+            page))
+        assert set(tabs) >= {"/", "/processing", "/analytics", "/status"}, url
 
 
 def test_pages_are_closed_from_search_engines(client):

@@ -53,5 +53,9 @@
 
     <input type="hidden" name="sort" value="{{ f.sort }}">
     <button class="apply" type="submit">Застосувати</button>
-    {% if active_filters %}<a class="reset" href="/">Скинути</a>{% endif %}
+    {# Скидання лишає людину на тій самій сторінці: раніше кнопка вела на «/»
+       звідки б її не натиснули, тож зі сторінки «В обробці» вона працювала
+       як «піти звідси». #}
+    <a class="reset {{ '' if active_filters else 'off' }}"
+       href="{{ reset_url(path) }}">Скинути фільтри</a>
   </form>
