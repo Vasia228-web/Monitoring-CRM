@@ -49,10 +49,17 @@ def revalidate(limit: int | None = None, thresholds=None) -> dict:
         rows = s.scalars(stmt).all()
 
         for row in rows:
+            # Набір полів має збігатися з тим, що читає `validate`. Раніше
+            # сюди не потрапляли ні стан, ні тип ринку, ні текст оголошення —
+            # тож перевірки класифікації не спрацьовували б навіть після того,
+            # як їх додали.
             rec = {
                 "price": row.price, "rooms": row.rooms, "location": row.location,
                 "original_url": row.original_url, "price_usd": row.price_usd,
                 "price_per_sqm": row.price_per_sqm, "area_total": row.area_total,
+                "condition": row.condition, "market_type": row.market_type,
+                "title": row.title, "description": row.description,
+                "built_year": row.built_year,
             }
             verdict, reasons = validate(rec, t)
             row.quality_status = verdict if verdict != "ok" else "ok"

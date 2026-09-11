@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from realty.models import Condition, MarketType
 from realty.normalize import (
+    is_assignment,
     classify_condition, classify_market, compute_price_per_sqm, in_ivano_frankivsk,
     parse_area, parse_date, parse_price, parse_rooms,
 )
@@ -103,9 +104,12 @@ def test_unbuilt_primary_counts_as_needs_repair():
     assert classify_condition(txt, market=MarketType.PRIMARY) is Condition.NEEDS_REPAIR
     # Без підказки про ринок правило не спрацьовує — здогад має бути обґрунтованим.
     assert classify_condition(txt) is Condition.UNKNOWN
-    # Явна згадка ремонту перемагає правило.
+    # Раніше тут поверталось «з ремонтом»: мовляв, явна згадка перемагає
+    # правило. Але ремонт у квартирі, якої ще немає, — це обіцянка забудовника,
+    # а не факт; саме такі оголошення й потрапляли у фільтр «з ремонтом», після
+    # чого покупець відкривав недобудову. Чесна відповідь — «не визначено».
     assert classify_condition(txt + " Квартира з дизайнерським ремонтом.",
-                              market=MarketType.PRIMARY) is Condition.RENOVATED
+                              market=MarketType.PRIMARY) is Condition.UNKNOWN
 
 
 def test_building_series_imply_secondary_market():
@@ -115,3 +119,61 @@ def test_building_series_imply_secondary_market():
     assert classify_market("гостинка в центрі") is MarketType.SECONDARY
     # Новобудова не має випадково потрапити у вторинку.
     assert classify_market("Житловий фонд 2021-2025, від забудовника") is MarketType.PRIMARY
+
+
+# --- ремонт, якого ще немає ---------------------------------------------------
+
+def test_future_tense_repair_is_not_a_repair():
+    """«Дозволяє зробити ремонт» — це запрошення, а не стан квартири.
+
+    Саме на цій фразі шаблон «сучасн\\w+ ремонт» спрацьовував і ставив
+    «з ремонтом» оголошенню про голі стіни.
+    """
+    for text in (
+        "Площа дозволяє зробити сучасний ремонт під себе",
+        "Зроблю ремонт під покупця",
+        "Можливий ремонт за домовленістю",
+        "Потрібно зробити капітальний ремонт",
+        "Ремонт під себе",
+        "Ремонт на ваш смак",
+    ):
+        assert classify_condition(text) is Condition.UNKNOWN, text
+
+
+def test_past_tense_repair_still_counts():
+    """Різниця між «зробити» і «зроблено» — один склад, і вона вирішальна."""
+    for text in ("Зроблено дизайнерський ремонт",
+                 "Зроблений капітальний ремонт",
+                 "Квартира після ремонту"):
+        assert classify_condition(text) is Condition.RENOVATED, text
+
+
+def test_assignment_cancels_a_declared_repair():
+    """Переуступка — продаж права за договором; квартири фізично немає.
+
+    Продавець ставить у картці «Ремонт: Євроремонт», маючи на увазі, якою її
+    здадуть. Покупець читає це як опис того, що побачить. Кажемо «не
+    визначено» — стверджувати «без ремонту» ми теж не маємо підстав.
+    """
+    text = "Вид об'єкта: Новобудова | Тип угоди: Переуступка | Ремонт: Євроремонт"
+    assert classify_condition(text, declared=Condition.RENOVATED) is Condition.UNKNOWN
+    assert is_assignment(text)
+    assert not is_assignment("Вид об'єкта: Новобудова | Ремонт: Євроремонт")
+
+
+def test_declared_field_wins_when_the_flat_exists():
+    """Поле, заповнене продавцем, — найкращий сигнал для готової квартири."""
+    text = "Вид об'єкта: Новобудова | Ремонт: Авторський проект | Поверх: 14"
+    assert classify_condition(text, declared=Condition.RENOVATED) is Condition.RENOVATED
+
+
+def test_explicit_denial_beats_the_declared_field():
+    """Якщо в описі сказано «без ремонту», поле в картці не рятує."""
+    text = "Ремонт: Євроремонт. Квартира продається без ремонту, сирець."
+    assert classify_condition(text, declared=Condition.RENOVATED) is Condition.NEEDS_REPAIR
+
+
+def test_unbuilt_without_any_repair_claim_is_still_needs_repair():
+    """Правило про сирець у новобудові лишилось там, де воно обґрунтоване."""
+    txt = "Продається квартира від забудовника. Здача ЖК заявлена в 1 кварталі 2028 року."
+    assert classify_condition(txt, market=MarketType.PRIMARY) is Condition.NEEDS_REPAIR

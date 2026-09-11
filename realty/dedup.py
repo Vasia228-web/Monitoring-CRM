@@ -122,6 +122,14 @@ def shape_of(r: Listing) -> Shape:
 MERGE_THRESHOLD = 6
 AREA_TOLERANCE = 0.6
 PRICE_REJECT = 0.40
+# Один агент пише «2-кімнатна з кухнею-студією», другий рахує ту саму квартиру
+# як трикімнатну. Різниця рівно в одну кімнату при однаковій площі, поверсі й
+# будинку — це майже завжди різниця в підрахунку, а не різні квартири. Більша
+# різниця — таки різні квартири, і вона лишається жорсткою забороною.
+ROOMS_TOLERANCE = 1
+# Коли кімнатність розходиться, решта доказів має бути бездоганною: та сама
+# площа з точністю до округлення, той самий поверх, той самий будинок.
+ROOMS_MISMATCH_AREA = 0.35
 # Наскільки мають перетинатись набори слів адреси, щоб вважати її тією самою.
 STREET_OVERLAP = 0.65
 
@@ -142,8 +150,21 @@ def street_overlap(a: str | None, b: str | None) -> float:
 
 def match_score(a: Shape, b: Shape) -> int:
     """Скільки доказів за те, що це одна квартира. Від'ємні — проти."""
+    rooms_differ = False
     if a.rooms != b.rooms:
-        return -99
+        if a.rooms is None or b.rooms is None:
+            return -99
+        if abs(a.rooms - b.rooms) > ROOMS_TOLERANCE:
+            return -99
+        # Різниця в одну кімнату допускається, але дорого: площа має збігтися
+        # майже точно, а поверх і будинок — обов'язково (нижче вони й так
+        # перевіряються). Інакше сусідні планування в одному будинку почали б
+        # зливатися.
+        if abs((a.area or 0) - (b.area or 0)) > ROOMS_MISMATCH_AREA:
+            return -99
+        if a.floor is None or b.floor is None:
+            return -99
+        rooms_differ = True
     # Забудовники виставляють десятки схожих квартир в одному будинку, тому
     # допуск має покривати лише різне округлення між сайтами (74.2 і 74.0),
     # а не сусідні планування (42 і 43).
@@ -175,6 +196,22 @@ def match_score(a: Shape, b: Shape) -> int:
         score += 1
 
     score += 2 if abs(a.area - b.area) <= 0.3 else 1
+
+    if rooms_differ:
+        # Різниця в кімнатах допускається лише за додаткового доказу: або той
+        # самий будинок, або та сама ціна. Одного збігу площі з поверхом
+        # замало — у будинку забудовника таких квартир десятки.
+        same_building = bool(a.house and b.house and (a.house & b.house))
+        same_price = bool(a.price and b.price and
+                          abs(a.price - b.price) / max(a.price, b.price) <= 0.03)
+        if not (same_building or same_price):
+            return -99
+        # Штраф підібраний по реальній парі: LUN без адреси й DOMRIA з
+        # адресою, у яких збігаються площа, поверх і ціна до долара, набирають
+        # рівно поріг — і жодного бала понад. Пара з самими лише площею й
+        # поверхом, без ціни чи будинку, до порога не дотягує (і відсікається
+        # ще раніше перевіркою вище).
+        score -= 2
 
     if a.price and b.price:
         diff = abs(a.price - b.price) / max(a.price, b.price)
@@ -260,12 +297,33 @@ def cluster(shapes: list[Shape]) -> list[list[int]]:
             for delta in (-1, 0, 1):
                 buckets[(sh.rooms, base + delta)].append(sh)
 
+    def nearby(rooms: int | None, area_base: int) -> list:
+        """Кандидати з сусідніх кошиків по площі Й по кімнатності.
+
+        Кімнатність входить у ключ кошика заради швидкості, але через це пара
+        «2 кімнати» × «3 кімнати» ніколи навіть не порівнювалась — хоч би як
+        збігалися площа, поверх і ціна. Допуск у кімнатах без цього кроку не
+        працює взагалі: він зашитий у `match_score`, до якого справа не
+        доходила.
+        """
+        out = []
+        for dr in range(-ROOMS_TOLERANCE, ROOMS_TOLERANCE + 1):
+            key_rooms = None if rooms is None else rooms + dr
+            if key_rooms is not None and key_rooms < 1:
+                continue
+            for da in (-1, 0, 1):
+                out.extend(buckets.get((key_rooms, area_base + da), ()))
+        return out
+
     # --- фаза 1: якорі з оголошень, де адреса відома -------------------------
     seen: set[tuple[int, int]] = set()
-    for group in buckets.values():
+    for (rooms, area_base), group in list(buckets.items()):
         anchored = [sh for sh in group if sh.street]
-        for i, a in enumerate(anchored):
-            for b in anchored[i + 1:]:
+        pool = [sh for sh in nearby(rooms, area_base) if sh.street]
+        for a in anchored:
+            for b in pool:
+                if a.id == b.id:
+                    continue
                 pair = (min(a.id, b.id), max(a.id, b.id))
                 if pair in seen:
                     continue
@@ -280,7 +338,7 @@ def cluster(shapes: list[Shape]) -> list[list[int]]:
     for sh in homeless:
         best_root, best_score = None, MERGE_THRESHOLD - 1
         base = int(round(sh.area))
-        candidates = {c.id for d in (-1, 0, 1) for c in buckets[(sh.rooms, base + d)]}
+        candidates = {c.id for c in nearby(sh.rooms, base)}
         for cid in candidates:
             if cid == sh.id or cid not in anchors:
                 continue

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import statistics
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from sqlalchemy import select
 
 from ..config import DATA_DIR
 from ..models import Listing, effective_active
+from ..normalize import _FUTURE_REPAIR, _HAS_REPAIR, _NO_REPAIR, _UNBUILT, is_assignment
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +56,18 @@ class Band:
         return None
 
 
+# Наскільки ціна за м² може бути нижчою за медіану СВОГО сегмента, перш ніж
+# запис піде на перевірку. Глобальний поріг цього класу помилок не бачить:
+# нижня межа по всій базі — близько $400/м², бо туди входить і сирець, і
+# дешева вторинка. Квартира «з ремонтом у новобудові» за $717/м² при медіані
+# сегмента $1 948 у цю смугу вписується вільно, хоча вона втричі дешевша за
+# схожі. А сортування за зростанням ціни виносить саме такі записи на першу
+# сторінку — тобто туди, куди дивляться першим ділом.
+SEGMENT_LOW_RATIO = 0.55
+# Сегмент менший за це число не дає надійної медіани — не робимо висновків.
+SEGMENT_MIN_SAMPLE = 30
+
+
 @dataclass
 class Thresholds:
     price_usd: Band
@@ -61,6 +75,25 @@ class Thresholds:
     area_total: Band
     computed_at: str = ""
     sample_size: int = 0
+    # Медіана ціни за м² по кожному сегменту «кімнатність|стан|ринок».
+    # Ключ — рядок, щоб пороги лишались звичайним JSON-файлом, який можна
+    # відкрити й прочитати очима.
+    segment_median_sqm: dict = field(default_factory=dict)
+
+    def segment_key(self, rec: dict) -> str:
+        rooms = rec.get("rooms")
+        band = "?" if rooms is None else str(min(int(rooms), 4))
+        cond = rec.get("condition")
+        market = rec.get("market_type")
+        return f"{band}|{getattr(cond, 'value', cond) or '?'}|" \
+               f"{getattr(market, 'value', market) or '?'}"
+
+    def segment_floor(self, rec: dict) -> float | None:
+        """Нижня межа ціни за м² для сегмента цього запису."""
+        entry = self.segment_median_sqm.get(self.segment_key(rec))
+        if not entry or entry.get("n", 0) < SEGMENT_MIN_SAMPLE:
+            return None
+        return entry["median"] * SEGMENT_LOW_RATIO
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -74,6 +107,7 @@ class Thresholds:
             area_total=Band(**d["area_total"]),
             computed_at=d.get("computed_at", ""),
             sample_size=d.get("sample_size", 0),
+            segment_median_sqm=d.get("segment_median_sqm") or {},
         )
 
 
@@ -105,7 +139,24 @@ def compute_thresholds(session) -> Thresholds:
         price_usd=_band(price), price_per_sqm=_band(sqm), area_total=_band(area),
         computed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         sample_size=len(price),
+        segment_median_sqm=_segment_medians(session, base),
     )
+
+
+def _segment_medians(session, base) -> dict:
+    """Медіана ціни за м² по кожному сегменту «кімнатність|стан|ринок»."""
+    rows = session.execute(
+        select(Listing.rooms, Listing.condition, Listing.market_type,
+               Listing.price_per_sqm)
+        .where(Listing.price_per_sqm.isnot(None), Listing.quality_status == "ok",
+               *base)).all()
+    buckets: dict[str, list[float]] = {}
+    for rooms, cond, market, value in rows:
+        band = "?" if rooms is None else str(min(int(rooms), 4))
+        key = f"{band}|{cond.value}|{market.value}"
+        buckets.setdefault(key, []).append(value)
+    return {k: {"median": round(statistics.median(v), 2), "n": len(v)}
+            for k, v in buckets.items()}
 
 
 def save_thresholds(t: Thresholds) -> None:
@@ -160,6 +211,28 @@ def validate(rec: dict, t: Thresholds, previous_price_usd: float | None = None) 
     if rooms is not None and not (1 <= rooms <= 9):
         return "rejected", reasons + [f"кімнат {rooms} — поза розумними межами"]
 
+    # Ціна, підозріло низька для СВОГО сегмента. Помилки в ціні майже завжди
+    # зміщені вниз — пропущений розряд, ціна «від», ціна за метр замість
+    # загальної, не та валюта, — тому сортування за зростанням систематично
+    # витягує биті записи нагору. Глобальна смуга їх не ловить.
+    floor = t.segment_floor(rec)
+    value = rec.get("price_per_sqm")
+    if floor and value and value < floor:
+        if verdict != "rejected":
+            verdict = "review"
+        reasons.append(
+            f"ціна за м² ${value:,.0f} — нижче за {SEGMENT_LOW_RATIO:.0%} медіани "
+            f"свого сегмента (${floor / SEGMENT_LOW_RATIO:,.0f})")
+
+    # Класифікацію карантин досі не перевіряв узагалі — ні стан, ні тип ринку.
+    # Через це помилка в цих полях проходила без жодного сліду, хоч саме вона
+    # найпомітніша: людина ставить фільтр «з ремонтом» і відкриває сирець.
+    conflict = _classification_conflict(rec)
+    if conflict:
+        if verdict != "rejected":
+            verdict = "review"
+        reasons.append(conflict)
+
     # Різкий стрибок ціни не перезаписує історію мовчки.
     new_price = rec.get("price_usd")
     if previous_price_usd and new_price and previous_price_usd > 0:
@@ -170,6 +243,34 @@ def validate(rec: dict, t: Thresholds, previous_price_usd: float | None = None) 
             reasons.append(f"ціна змінилась на {delta * 100:+.0f}% "
                            f"(${previous_price_usd:,.0f} -> ${new_price:,.0f})")
     return verdict, reasons
+
+
+def _classification_conflict(rec: dict) -> str | None:
+    """Чи не суперечить проставлений стан тому, що написано в оголошенні."""
+    condition = getattr(rec.get("condition"), "value", rec.get("condition"))
+    text = " ".join(str(rec.get(f) or "") for f in ("title", "description"))
+
+    # Рік введення в експлуатацію в майбутньому — найнадійніша ознака того, що
+    # квартири ще немає. Вона не залежить від формулювань в описі, тому
+    # перевіряється до тексту.
+    year = rec.get("built_year")
+    if condition == "renovated" and year and year > datetime.now().year:
+        return (f"позначено «з ремонтом», але будинок вводять в експлуатацію "
+                f"аж {year} року")
+
+    if not text.strip():
+        return None
+    if condition == "renovated":
+        if is_assignment(text):
+            return "позначено «з ремонтом», але це переуступка — квартири ще немає"
+        if _UNBUILT.search(text):
+            return "позначено «з ремонтом», але будинок ще не зданий"
+        if _NO_REPAIR.search(text):
+            return "позначено «з ремонтом», а в описі сказано протилежне"
+    if condition == "needs_repair" and _HAS_REPAIR.search(text) \
+            and not _NO_REPAIR.search(text) and not _FUTURE_REPAIR.search(text):
+        return "позначено «без ремонту», а в описі йдеться про готовий ремонт"
+    return None
 
 
 def validate_llm_output(parsed) -> tuple[bool, list[str]]:

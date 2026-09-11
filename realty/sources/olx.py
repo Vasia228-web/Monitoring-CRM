@@ -28,6 +28,12 @@ LIST_URL = BASE + "/uk/nedvizhimost/kvartiry/prodazha-kvartir/ivano-frankovsk/"
 # Типова видача OLX перемішана: угорі просувані оголошення. Для щоденного
 # прогону це не годиться, тому явно просимо сортування за датою.
 RECENT_FIRST = "search%5Border%5D=created_at%3Adesc"
+# Без цього картки у видачі показують гривневий еквівалент, перерахований
+# самим OLX, а не ціну, яку виставив продавець. Ми брали гривні й конвертували
+# назад своїм курсом — подвійний перерахунок через два різні курси. Заміряно:
+# з цим параметром картка віддає ту саму суму, що й сторінка оголошення, тож
+# конвертація зникає взагалі. Ціна оголошення на сайті від цього не міняється.
+IN_USD = "currency=USD"
 CARD_SEL = '[data-cy="l-card"]'
 # Площа стоїть окремим параметром картки у вузлі, текст якого — рівно «85 м²».
 # Прив'язуємось до форми тексту, а не до згенерованого класу (css-13vv2xi).
@@ -96,6 +102,15 @@ def parse_detail(html: str) -> dict:
         if (v := params.get(key)) and v.isdigit():
             out[field] = int(v)
 
+    # «Рік введення в експлуатацію» — найнадійніша ознака того, що будинку ще
+    # немає. OLX друкує його з пробілом («2 027»), тож цифри збираємо окремо.
+    # Кладемо в наявне поле `built_year`: рік у майбутньому означає, що
+    # квартиру ще не збудовано, і заявлений у картці ремонт — це обіцянка.
+    if raw_year := params.get("рік введення в експлуатацію"):
+        digits = re.sub(r"\D", "", raw_year)
+        if len(digits) == 4 and 1900 <= int(digits) <= 2100:
+            out["built_year"] = int(digits)
+
     if price_txt := text_of("price"):
         price, currency = parse_price(price_txt)
         if price:
@@ -115,12 +130,16 @@ def parse_detail(html: str) -> dict:
         if market is not MarketType.UNKNOWN:
             out["market_type"] = market
 
-    condition = _REPAIR_BY_PARAM.get((params.get("ремонт") or "").lower())
-    if condition is None:
-        condition = classify_condition(
-            description, text_of("title"), " ".join(params.values()),
-            market=out.get("market_type"),
-        )
+    # Поле «Ремонт» у картці заповнює сам продавець — це найкращий сигнал,
+    # який у нас є. Але передаємо його як `declared`, а не як готову
+    # відповідь: якщо в тій самій картці стоїть «Тип угоди: Переуступка» або
+    # будинок ще будується, квартири фізично немає, і заявлений євроремонт
+    # описує обіцянку забудовника, а не те, що побачить покупець.
+    condition = classify_condition(
+        description, text_of("title"), " ".join(params.values()),
+        market=out.get("market_type"),
+        declared=_REPAIR_BY_PARAM.get((params.get("ремонт") or "").lower()),
+    )
     if condition is not Condition.UNKNOWN:
         out["condition"] = condition
 
@@ -171,7 +190,7 @@ class OlxSource(BaseSource):
             self.end_page()
 
     def _page_url(self, page: int) -> str:
-        params = [RECENT_FIRST] + ([f"page={page}"] if page > 1 else [])
+        params = [RECENT_FIRST, IN_USD] + ([f"page={page}"] if page > 1 else [])
         return f"{LIST_URL}?{'&'.join(params)}"
 
     @staticmethod

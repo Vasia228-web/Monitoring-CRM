@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
-from realty.models import Base, Listing
+from realty.models import Base, Condition, Listing, MarketType
 from realty.quality.rules import (
     ESCALATION_MIN_BATCH, ESCALATION_RATE, PRICE_JUMP_LIMIT, Band, Thresholds,
     compute_thresholds, validate, validate_llm_output,
@@ -173,3 +173,139 @@ def test_confidence_separates_strong_and_weak_matches():
     weak = confidence(sh(1), sh(3, house=frozenset(), street=None, floor=None))
     assert strong > weak
     assert 0.0 <= weak < strong <= 1.0
+
+
+# --- сегментний поріг ціни ----------------------------------------------------
+
+def _segmented() -> Thresholds:
+    t = _thresholds()
+    t.segment_median_sqm = {
+        "1|renovated|primary": {"median": 1948.0, "n": 2114},
+        "2|renovated|primary": {"median": 1835.0, "n": 1350},
+        "3|unknown|unknown": {"median": 1000.0, "n": 5},        # замала вибірка
+    }
+    return t
+
+
+def test_price_far_below_its_own_segment_goes_to_review():
+    """Глобальна смуга такого не бачить — вона розтягнута під увесь ринок.
+
+    Нижня межа по всій базі близько $400/м², бо туди входить і сирець. Квартира
+    «з ремонтом у новобудові» за $717/м² при медіані сегмента $1 948 у цю смугу
+    вписується вільно, хоч вона втричі дешевша за схожі.
+    """
+    rec = _rec(rooms=1, condition=Condition.RENOVATED, market_type=MarketType.PRIMARY,
+               price_per_sqm=717.0, area_total=39.7, price_usd=28_476.0)
+    verdict, reasons = validate(rec, _segmented())
+    assert verdict == "review"
+    assert any("свого сегмента" in r for r in reasons)
+
+
+def test_normal_price_for_the_segment_passes():
+    rec = _rec(rooms=1, condition=Condition.RENOVATED, market_type=MarketType.PRIMARY,
+               price_per_sqm=2015.0, area_total=39.7, price_usd=80_000.0)
+    assert validate(rec, _segmented())[0] == "ok"
+
+
+def test_segment_with_too_few_objects_gives_no_verdict():
+    """Медіана по п'яти об'єктах нічого не описує — не робимо з неї порогу."""
+    rec = _rec(rooms=3, condition=Condition.UNKNOWN, market_type=MarketType.UNKNOWN,
+               price_per_sqm=100.0, area_total=60.0, price_usd=6_000.0)
+    t = _segmented()
+    assert t.segment_floor(rec) is None
+
+
+def test_unknown_segment_is_not_a_reason_to_flag():
+    rec = _rec(rooms=9, condition=Condition.UNKNOWN, market_type=MarketType.UNKNOWN,
+               price_per_sqm=500.0)
+    assert _segmented().segment_floor(rec) is None
+
+
+def test_rooms_above_three_share_one_segment():
+    """Чотири- й п'ятикімнатні окремо — це вибірки по кілька штук."""
+    t = _segmented()
+    a = _rec(rooms=4, condition=Condition.RENOVATED, market_type=MarketType.PRIMARY)
+    b = _rec(rooms=6, condition=Condition.RENOVATED, market_type=MarketType.PRIMARY)
+    assert t.segment_key(a) == t.segment_key(b)
+
+
+# --- перевірка класифікації ---------------------------------------------------
+
+def test_declared_repair_on_an_assignment_is_flagged():
+    """Карантин досі не дивився на стан узагалі — саме ця помилка найпомітніша."""
+    rec = _rec(condition=Condition.RENOVATED,
+               description="Вид об'єкта: Новобудова. Тип угоди: Переуступка.")
+    verdict, reasons = validate(rec, _thresholds())
+    assert verdict == "review"
+    assert any("переуступка" in r for r in reasons)
+
+
+def test_declared_repair_in_an_unfinished_building_is_flagged():
+    rec = _rec(condition=Condition.RENOVATED,
+               description="Здача ЖК заявлена в 2 кварталі 2028 року.")
+    assert validate(rec, _thresholds())[0] == "review"
+
+
+def test_repair_flag_contradicting_the_description_is_flagged():
+    rec = _rec(condition=Condition.RENOVATED,
+               description="Квартира продається без ремонту, сирець.")
+    verdict, reasons = validate(rec, _thresholds())
+    assert verdict == "review"
+    assert any("протилежне" in r for r in reasons)
+
+
+def test_needs_repair_contradicting_a_finished_repair_is_flagged():
+    rec = _rec(condition=Condition.NEEDS_REPAIR,
+               description="Зроблено дизайнерський ремонт, заходь і живи.")
+    assert validate(rec, _thresholds())[0] == "review"
+
+
+def test_future_tense_repair_is_not_a_contradiction():
+    """«Дозволяє зробити ремонт» у записі «без ремонту» — це згода, а не конфлікт."""
+    rec = _rec(condition=Condition.NEEDS_REPAIR,
+               description="Площа дозволяє зробити сучасний ремонт під себе.")
+    assert validate(rec, _thresholds())[0] == "ok"
+
+
+def test_classification_check_needs_text_to_work_with():
+    rec = _rec(condition=Condition.RENOVATED, description=None, title=None)
+    assert validate(rec, _thresholds())[0] == "ok"
+
+
+def test_revalidate_passes_every_field_that_validate_reads(session, monkeypatch):
+    """Перевірка мовчки не працює, якщо їй не передати полів, які вона читає.
+
+    Саме так сталося з класифікацією: правила додали б у `validate`, а
+    `revalidate` далі слав би лише ціну й площу — і перевірка не спрацювала б
+    жодного разу, при цьому нічого б не зламалось помітно.
+    """
+    import inspect
+
+    from realty.quality import housekeeping
+
+    source = inspect.getsource(housekeeping.revalidate)
+    for field in ("condition", "market_type", "title", "description",
+                  "price_per_sqm", "area_total", "rooms"):
+        assert f'"{field}": row.' in source, f"revalidate не передає {field}"
+
+
+def test_future_commissioning_year_contradicts_a_repair():
+    """Рік введення в експлуатацію в майбутньому — квартири ще немає.
+
+    Ознака найнадійніша з усіх: вона не залежить від того, як продавець
+    сформулював опис, і саме її бракувало, щоб упіймати оголошення з
+    «Рік введення в експлуатацію: 2027» і позначкою «з ремонтом».
+    """
+    from datetime import datetime
+
+    rec = _rec(condition=Condition.RENOVATED, description="Гарна квартира",
+               built_year=datetime.now().year + 2)
+    verdict, reasons = validate(rec, _thresholds())
+    assert verdict == "review"
+    assert any("вводять в експлуатацію" in r for r in reasons)
+
+
+def test_past_commissioning_year_is_fine():
+    rec = _rec(condition=Condition.RENOVATED, description="Гарна квартира",
+               built_year=2021)
+    assert validate(rec, _thresholds())[0] == "ok"

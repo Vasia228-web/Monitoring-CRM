@@ -105,3 +105,19 @@ def test_repair_parameter_beats_description(html):
     # Значення параметра розбирається тим самим шаблоном, що й решта пар.
     m = _PARAM_RE.match("Ремонт: Під чистову обробку")
     assert m and _REPAIR_BY_PARAM[m.group(2).strip().lower()] is Condition.NEEDS_REPAIR
+
+
+def test_listing_pages_are_requested_in_seller_currency():
+    """Картка у видачі має віддавати ціну продавця, а не гривневий переклад.
+
+    Без цього ми брали гривневий еквівалент, перерахований самим OLX, і
+    конвертували його назад своїм курсом. Два різні курси на одному числі —
+    це розбіжність, яка нічого не означає, але ламає і ціну, і дедуплікацію
+    з джерелами, що зберігають долари напряму.
+    """
+    from realty.sources.olx import IN_USD, OlxSource
+
+    url = OlxSource._page_url(OlxSource.__new__(OlxSource), 1)
+    assert IN_USD in url
+    assert "currency=USD" in url
+    assert IN_USD in OlxSource._page_url(OlxSource.__new__(OlxSource), 7)

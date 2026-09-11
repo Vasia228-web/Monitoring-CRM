@@ -197,3 +197,73 @@ def test_house_numbers_are_linked_transitively():
 
     # А без сполучної ланки різні номери лишаються конфліктом.
     assert conflicts([only13, only44])
+
+
+# --- різниця в одну кімнату ---------------------------------------------------
+
+def _shape(**over):
+    base = dict(id=1, source="olx", url=None, rooms=2, area=83.0, floor=13,
+                street="ленкавського", house=frozenset({"34"}), district="Центр",
+                price=146_500.0)
+    base.update(over)
+    return Shape(**base)
+
+
+def test_one_room_difference_merges_when_everything_else_matches():
+    """«2-кімнатна з кухнею-студією» і «3-кімнатна» — та сама квартира.
+
+    Один агент рахує кухню-студію як кімнату, другий ні. Площа, поверх,
+    будинок і ціна при цьому збігаються до цифри, і саме кімнатність
+    розривала пару.
+    """
+    a = _shape(id=1, rooms=2)
+    b = _shape(id=2, rooms=3, source="domria")
+    assert match_score(a, b) >= MERGE_THRESHOLD
+
+
+def test_two_room_difference_is_still_a_hard_reject():
+    """Різниця в дві кімнати — це вже інша квартира, хай там що збігається."""
+    assert match_score(_shape(rooms=2), _shape(id=2, rooms=4)) == -99
+    assert match_score(_shape(rooms=1), _shape(id=2, rooms=5)) == -99
+
+
+def test_room_mismatch_requires_the_area_to_match_almost_exactly():
+    """Різна кімнатність І різна площа — сусідні планування, не одна квартира."""
+    a = _shape(rooms=2, area=83.0)
+    b = _shape(id=2, rooms=3, area=83.5)
+    assert match_score(a, b) == -99
+
+
+def test_room_mismatch_requires_a_known_floor():
+    """Без поверху різницю в кімнатах підтвердити нема чим."""
+    a = _shape(rooms=2, floor=None)
+    b = _shape(id=2, rooms=3, floor=None)
+    assert match_score(a, b) == -99
+
+
+def test_room_mismatch_does_not_survive_a_different_building():
+    a = _shape(rooms=2, house=frozenset({"34"}))
+    b = _shape(id=2, rooms=3, house=frozenset({"36"}))
+    assert match_score(a, b) == -99
+
+
+def test_room_mismatch_needs_more_evidence_than_a_match():
+    """Пара з різною кімнатністю має набирати менше, ніж така сама з однаковою."""
+    same = match_score(_shape(rooms=2), _shape(id=2, rooms=2))
+    differ = match_score(_shape(rooms=2), _shape(id=2, rooms=3))
+    assert differ < same
+
+
+def test_room_mismatch_without_an_address_needs_the_same_price():
+    """Без адреси різницю в кімнатах підтверджує лише однакова ціна.
+
+    Саме такий вигляд має перший випадок зі скарги: запис LUN без вулиці й
+    запис DOMRIA з адресою, однакові площа, поверх і ціна до долара.
+    """
+    a = _shape(rooms=2, street=None, house=frozenset(), price=146_500.0)
+    b = _shape(id=2, rooms=3, street=None, house=frozenset(), price=146_500.0)
+    assert match_score(a, b) >= MERGE_THRESHOLD
+
+    # А різні ціни без адреси — не підстава зливати попри різну кімнатність.
+    c = _shape(id=3, rooms=3, street=None, house=frozenset(), price=131_000.0)
+    assert match_score(a, c) == -99
