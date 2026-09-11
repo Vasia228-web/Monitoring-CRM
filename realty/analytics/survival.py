@@ -27,10 +27,20 @@ class Observation:
 
     `event=False` означає цензуроване спостереження — об'єкт ще на ринку,
     ми знаємо лише, що він протримався щонайменше `days`.
+
+    `entry` — вік, у якому об'єкт потрапив під наше спостереження. Це не
+    дрібниця, а виправлення систематичного перекосу: ми почали збирати дані
+    недавно й бачимо лише ті оголошення, які на той момент ще висіли. Ті, що
+    продались раніше, у базу не потрапили взагалі. Якщо вважати, що всі вони
+    спостерігались із нульового віку, крива завищить виживання — виживуть
+    саме ті, кого ми й відібрали за фактом виживання.
+
+    Правильно: об'єкт входить у групу ризику не з нуля, а з віку `entry`.
     """
 
     days: float
     event: bool
+    entry: float = 0.0
 
 
 @dataclass
@@ -93,7 +103,10 @@ def kaplan_meier(observations: list[Observation]) -> Curve | None:
     points: list[Point] = []
 
     for t in times:
-        at_risk = sum(1 for o in data if o.days >= t)
+        # Під ризиком у момент t — ті, хто вже увійшов у спостереження
+        # (entry < t) і ще не вибув (days >= t). Умова на `entry` і є
+        # поправкою на відкладений вхід.
+        at_risk = sum(1 for o in data if o.entry < t <= o.days)
         events = sum(1 for o in data if o.event and o.days == t)
         if at_risk <= 0:
             continue
@@ -109,6 +122,10 @@ def kaplan_meier(observations: list[Observation]) -> Curve | None:
     return Curve(points=points, n=n_total,
                  events=sum(1 for o in data if o.event),
                  censored=sum(1 for o in data if not o.event))
+
+
+def _risk_floor(observations: list[Observation], point_time: float) -> int:
+    return sum(1 for o in observations if o.entry < point_time <= o.days)
 
 
 def naive_median(observations: list[Observation]) -> float | None:
@@ -141,12 +158,24 @@ def estimate(observations: list[Observation], cfg: Settings | None = None) -> di
             "disclaimer": DISCLAIMER,
         }
     median = curve.quantile(0.5)
+    # Поки крива не опустилась до половини, медіани немає — але сама крива вже
+    # щось каже. Контрольні точки відповідають на питання, яке має сенс і
+    # зараз: скільки об'єктів ще на ринку через стільки-то днів.
+    horizon = max((p.time for p in curve.points), default=0)
+    checkpoints = [
+        {"day": day, "survival": round(100 * curve.survival_at(day), 1)}
+        for day in (30, 60, 90, 180, 365) if day <= horizon
+    ]
     return {
         "available": True, "n": curve.n, "events": curve.events,
         "censored": curve.censored,
+        "checkpoints": checkpoints,
+        "horizon_days": round(horizon),
         "median_days": round(median) if median is not None else None,
         "median_note": None if median is not None else
-        "Половина об'єктів ще на ринку — медіанного строку поки не видно.",
+        (f"Медіанного строку поки не видно: зникло лише "
+         f"{round(100 * curve.events / curve.n, 1)}% об'єктів, і крива ще не "
+         f"опустилась до половини. Контрольні точки нижче вже осмислені."),
         "q25_days": (lambda v: round(v) if v is not None else None)(curve.quantile(0.25)),
         "curve": [{"day": p.time, "survival": p.survival,
                    "low": p.low, "high": p.high, "at_risk": p.at_risk}

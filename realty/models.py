@@ -125,6 +125,11 @@ class Listing(Base):
     # безнадійні посилання поступово відходили в кінець черги, а не з'їдали
     # бюджет кожного прогону.
     check_failures: Mapped[int] = mapped_column(Integer, default=0)
+    # Коли востаннє бачили оголошення ЖИВИМ. Разом із `delisted_at` це й є
+    # інтервал, усередині якого воно зникло. Точної дати зняття ми не знаємо
+    # і знати не можемо — аналіз виживання вміє працювати з інтервалом, але
+    # тільки якщо його межі збережені.
+    last_alive_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
 
     # --- Робочий процес -------------------------------------------------------
     # «Взято в обробку» — позначка користувача про те, що об'єктом займаються.
@@ -204,6 +209,32 @@ class Property(Base):
     def __repr__(self) -> str:  # pragma: no cover
         return (f"<Property {self.rooms}к {self.area_total}м² "
                 f"{self.street or '?'} × {self.sources_count} джерел>")
+
+
+class CheckEvent(Base):
+    """Одна перевірка одного оголошення — журнал, що дописується.
+
+    Потрібен аналізу виживання. Графік перевірок нерівномірний: пріоритет
+    віддається тим, хто давно на ринку й у кого впала ціна. Нерівномірність
+    сама по собі зміщує криву виживання, і єдиний спосіб її врахувати — знати
+    фактичні моменти перевірок, а не вважати їх рівномірними.
+
+    Пишеться і для незрозумілих відповідей: те, що ми не достукались, теж
+    факт про графік спостережень.
+    """
+
+    __tablename__ = "check_events"
+    __table_args__ = (Index("ix_check_listing", "listing_id", "checked_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    code: Mapped[int] = mapped_column(Integer)
+    # True — живе, False — знято, None — не достукались.
+    alive: Mapped[bool | None] = mapped_column(Boolean)
+    # Чим викликана перевірка: плановий обхід чи підтвердження кандидата з
+    # різниці списків. Без цього не відрізнити «дійшла черга» від «запідозрили».
+    reason: Mapped[str] = mapped_column(String(16), default="sweep")
 
 
 class PriceEvent(Base):

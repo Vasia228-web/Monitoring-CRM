@@ -141,6 +141,39 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    from realty.db import init_db
+    from realty.snapshot import run
+
+    init_db()
+    names = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    rep = run(names, confirm=not args.no_confirm)
+    print("\n" + "=" * 74)
+    print("РІЗНИЦЯ СПИСКІВ")
+    print("=" * 74)
+    head = f"  {'джерело':<9}{'було':>7}{'стало':>7}{'запитів':>9}{'кандидатів':>12}"
+    print(head + f"{'знято':>8}{'живі':>7}{'?':>4}")
+    for name, e in rep["sources"].items():
+        if "error" in e:
+            print(f"  {name:<9} помилка: {e['error'][:52]}")
+            continue
+        print(f"  {name:<9}{e['previous']:>7}{e['current']:>7}{e['requests']:>9}"
+              f"{e['candidates']:>12}{e['confirmed']:>8}{e['still_alive']:>7}"
+              f"{e['unclear']:>4}")
+        if not e["used"]:
+            print(f"             ↳ порівняння пропущено: {e['reason']}")
+    for name, reason in rep.get("skipped", {}).items():
+        print(f"  {name:<9} перелік не застосовний: {reason}")
+    print("-" * 74)
+    print(f"  запитів на перелік:     {rep['requests_enumerate']}")
+    print(f"  запитів на підтвердження: {rep['requests_confirm']}")
+    print(f"  підтверджено знятих:    {rep['delisted']}")
+    print("=" * 74)
+    print("  Випадіння зі списку — лише кандидат. Статус «знято» ставиться")
+    print("  тільки за явним 404/410 від поодинокого запиту.")
+    return 0
+
+
 def cmd_dedup(args: argparse.Namespace) -> int:
     from realty.db import init_db, session_scope
     from realty.dedup import rebuild
@@ -300,6 +333,13 @@ def main() -> int:
     vf.add_argument("--limit", type=int, default=200, help="скільки перевірити за раз")
     vf.add_argument("--sources", help="через кому; типово — усі, що вміємо перевіряти")
     vf.set_defaults(func=cmd_verify)
+
+    sn = sub.add_parser("snapshot",
+                        help="знайти зниклі оголошення різницею списків")
+    sn.add_argument("--sources", help="через кому; типово всі")
+    sn.add_argument("--no-confirm", action="store_true",
+                    help="лише знайти кандидатів, без поодинокої перевірки")
+    sn.set_defaults(func=cmd_snapshot)
 
     dd = sub.add_parser("dedup", help="звести однакові квартири в майстер-записи")
     dd.add_argument("--dry-run", action="store_true", help="лише порахувати, без запису")

@@ -29,14 +29,14 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 
 from .db import session_scope
 from .fetcher import Fetcher
-from .models import Listing
+from .models import CheckEvent, Listing, PriceEvent
 
 log = logging.getLogger(__name__)
 
@@ -113,18 +113,48 @@ class HostResult:
     stopped_early: bool = False
 
 
-def _order():
-    """Порядок обходу черги.
+# Скільки днів на ринку вважаємо «давно». Свіже оголошення майже напевно ще
+# живе, і перевірка його майже не дає інформації — черга має йти не рівномірно.
+OLD_LISTING_DAYS = 45
+# Наскільки недавнє зниження ціни вважаємо сигналом. Падіння ціни — сильний
+# натяк на близьке завершення: продавець поспішає.
+PRICE_DROP_WINDOW_DAYS = 21
 
-    Спершу ті, кого не пробували жодного разу; далі — за кількістю поспіль
-    незрозумілих відповідей (безнадійні відходять у кінець), і вже потім за
-    давністю спроби. Ключове тут — сортувати за СПРОБОЮ, а не за перевіркою:
-    інакше оголошення, яке стабільно віддає 403, вічно лишається першим у
-    черзі й не пускає туди решту.
+
+def _order():
+    """Порядок обходу черги — навмисно нерівномірний.
+
+    Рівномірний обхід витрачає однаково на щойно опубліковану квартиру і на
+    ту, що висить півроку. Перша майже напевно жива, і перевірка її нічого не
+    каже. Тому вперед ідуть ті, у кого ймовірність зникнення вища:
+
+      1. кого не пробували жодного разу;
+      2. у кого нещодавно впала ціна — найсильніший сигнал;
+      3. хто давно на ринку;
+      4. кого давно не перевіряли.
+
+    Перед усім цим — кількість поспіль незрозумілих відповідей: безнадійні
+    посилання відходять у кінець, щоб не з'їдати бюджет кожного прогону.
+
+    Нерівномірність має ціну: вона зміщує криву виживання, якщо не знати
+    фактичного графіка перевірок. Саме тому кожна перевірка пишеться в
+    `check_events` — без цього журналу такий порядок робити не можна.
     """
+    now = _now()
+    old_before = now - timedelta(days=OLD_LISTING_DAYS)
+    drop_after = now - timedelta(days=PRICE_DROP_WINDOW_DAYS)
+    recent_drop = (
+        select(PriceEvent.listing_id)
+        .where(PriceEvent.observed_at >= drop_after)
+        .group_by(PriceEvent.listing_id)
+        .having(func.count(PriceEvent.id) > 1)
+        .scalar_subquery()
+    )
     return (
-        case((Listing.last_attempt.is_(None), 0), else_=1),
         Listing.check_failures.asc(),
+        case((Listing.last_attempt.is_(None), 0), else_=1),
+        case((Listing.id.in_(recent_drop), 0), else_=1),
+        case((Listing.published_at < old_before, 0), else_=1),
         Listing.last_attempt.asc(),
     )
 
@@ -188,7 +218,7 @@ def _run_host(queue: list[Candidate], fetcher: Fetcher) -> HostResult:
 
 def verify_batch(limit: int = 200, sources: list[str] | None = None,
                  http: Fetcher | None = None, browser=None,
-                 ids: list[int] | None = None) -> dict:
+                 ids: list[int] | None = None, reason: str = "sweep") -> dict:
     """Перевіряє порцію оголошень. `limit` — на кожен сайт, не на всіх разом.
 
     `browser` лишився в сигнатурі для сумісності викликів і навмисно не
@@ -229,14 +259,14 @@ def verify_batch(limit: int = 200, sources: list[str] | None = None,
             stats["blocked"] += r.blocked
             stats["by_host"][r.host] = {"requests": r.requests, "blocked": r.blocked,
                                         "stopped_early": r.stopped_early}
-        _apply(codes, stats)
+        _apply(codes, stats, reason)
     finally:
         if own:
             fetcher.close()
     return stats
 
 
-def _apply(codes: dict[int, int], stats: dict) -> None:
+def _apply(codes: dict[int, int], stats: dict, reason: str = "sweep") -> None:
     """Застосовує коди до бази — в одному потоці й одній транзакції."""
     now = _now()
     with session_scope() as s:
@@ -244,6 +274,12 @@ def _apply(codes: dict[int, int], stats: dict) -> None:
         for row in rows:
             code = codes[row.id]
             verdict = classify(code)
+            # Журнал пишемо завжди, зокрема й для невдалих спроб: аналізу
+            # виживання потрібен фактичний графік спостережень, а не уявлення
+            # про нього. Черга навмисно нерівномірна, і без цих записів
+            # нерівномірність нечутно зсувала б криву.
+            s.add(CheckEvent(listing_id=row.id, checked_at=now, code=code,
+                             alive=verdict, reason=reason))
             bucket = stats["by_source"].setdefault(
                 row.source, {"checked": 0, "alive": 0, "delisted": 0, "unknown": 0})
             stats["checked"] += 1
@@ -266,10 +302,13 @@ def _apply(codes: dict[int, int], stats: dict) -> None:
                 if row.is_active:
                     row.is_active = False
                     row.delisted_at = now
+                    # `last_alive_at` НЕ чіпаємо: разом із `delisted_at` воно
+                    # задає інтервал, усередині якого оголошення зникло.
                     stats["delisted"] += 1
                     bucket["delisted"] += 1
                     log.info("Знято з продажу (HTTP %d): %s", code, row.original_url[:90])
             else:
+                row.last_alive_at = now
                 if not row.is_active:
                     row.is_active = True
                     row.delisted_at = None

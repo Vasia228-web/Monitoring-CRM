@@ -143,3 +143,70 @@ def test_estimate_returns_curve_once_events_are_enough():
     assert result["events"] >= 50
     assert abs(result["median_days"] - TRUE_MEDIAN) < 0.2 * TRUE_MEDIAN
     assert "не обов'язково продаж" in result["disclaimer"]
+
+
+# --- відкладений вхід (ліве зрізання) -----------------------------------------
+
+def observed_from(start_day: float, n: int = 6000, seed: int = 7):
+    """Вибірка так, як її бачить наша система: спостереження почалось пізно.
+
+    Оголошення з'являються рівномірно в часі; ми вмикаємось у момент
+    `start_day` і бачимо ЛИШЕ ті, що на цей момент ще живі. Ті, що встигли
+    зникнути раніше, у базу не потрапляють зовсім — саме це й зміщує оцінку,
+    якщо не врахувати вік входу.
+    """
+    rng = random.Random(seed)
+    window = 400.0
+    out = []
+    for _ in range(n):
+        born = rng.uniform(0, window)             # коли оголошення опублікували
+        lifetime = rng.expovariate(RATE)
+        if born + lifetime <= start_day:
+            continue                              # зникло до початку спостережень
+        entry = max(0.0, start_day - born)        # вік на момент нашого старту
+        horizon = start_day + 5.0                 # наше вікно спостережень
+        if born + lifetime <= horizon:
+            out.append(Observation(days=lifetime, event=True, entry=entry))
+        else:
+            out.append(Observation(days=max(entry, horizon - born), event=False,
+                                   entry=entry))
+    return out
+
+
+def test_delayed_entry_correction_recovers_the_true_median():
+    """Головна перевірка кроку: поправка на відкладений вхід усуває перекіс.
+
+    Без неї крива описує не ринок, а нашу вибірку: ми бачимо тільки тих, хто
+    дожив до старту спостережень, і вони «виживають» тим краще, чим пізніше
+    ми почали.
+    """
+    data = observed_from(start_day=300.0)
+    assert sum(1 for o in data if o.event) >= 50
+
+    corrected = kaplan_meier(data).quantile(0.5)
+    naive = kaplan_meier([Observation(days=o.days, event=o.event) for o in data]).quantile(0.5)
+
+    assert corrected is not None
+    assert abs(corrected - TRUE_MEDIAN) < 0.2 * TRUE_MEDIAN
+    # Наївна оцінка систематично завищує строк — або й зовсім не бачить медіани.
+    assert naive is None or naive > corrected
+
+
+def test_entry_shifts_only_the_risk_set_not_the_events():
+    """Той, хто ще не увійшов у спостереження, не рахується під ризиком."""
+    data = [
+        Observation(days=10, event=True, entry=0),
+        Observation(days=50, event=False, entry=40),   # увійшов уже після 10-го дня
+    ]
+    curve = kaplan_meier(data)
+    first = curve.points[0]
+    assert first.time == 10
+    assert first.at_risk == 1, "пізній учасник не мав бути під ризиком на 10-й день"
+    assert first.survival == pytest.approx(0.0)
+
+
+def test_zero_entry_behaves_exactly_as_before():
+    """Поправка не має міняти результат там, де відкладеного входу немає."""
+    plain = sample(1500, censor_after=150.0)
+    with_entry = [Observation(days=o.days, event=o.event, entry=0.0) for o in plain]
+    assert kaplan_meier(plain).quantile(0.5) == kaplan_meier(with_entry).quantile(0.5)

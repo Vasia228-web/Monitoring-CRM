@@ -13,7 +13,8 @@ from ..analytics import cache, forecast
 from ..analytics.inventory import check_rate
 from ..analytics.objects import analyse
 from ..analytics.segments import (
-    COND_LABEL, MARKET_LABEL, days_distribution, primary_vs_secondary, rooms_label,
+    COND_LABEL, MARKET_LABEL, days_distribution, liquidity_proxy,
+    primary_vs_secondary, rooms_label,
 )
 from ..analytics.settings import load
 from ..analytics.survival import Observation, estimate
@@ -59,15 +60,17 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
              and (not condition or r["condition"] == condition)]
     days = _filtered(days_distribution(universe, cfg),
                      rooms=rooms, condition=condition, market=market)
+    proxy = _filtered(liquidity_proxy(universe, cfg),
+                      rooms=rooms, condition=condition, market=market)
 
     # Ліквідність рахуємо тут же, а не заглушкою в шаблоні: блок сам увімкнеться,
     # щойно накопичиться достатньо зафіксованих зникнень.
-    peers = [o for o in universe.items if o.days_listed is not None
-             and (not rooms or str(o.band or "") == rooms)
+    peers = [o for o in universe.items
+             if (not rooms or str(o.band or "") == rooms)
              and (not condition or o.condition == condition)
              and (not market or o.market == market)]
-    liquidity = estimate([Observation(days=o.days_listed,
-                                      event=o.delisted_at is not None) for o in peers], cfg)
+    liquidity = estimate([Observation(days=obs[0], event=obs[1], entry=obs[2])
+                          for o in peers if (obs := o.observation) is not None], cfg)
 
     covered = sum(r["n"] for r in segments)
     return templates.TemplateResponse(request, "analytics.html", {
@@ -76,7 +79,7 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
         "sources": snapshot.sources_matched,
         "composition": snapshot.sources_composition,
         "below": snapshot.below, "covered": covered, "liquidity": liquidity,
-        "sweep": sweep,
+        "sweep": sweep, "proxy": proxy,
         "universe_size": len(universe),
         "forecast": forecast_state,
         "cfg": cfg,

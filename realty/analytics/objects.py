@@ -151,10 +151,10 @@ def liquidity(universe: Universe, item: Item, cfg: Settings | None = None) -> di
         return {"available": False, "events": 0, "needed": cfg.survival_min_events,
                 "message": "Замало схожих об'єктів для оцінки ліквідності."}
     peers = [o for o in universe.items
-             if o.days_listed is not None and o.band == item.band
-             and o.condition == item.condition and o.market == item.market]
-    observations = [Observation(days=o.days_listed, event=o.delisted_at is not None)
-                    for o in peers]
+             if o.band == item.band and o.condition == item.condition
+             and o.market == item.market]
+    observations = [Observation(days=obs[0], event=obs[1], entry=obs[2])
+                    for o in peers if (obs := o.observation) is not None]
     result = estimate(observations, cfg)
     result["segment"] = comparison.label
     return result

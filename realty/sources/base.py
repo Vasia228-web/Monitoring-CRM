@@ -46,6 +46,20 @@ class BaseSource(abc.ABC):
         self.stats = {"seen": 0, "kept": 0, "new": 0, "skipped_geo": 0,
                       "errors": 0, "needs_llm": 0, "pages": 0}
 
+    def iter_ids(self) -> Iterator[str]:
+        """Перелік ідентифікаторів, ЩО ЗАРАЗ ОПУБЛІКОВАНІ, без деталей.
+
+        Потрібен для снапшотів: щоб дізнатись, що зникло з видачі, достатньо
+        переліку, а картки кожного оголошення тягнути не треба.
+
+        Базова реалізація бере ідентифікатори з `iter_listings` — для джерел,
+        які й так віддають усе зі сторінки списку, це нічого не коштує зверху.
+        Джерело, у якого перелік дешевший за розбір, перевизначає метод.
+        """
+        for rec in self.iter_listings():
+            if external_id := rec.get("external_id"):
+                yield str(external_id)
+
     @property
     def fetcher(self) -> Fetcher:
         if self._fetcher is None:

@@ -2,7 +2,7 @@
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -259,3 +259,117 @@ def test_each_host_is_probed_with_its_own_delay(session):
     used = {url: delay for url, delay, _ in fetcher.calls}
     assert set(used.values()) == {verify.HOSTS["dom.ria.com"].delay,
                                   verify.HOSTS["olx.ua"].delay}
+
+
+# --- журнал перевірок ---------------------------------------------------------
+
+def test_every_check_is_logged_including_failed_ones(session):
+    """Аналізу виживання потрібен фактичний графік спостережень.
+
+    Черга навмисно нерівномірна, і без журналу ця нерівномірність нечутно
+    зсувала б криву виживання. Невдалі спроби теж є фактом про графік.
+    """
+    from realty.models import CheckEvent
+
+    alive = _add(session, "dom.ria.com", 1)
+    gone = _add(session, "dom.ria.com", 2)
+    murky = _add(session, "olx.ua", 3)
+    session.commit()
+    stats = {"checked": 0, "alive": 0, "delisted": 0, "restored": 0, "unknown": 0,
+             "by_source": {}}
+    verify._apply({alive.id: 200, gone.id: 404, murky.id: 403}, stats)
+
+    session.expire_all()
+    events = {e.listing_id: e for e in session.scalars(select(CheckEvent))}
+    assert len(events) == 3
+    assert events[alive.id].alive is True and events[alive.id].code == 200
+    assert events[gone.id].alive is False and events[gone.id].code == 404
+    assert events[murky.id].alive is None, "невдала спроба теж потрапляє в журнал"
+    assert all(e.reason == "sweep" for e in events.values())
+
+
+def test_check_reason_distinguishes_sweep_from_candidate(session):
+    from realty.models import CheckEvent
+
+    row = _add(session, "dom.ria.com", 1)
+    session.commit()
+    stats = {"checked": 0, "alive": 0, "delisted": 0, "restored": 0, "unknown": 0,
+             "by_source": {}}
+    verify._apply({row.id: 200}, stats, reason="candidate")
+    session.expire_all()
+    assert session.scalars(select(CheckEvent)).first().reason == "candidate"
+
+
+def test_delisting_preserves_the_interval_bounds(session):
+    """Точної дати зняття ми не знаємо — зберігаємо межі проміжку.
+
+    `last_alive_at` лишається тим, чим був, а `delisted_at` ставиться зараз:
+    разом вони й задають інтервал, усередині якого оголошення зникло. Якби
+    зняття затирало `last_alive_at`, інтервал перетворився б на точку — і
+    аналіз виживання отримав би вигадану точність.
+    """
+    row = _add(session, "dom.ria.com", 1)
+    session.commit()
+    stats = {"checked": 0, "alive": 0, "delisted": 0, "restored": 0, "unknown": 0,
+             "by_source": {}}
+
+    verify._apply({row.id: 200}, stats)          # бачили живим
+    session.expire_all()
+    seen_alive = session.get(Listing, row.id).last_alive_at
+    assert seen_alive is not None
+
+    verify._apply({row.id: 410}, stats)          # наступного разу вже немає
+    session.expire_all()
+    fresh = session.get(Listing, row.id)
+    assert fresh.last_alive_at == seen_alive, "межу «востаннє живим» затерто"
+    assert fresh.delisted_at >= seen_alive
+    assert fresh.is_active is False
+
+
+# --- пріоритет ----------------------------------------------------------------
+
+def test_recent_price_drop_jumps_the_queue(session):
+    """Падіння ціни — найсильніший сигнал близького завершення."""
+    from realty.models import PriceEvent
+
+    plain = _add(session, "dom.ria.com", 1, published_at=datetime(2026, 9, 1))
+    dropped = _add(session, "dom.ria.com", 2, published_at=datetime(2026, 9, 1))
+    session.flush()
+    now = verify._now()
+    for price in (60_000.0, 55_000.0):
+        session.add(PriceEvent(listing_id=dropped.id, source="test", price_usd=price,
+                               observed_at=now))
+    session.commit()
+
+    order = [c.listing_id for c in verify.collect(session, 10)["dom.ria.com"]]
+    assert order.index(dropped.id) < order.index(plain.id)
+
+
+def test_long_listed_objects_come_before_fresh_ones(session):
+    """Щойно опубліковане майже напевно живе — перевіряти його марно."""
+    now = verify._now()
+    old = _add(session, "dom.ria.com", 1, last_attempt=now,
+               published_at=now - timedelta(days=verify.OLD_LISTING_DAYS + 30))
+    fresh = _add(session, "dom.ria.com", 2, last_attempt=now,
+                 published_at=now - timedelta(days=2))
+    session.commit()
+    order = [c.listing_id for c in verify.collect(session, 10)["dom.ria.com"]]
+    assert order == [old.id, fresh.id]
+
+
+def test_hopeless_links_stay_behind_every_priority(session):
+    """Безнадійне посилання не обганяє нікого, навіть зі свіжим падінням ціни."""
+    from realty.models import PriceEvent
+
+    now = verify._now()
+    hopeless = _add(session, "dom.ria.com", 1, check_failures=9, last_attempt=now,
+                    published_at=now - timedelta(days=300))
+    session.flush()
+    for price in (60_000.0, 50_000.0):
+        session.add(PriceEvent(listing_id=hopeless.id, source="test", price_usd=price,
+                               observed_at=now))
+    normal = _add(session, "dom.ria.com", 2, last_attempt=now,
+                  published_at=now - timedelta(days=1))
+    session.commit()
+    order = [c.listing_id for c in verify.collect(session, 10)["dom.ria.com"]]
+    assert order == [normal.id, hopeless.id]

@@ -8,13 +8,14 @@
 from __future__ import annotations
 
 import statistics as st
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from ..db import SessionLocal
-from ..models import Condition, Listing, MarketType, Property
+from ..models import Condition, Listing, MarketType, PriceEvent, Property
 from .settings import Settings, load
 from .stats import Summary, diff_pct, percentile_of, summarise
 
@@ -60,6 +61,35 @@ class Item:
     sources: tuple[str, ...] = ()
     price_min: float | None = None
     price_max: float | None = None
+    # Скільки об'єкт прожив на ринку, якщо він уже зник. Точної дати зняття не
+    # існує: ми знаємо лише проміжок між останньою перевіркою «живе» і першою
+    # «мертве». Беремо середину проміжку й окремо тримаємо його ширину — вона
+    # показує, наскільки груба ця оцінка.
+    lifetime_days: float | None = None
+    interval_days: float | None = None
+    price_drops: int = 0
+    price_drop_pct: float | None = None
+
+    # Вік оголошення на момент, коли ми його вперше побачили. Об'єкт входить
+    # у спостереження саме з цього віку, а не з нуля.
+    entry_days: float | None = None
+
+    @property
+    def observation(self) -> tuple[float, bool, float] | None:
+        """(скільки тривало, чи завершилось, з якого віку спостерігали).
+
+        Для зниклого об'єкта тривалість — строк ДО зникнення, для активного —
+        вік дотепер. Взяти вік дотепер для зниклого означало б додати до
+        строку продажу час, коли квартира вже не продавалась.
+        """
+        entry = max(0.0, self.entry_days or 0.0)
+        if self.delisted_at is not None:
+            if self.lifetime_days is None:
+                return None
+            return (self.lifetime_days, True, min(entry, self.lifetime_days))
+        if self.days_listed is None:
+            return None
+        return (self.days_listed, False, min(entry, self.days_listed))
 
     @property
     def price_spread_pct(self) -> float | None:
@@ -93,6 +123,39 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _price_moves(session) -> dict[int, tuple[int, float | None]]:
+    """Скільки разів ціна об'єкта падала і наскільки глибоко сумарно.
+
+    Рахується в межах одного оголошення: поява того самого об'єкта на другому
+    майданчику дає новий запис, але це не рух ціни продавця.
+    """
+    rows = session.execute(
+        select(Listing.property_id, PriceEvent.listing_id, PriceEvent.price_usd,
+               PriceEvent.observed_at)
+        .join(Listing, Listing.id == PriceEvent.listing_id)
+        .where(Listing.property_id.isnot(None), PriceEvent.price_usd.isnot(None))
+        .order_by(PriceEvent.listing_id, PriceEvent.observed_at)).all()
+
+    previous: dict[int, float] = {}
+    drops: dict[int, int] = defaultdict(int)
+    first: dict[int, float] = {}
+    last: dict[int, float] = {}
+    for prop_id, listing_id, price, _ in rows:
+        before = previous.get(listing_id)
+        if before is not None and price < before - 1:
+            drops[prop_id] += 1
+        previous[listing_id] = price
+        first.setdefault(prop_id, price)
+        last[prop_id] = price
+
+    out: dict[int, tuple[int, float | None]] = {}
+    for prop_id, count in drops.items():
+        start, end = first.get(prop_id), last.get(prop_id)
+        depth = round(100 * (1 - end / start), 1) if start and end and start > 0 else None
+        out[prop_id] = (count, depth)
+    return out
+
+
 def build_universe(session) -> Universe:
     """Збирає знімок: один майстер-об'єкт — один рядок."""
     props = session.execute(
@@ -105,16 +168,27 @@ def build_universe(session) -> Universe:
     # склеєних оголошень — інакше переклеєне оголошення виглядало б новим.
     listings = session.execute(
         select(Listing.property_id, Listing.published_at, Listing.source,
-               Listing.delisted_at, Listing.price_usd)
+               Listing.delisted_at, Listing.price_usd, Listing.last_alive_at,
+               Listing.first_seen)
         .where(Listing.property_id.isnot(None))).all()
     published: dict[int, datetime] = {}
     delisted: dict[int, datetime] = {}
+    last_alive: dict[int, datetime] = {}
+    first_seen_at: dict[int, datetime] = {}
     sources: dict[int, set[str]] = {}
     prices: dict[int, list[float]] = {}
     alive: set[int] = set()
-    for prop_id, pub, source, gone, price in listings:
+    for prop_id, pub, source, gone, price, seen_alive, first_seen in listings:
         if price:
             prices.setdefault(prop_id, []).append(price)
+        # Нижня межа проміжку: остання перевірка «живе», а якщо її не було —
+        # момент, коли ми оголошення вперше побачили.
+        bound = seen_alive or first_seen
+        if bound and (prop_id not in last_alive or bound > last_alive[prop_id]):
+            last_alive[prop_id] = bound
+        if first_seen and (prop_id not in first_seen_at
+                           or first_seen < first_seen_at[prop_id]):
+            first_seen_at[prop_id] = first_seen
         if pub and (prop_id not in published or pub < published[prop_id]):
             published[prop_id] = pub
         sources.setdefault(prop_id, set()).add(source)
@@ -123,6 +197,7 @@ def build_universe(session) -> Universe:
         elif prop_id not in delisted or gone > delisted[prop_id]:
             delisted[prop_id] = gone
 
+    price_moves = _price_moves(session)
     now = _now()
     items = []
     for pid, rooms, area, stored_price, stored_ppsqm, cond, market, district in props:
@@ -131,6 +206,18 @@ def build_universe(session) -> Universe:
         gone = None if pid in alive else delisted.get(pid)
         own = prices.get(pid) or ([stored_price] if stored_price else [])
         price = st.median(own) if own else None
+        lifetime = interval = entry = None
+        if gone and pub:
+            lower = last_alive.get(pid)
+            # Середина проміжку — звичайна практика для інтервально
+            # цензурованих спостережень: вона не вдає точності, якої немає.
+            moment = (lower + (gone - lower) / 2) if lower and lower < gone else gone
+            lifetime = (moment - pub).total_seconds() / 86400
+            interval = ((gone - lower).total_seconds() / 86400) if lower else None
+        seen_first = first_seen_at.get(pid)
+        if pub and seen_first:
+            entry = max(0.0, (seen_first - pub).total_seconds() / 86400)
+        drops, depth = price_moves.get(pid, (0, None))
         # Ціна за м² виводиться з тієї самої ціни, що показана поруч. Значення
         # з майстер-запису лишається запасним варіантом, коли площі немає.
         ppsqm = (price / area) if price and area else stored_ppsqm
@@ -140,6 +227,8 @@ def build_universe(session) -> Universe:
             days_listed=(now - pub).total_seconds() / 86400 if pub else None,
             delisted_at=gone, sources=tuple(sorted(sources.get(pid, ()))),
             price_min=min(own) if own else None, price_max=max(own) if own else None,
+            lifetime_days=lifetime, interval_days=interval, entry_days=entry,
+            price_drops=drops, price_drop_pct=depth,
         ))
     return Universe(items=items, built_at=now)
 
@@ -394,3 +483,47 @@ def days_distribution(universe: Universe, cfg: Settings | None = None) -> list[d
             "q1": round(summary.q1), "q3": round(summary.q3),
         })
     return sorted(rows, key=lambda r: r["median"])
+
+
+def liquidity_proxy(universe: Universe, cfg: Settings | None = None) -> list[dict]:
+    """Ліквідність сегментів за тим, що вимірне вже сьогодні.
+
+    Крива виживання потребує накопичених зникнень і з'являється пізніше. Але
+    два спостережні показники доступні одразу і відповідають на те саме
+    питання «що йде важче»:
+
+      * частка об'єктів, які знижували ціну, і глибина зниження — квартири,
+        які скидають ціну, продаються гірше;
+      * вік активних оголошень — де він більший, там ринок густіший.
+
+    Це саме проксі, а не строк продажу: жодне з цих чисел не каже, скільки
+    триває продаж. Підпис про це має лишатися поруч із цифрами.
+    """
+    cfg = cfg or load()
+    groups: dict[tuple, list[Item]] = {}
+    for o in universe.items:
+        if o.days_listed is None:
+            continue
+        groups.setdefault((o.band, o.condition, o.market), []).append(o)
+
+    rows = []
+    for (band, cond, market), members in groups.items():
+        ages = summarise([o.days_listed for o in members], cfg, "upper")
+        if ages is None or ages.n < cfg.min_sample:
+            continue
+        with_drop = [o for o in members if o.price_drops]
+        depths = [o.price_drop_pct for o in with_drop if o.price_drop_pct]
+        gone = [o for o in members if o.delisted_at is not None]
+        rows.append({
+            "rooms": band, "rooms_label": rooms_label(band),
+            "condition_label": COND_LABEL[cond], "market_label": MARKET_LABEL[market],
+            "n": len(members),
+            "median_age": round(ages.median),
+            "age_q1": round(ages.q1), "age_q3": round(ages.q3),
+            "drop_share": round(100 * len(with_drop) / len(members), 1),
+            "drop_depth": round(st.median(depths), 1) if depths else None,
+            "gone": len(gone),
+            "gone_share": round(100 * len(gone) / len(members), 1),
+        })
+    # Важче йде те, де більше знижень ціни; за рівності — де старші оголошення.
+    return sorted(rows, key=lambda r: (-r["drop_share"], -r["median_age"]))

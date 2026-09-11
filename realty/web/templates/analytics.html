@@ -200,21 +200,35 @@
 <section class="sect">
   <h2>Строк продажу та ліквідність</h2>
   <p class="cap">
-    Рахується методом Каплана—Меєра — він враховує об'єкти, які ще не продані.
-    Проста медіана по вже знятих систематично занижує строк: на синтетичній
-    перевірці з відомою відповіддю 90 днів вона дала 33 дні, а метод — 85.
+    Рахується методом Каплана—Меєра — він враховує об'єкти, які ще не продані,
+    і поправку на те, що ми бачимо лише оголошення, живі на момент старту збору.
+    Без цієї поправки крива описувала б не ринок, а нашу вибірку.
   </p>
   {% if liquidity.available %}
     <div class="facts">
-      <div><span class="v num">{{ liquidity.median_days or '—' }} дн.</span>
+      <div><span class="v num">{{ liquidity.median_days or '—' }}{{ ' дн.' if liquidity.median_days }}</span>
         <span class="k">медіанний строк на ринку</span></div>
-      <div><span class="v num">{{ liquidity.q25_days or '—' }} дн.</span>
-        <span class="k">чверть об'єктів зникає раніше</span></div>
       <div><span class="v num">{{ liquidity.events }}</span>
         <span class="k">зафіксованих зникнень</span></div>
       <div><span class="v num">{{ liquidity.censored }}</span>
         <span class="k">ще на ринку (враховані)</span></div>
+      <div><span class="v num">{{ liquidity.n }}</span>
+        <span class="k">об'єктів у розрахунку</span></div>
     </div>
+    {% if liquidity.checkpoints %}
+      <div class="bars" style="margin-top:18px">
+        {% for c in liquidity.checkpoints %}
+          <div class="bar">
+            <span class="name"><b>через {{ c.day }} дн.</b>ще продається</span>
+            <span class="track">
+              <i class="iqr" style="left:0;width:{{ c.survival }}%"></i>
+              <i class="med" style="left:{{ c.survival }}%"></i>
+            </span>
+            <span class="val num">{{ c.survival }}%</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
     {% if liquidity.median_note %}<p class="legend">{{ liquidity.median_note }}</p>{% endif %}
     <p class="legend">{{ liquidity.disclaimer }}</p>
   {% else %}
@@ -222,8 +236,7 @@
       <span class="badge">Недостатньо даних</span>
       <p>Зафіксованих зникнень оголошень поки
          <span class="num">{{ liquidity.events }}</span> — потрібно щонайменше
-         <span class="num">{{ liquidity.needed }}</span>. Крива по такій кількості
-         подій була б плоскою лінією без змісту.</p>
+         <span class="num">{{ liquidity.needed }}</span>.</p>
       <p>Зникнення помічає перевірка живості оголошень.
          {% if sweep.full_cycle_days %}
            За останню добу вона перевірила
@@ -232,17 +245,50 @@
            тобто повний обхід бази займає близько
            <span class="num">{{ sweep.full_cycle_days }}</span>
            {{ sweep.full_cycle_days | round | int | plural('дня', 'днів', 'днів') }}.
-         {% else %}
-           За останню добу вона не встигла перевірити жодного оголошення —
-           поки темп накопичення зникнень оцінити нема з чого.
          {% endif %}
          Перевірено хоч раз: <span class="num">{{ sweep.checked }}</span>
-         з {{ sweep.total }}. Зараз під наглядом
-         <span class="num">{{ liquidity.n }}</span> {{ liquidity.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}.</p>
+         з {{ sweep.total }}.</p>
       <p class="legend" style="margin:0">{{ liquidity.disclaimer }}</p>
     </div>
   {% endif %}
 </section>
+
+{% if proxy %}
+<section class="sect">
+  <h2>Що йде важче — за наявними даними</h2>
+  <p class="cap">
+    Два показники, вимірні вже сьогодні: частка об'єктів, які знижували ціну,
+    і вік активних оголошень. Квартири, які скидають ціну, продаються гірше.
+    <b>Це не строк продажу</b> — жодне з цих чисел не каже, скільки триває
+    продаж; вони лише показують, де ринок густіший.
+  </p>
+  <div class="tablewrap scroll">
+    <table class="grid">
+      <thead>
+        <tr><th>Сегмент</th><th>об'єктів</th><th>знижували ціну</th>
+          <th>глибина</th><th>вік, медіана</th><th>уже зникло</th></tr>
+      </thead>
+      <tbody>
+        {% for r in proxy %}
+          <tr>
+            <td>{{ r.rooms_label }}, {{ r.condition_label }}, {{ r.market_label }}</td>
+            <td class="num">{{ r.n }}</td>
+            <td class="num">{{ r.drop_share }}%</td>
+            <td class="num">{{ r.drop_depth ~ '%' if r.drop_depth else '—' }}</td>
+            <td class="num">{{ r.median_age }} дн.<small>{{ r.age_q1 }}–{{ r.age_q3 }}</small></td>
+            <td class="num">{{ r.gone_share }}%</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="legend">
+    Глибина — сумарне зниження від першої зафіксованої ціни до поточної, медіана
+    по тих, хто знижував. За короткий час спостережень вона поки мала: більшість
+    знижень ще попереду.
+  </p>
+</section>
+{% endif %}
 
 <section class="sect">
   <h2>Прогноз ціни</h2>

@@ -162,7 +162,7 @@ class DomRiaSource(BaseSource):
             rec["detail_enriched"] = True
         return rec
 
-    def _search_page(self, page: int) -> list[int]:
+    def _search_page(self, page: int, limit: int = PAGE_SIZE) -> list[int]:
         data = self.fetcher.get_json(SEARCH, {
             "category": 1,            # житло
             "realty_type": 2,         # квартира
@@ -170,12 +170,42 @@ class DomRiaSource(BaseSource):
             "state_id": DOMRIA_STATE_ID,
             "city_id": DOMRIA_CITY_ID,
             "page": page,
-            "limit": PAGE_SIZE,
+            "limit": limit,
         })
         return list(data.get("items") or [])
 
     def _card(self, realty_id: int) -> dict:
         return self.fetcher.get_json(CARD.format(realty_id), {"lang_id": 4})
+
+    # Розмір сторінки для переліку ідентифікаторів. API приймає і 500
+    # (заміряно, сторінки не перетинаються), але тут важить не рекорд, а те,
+    # що 8.5 тисяч оголошень перелічуються за пару десятків запитів замість
+    # чотирьохсот. 200 лишає запас на випадок, якщо сайт передумає.
+    ID_PAGE_SIZE = 200
+
+    def iter_ids(self) -> Iterator[str]:
+        """Дешевий перелік: беремо лише ідентифікатори з пошуку.
+
+        Звичайний обхід тягне картку на кожне оголошення — 8.5 тисяч запитів.
+        Для снапшота картки не потрібні зовсім.
+        """
+        page = 0
+        seen: set[str] = set()
+        while page < 200:                      # запобіжник від нескінченної пагінації
+            try:
+                ids = self._search_page(page, limit=self.ID_PAGE_SIZE)
+            except FetchError as e:
+                log.warning("DIM.RIA: перелік, сторінка %d не завантажилась: %s", page, e)
+                return
+            if not ids:
+                return
+            fresh = [str(i) for i in ids if str(i) not in seen]
+            if not fresh:                      # сайт зациклив пагінацію
+                return
+            seen.update(fresh)
+            self.stats["pages"] += 1
+            yield from fresh
+            page += 1
 
     def iter_listings(self) -> Iterator[dict]:
         for page in range(self.start_page, self.cfg.max_pages):

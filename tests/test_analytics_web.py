@@ -91,12 +91,49 @@ def test_filters_combine_and_empty_result_is_explained(client):
     assert "Недостатньо даних" in text or "об'єктів" in text
 
 
-def test_liquidity_block_refuses_until_enough_delistings(client):
-    """Строк продажу не показується, доки зникнень мало — і каже, скільки треба."""
+def test_liquidity_is_either_a_curve_or_a_numbered_refusal(client):
+    """Два допустимі стани блоку — і в жодному з них немає голої цифри.
+
+    Поки зникнень мало, блок називає, скільки їх ще треба. Коли достатньо —
+    показує криву, але поруч лишає кількість подій і застереження, що
+    зникнення оголошення не дорівнює продажу.
+    """
+    from realty.analytics import cache
+    from realty.analytics.survival import Observation, estimate
+    from realty.db import SessionLocal
+
+    with SessionLocal() as s:
+        universe = cache.get(s).universe
+    result = estimate([Observation(days=o[0], event=o[1], entry=o[2])
+                       for item in universe.items if (o := item.observation)], load())
+
     text = _text(client.get("/analytics").text)
-    assert "Зафіксованих зникнень" in text
-    assert str(load().survival_min_events) in text
-    assert "не обов" in text          # застереження «зникнення ≠ продаж»
+    assert "не обов" in text          # застереження «зникнення ≠ продаж» завжди
+    if result["available"]:
+        assert "зафіксованих зникнень" in text
+        assert str(result["events"]) in text
+        # Крива без кількості спостережень нічого не варта.
+        assert "ще на ринку (враховані)" in text
+    else:
+        assert "Зафіксованих зникнень" in text
+        assert str(load().survival_min_events) in text
+
+
+def test_survival_accounts_for_listings_that_are_still_on_the_market():
+    """Строк продажу рахується методом, що враховує ще не продані об'єкти."""
+    from realty.analytics import cache
+    from realty.analytics.survival import Observation, estimate
+    from realty.db import SessionLocal
+
+    with SessionLocal() as s:
+        universe = cache.get(s).universe
+    observations = [Observation(days=o[0], event=o[1], entry=o[2])
+                    for item in universe.items if (o := item.observation)]
+    result = estimate(observations, load())
+    if not result["available"]:
+        pytest.skip("подій ще замало — блок коректно відмовляється")
+    assert result["censored"] > result["events"], "цензуровані мають бути враховані"
+    assert result["n"] == result["events"] + result["censored"]
 
 
 # --- сторінка об'єкта ---------------------------------------------------------
