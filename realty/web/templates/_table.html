@@ -1,7 +1,9 @@
   {% macro sortable(asc, desc, title) -%}
     {% set nxt = desc if f.sort == asc else asc %}
     {% set on = f.sort in (asc, desc) %}
-    <a class="{{ 'on' if on }}" href="?condition={{ f.condition }}&market={{ f.market }}&source={{ f.source }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&sort={{ nxt }}">
+    {# Зміна сортування повертає на першу сторінку: лишитись на 150-й після
+       перевертання порядку означало б опинитись невідомо де. #}
+    <a class="{{ 'on' if on }}" href="{{ carry(path, dict(f, sort=nxt, page=1)) }}">
       {{ title }}<span class="car">{% if f.sort == asc %}▲{% elif f.sort == desc %}▼{% endif %}</span>
     </a>
   {%- endmacro %}
@@ -101,11 +103,18 @@
       </tbody>
     </table>
 
-    {% if matched > rows|length %}
-      <p class="legend">Показано перші {{ rows|length }} із {{ matched }} — звузьте фільтри, щоб побачити решту.</p>
-    {% endif %}
+    {% include "_pager.html" %}
 
     <p class="legend">
+      {% if collapse %}
+        Одна квартира — один рядок: оголошення про той самий об'єкт із різних
+        майданчиків зведені разом, решту видно на сторінці об'єкта.
+        <a href="{{ carry(path, dict(f, all_ads='1', page=1)) }}">Показати всі оголошення</a>.
+      {% else %}
+        Показано кожне оголошення окремо, тож та сама квартира може траплятись
+        кілька разів.
+        <a href="{{ carry(path, dict(f, all_ads='', page=1)) }}">Згорнути в об'єкти</a>.
+      {% endif %}
       Показані лише записи, що пройшли контроль якості й ще продаються;
       підозрілі, відхилені та зняті з продажу видно на <a href="/status">сторінці стану</a>.
       «Не вказано» означає, що продавець не заповнив це поле в джерелі — сюди не пишуться здогади.

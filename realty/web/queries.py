@@ -12,9 +12,12 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy.orm import aliased
 
-from ..models import Condition, Listing, MarketType, effective_active, is_clean
+from ..models import (
+    CLEAN_STATUSES, Condition, Listing, MarketType, effective_active, is_clean,
+)
 
 # Ціна від найбільшої до найменшої — скрізь і завжди.
 DEFAULT_SORT = "price_desc"
@@ -39,17 +42,59 @@ def order_clause(sort: str):
     Записи без ціни (як і без площі чи дати) завжди йдуть у кінець списку —
     незалежно від напрямку сортування. Інакше при сортуванні за спаданням
     вгорі опинялися б саме ті об'єкти, про які ми знаємо найменше.
+
+    Останнім завжди йде `id` — унікальний ключ. Без нього порядок усередині
+    групи з однаковою ціною не визначений, а таких груп у базі повно: підряд
+    стоять кілька записів по $146 500. База має право віддавати їх щоразу
+    по-різному, і тоді при перелистуванні одні з'являються двічі, інші
+    зникають. Виглядає це як загадковий баг, а насправді — як відсутність
+    другого ключа сортування.
     """
     columns = SORTS.get(sort) or SORTS[DEFAULT_SORT]
     return [c.nullslast() for c in columns] + [Listing.id.desc()]
 
 
+def _keeper_id():
+    """`id` оголошення, яке представляє свій об'єкт у списку.
+
+    Дедуплікація зводить оголошення з різних майданчиків в один об'єкт, але
+    список показував по рядку на кожне оголошення. Через це та сама квартира
+    стояла у видачі тричі — з OLX, LUN і DOM.RIA, — і виглядало це як провал
+    дедуплікації, хоч вона спрацювала.
+
+    Представником беремо найбільший `id` серед склеєних, тобто найсвіжіше з
+    побачених оголошень. Умови якості й актуальності повторені всередині
+    навмисно: якщо представником вибрати запис, який сам не проходить у
+    видачу, об'єкт зник би зі списку цілком.
+    """
+    other = aliased(Listing)
+    return (select(func.max(other.id))
+            .where(other.property_id == Listing.property_id,
+                   other.quality_status.in_(CLEAN_STATUSES),
+                   _active_for(other).is_(True))
+            .correlate(Listing)
+            .scalar_subquery())
+
+
+def _active_for(model):
+    """Та сама умова актуальності, але для довільного псевдоніма таблиці."""
+    return case((model.manual_active.isnot(None), model.manual_active),
+                else_=model.is_active)
+
+
 def listing_query(*, condition: str = "", market: str = "", source: str = "",
                   rooms: str = "", price_min: float | None = None,
                   price_max: float | None = None, sort: str = DEFAULT_SORT,
-                  in_progress: bool | None = None) -> Select:
+                  in_progress: bool | None = None,
+                  collapse: bool = True) -> Select:
     """Базова вибірка оголошень із застосованими фільтрами й сортуванням."""
     stmt = select(Listing).where(is_clean(), effective_active().is_(True))
+
+    if collapse:
+        # Одне оголошення на об'єкт. Умова стоїть у запиті, а не фільтрацією в
+        # пам'яті: від неї залежать і лічильник результатів, і номери сторінок.
+        stmt = stmt.where(or_(Listing.property_id.is_(None),
+                              Listing.id == _keeper_id()))
 
     if in_progress is True:
         stmt = stmt.where(Listing.in_progress.is_(True))

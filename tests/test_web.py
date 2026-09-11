@@ -52,18 +52,33 @@ def test_condition_filter_narrows_results(client):
     assert total > len(rows)
 
 
-def test_page_and_api_share_the_same_row_cap(client):
+def test_api_keeps_its_row_cap(client):
+    """У сторінки тепер перелистування, а в API лишилась стеля на відповідь."""
     from realty.web.app import MAX_ROWS
 
-    assert client.get("/", params={"limit": MAX_ROWS}).status_code == 200
     assert client.get("/api/listings", params={"limit": MAX_ROWS}).status_code == 200
-    assert client.get("/", params={"limit": MAX_ROWS + 1}).status_code == 422
+    assert client.get("/api/listings", params={"limit": MAX_ROWS + 1}).status_code == 422
 
 
-def test_match_count_is_not_the_page_limit(client):
+def test_page_size_is_limited_to_the_offered_values(client):
+    """Довільний розмір сторінки в адресі не має ставати запитом на всю базу."""
+    import re
+
+    from realty.web.pagination import DEFAULT_PAGE_SIZE
+
+    body = client.get("/", params={"per_page": 100000}).text
+    rows = len(re.findall(r'data-id="(\d+)"', body))
+    assert rows <= DEFAULT_PAGE_SIZE
+
+
+def test_summary_shows_how_many_matched_not_how_many_fit(client):
     """Зведення має показувати кількість збігів, а не розмір сторінки."""
-    body = client.get("/", params={"condition": "needs_repair", "limit": 5}).text
-    assert "Показано перші 5 із" in body
+    import re
+
+    body = client.get("/", params={"condition": "needs_repair"}).text
+    m = re.search(r"Показано <b class=\"num\">(\d+)–(\d+)</b>\s*із", body)
+    assert m, "рядок про діапазон має бути на сторінці"
+    assert int(m.group(1)) == 1
 
 
 def test_median_ignores_outlier_pull():

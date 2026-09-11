@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
+from .pagination import DEFAULT_PAGE_SIZE
+
 # Порядок ключів фіксований, щоб адреса не змінювалась від перестановки —
 # інакше однакові вибірки давали б різні посилання.
 LIST_KEYS = ("condition", "market", "source", "rooms",
-             "price_min", "price_max", "sort", "per_page", "page")
+             "price_min", "price_max", "sort", "all_ads", "per_page", "page")
 ANALYTICS_KEYS = ("rooms", "condition", "market")
 
 # Які параметри розуміє кожна сторінка. Сторінка стану не приймає нічого.
@@ -45,6 +47,8 @@ def carry(path: str, state: dict | None) -> str:
             continue
         # Перша сторінка й типовий розмір — це і є замовчування, писати їх зайве.
         if key == "page" and str(value) == "1":
+            continue
+        if key == "per_page" and str(value) == str(DEFAULT_PAGE_SIZE):
             continue
         pairs.append((key, value))
     query = urlencode(pairs, doseq=False)

@@ -1,0 +1,59 @@
+{% if pager.total %}
+<nav class="pager" aria-label="Сторінки">
+  <span class="range">
+    Показано <b class="num">{{ pager.first }}–{{ pager.last }}</b>
+    із <b class="num">{{ pager.total | money }}</b>
+  </span>
+
+  <span class="pages">
+    <a class="pg {{ 'off' if not pager.has_prev }}"
+       href="{{ carry(path, dict(f, page=pager.number - 1)) }}"
+       rel="prev" aria-label="Попередня сторінка">←</a>
+
+    {% for n in pager.numbers() %}
+      {% if n is none %}
+        <span class="gap">…</span>
+      {% elif n == pager.number %}
+        <span class="pg on" aria-current="page">{{ n }}</span>
+      {% else %}
+        <a class="pg" href="{{ carry(path, dict(f, page=n)) }}">{{ n }}</a>
+      {% endif %}
+    {% endfor %}
+
+    <a class="pg {{ 'off' if not pager.has_next }}"
+       href="{{ carry(path, dict(f, page=pager.number + 1)) }}"
+       rel="next" aria-label="Наступна сторінка">→</a>
+  </span>
+
+  <form class="jump" method="get" action="{{ path }}">
+    {% for key, value in f.items() %}
+      {% if key not in ('page',) and value %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endif %}
+    {% endfor %}
+    <label>
+      <span>Сторінка</span>
+      <input class="num" type="number" name="page" min="1" max="{{ pager.pages }}"
+             value="{{ pager.number }}" aria-label="Номер сторінки">
+    </label>
+    <span class="of">із {{ pager.pages }}</span>
+    <button type="submit">Перейти</button>
+  </form>
+
+  <form class="size" method="get" action="{{ path }}">
+    {% for key, value in f.items() %}
+      {% if key not in ('per_page', 'page') and value %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endif %}
+    {% endfor %}
+    <label>
+      <span>На сторінці</span>
+      <select name="per_page" onchange="this.form.submit()">
+        {% for size in page_sizes %}
+          <option value="{{ size }}" {{ 'selected' if size == pager.size }}>{{ size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+</nav>
+{% endif %}

@@ -52,6 +52,10 @@
     </label>
 
     <input type="hidden" name="sort" value="{{ f.sort }}">
+    <input type="hidden" name="per_page" value="{{ f.per_page }}">
+    {% if f.all_ads %}<input type="hidden" name="all_ads" value="{{ f.all_ads }}">{% endif %}
+    {# Сторінку навмисно НЕ передаємо: зміна фільтрів має повертати на першу,
+       інакше вибірка з трьох результатів відкривається на 40-й сторінці. #}
     <button class="apply" type="submit">Застосувати</button>
     {# Скидання лишає людину на тій самій сторінці: раніше кнопка вела на «/»
        звідки б її не натиснули, тож зі сторінки «В обробці» вона працювала
