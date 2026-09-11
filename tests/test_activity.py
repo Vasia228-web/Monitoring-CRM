@@ -7,9 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 from fastapi.testclient import TestClient
 
-from realty.verify import (
-    BROWSER_SOURCES, CHECKABLE, MAX_CONSECUTIVE_BLOCKS, classify,
-)
+from realty.verify import HOSTS, MAX_CONSECUTIVE_BLOCKS, classify, host_key
 from realty.web.app import app
 
 
@@ -29,9 +27,21 @@ def test_only_explicit_gone_codes_delist():
 
 def test_blago_is_not_checkable():
     """blago віддає 200 і на живе, і на вигадане планування — сигналу немає."""
-    assert "blago" not in CHECKABLE
-    assert BROWSER_SOURCES <= CHECKABLE
+    assert "blagodeveloper.com" not in HOSTS
     assert MAX_CONSECUTIVE_BLOCKS >= 1
+
+
+def test_queues_are_keyed_by_host_not_by_source():
+    """LUN агрегує OLX, тож його посилання ведуть на чужий сайт.
+
+    Якби черги нарізались за назвою джерела, `lun` і `olx` били б в olx.ua
+    удвічі частіше, ніж передбачає пауза — тобто рівно з тим ризиком
+    блокування, якого ми уникаємо.
+    """
+    lun_to_olx = "https://www.olx.ua/d/uk/obyavlenie/kvartira-IDxxxx.html"
+    own_olx = "https://olx.ua/d/uk/obyavlenie/insha-IDyyyy.html"
+    assert host_key(lun_to_olx) == host_key(own_olx) == "olx.ua"
+    assert host_key("https://rieltor.ua/ivano-frankovsk/flats-sale/view/1/") == "rieltor.ua"
 
 
 def _first_listing_id(client) -> int:

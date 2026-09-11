@@ -110,24 +110,34 @@ def cmd_quality(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     from realty.db import init_db
-    from realty.verify import CHECKABLE, verify_batch
+    from realty.verify import verify_batch
 
     init_db()
     names = [s.strip() for s in args.sources.split(",")] if args.sources else None
     st = verify_batch(limit=args.limit, sources=names)
-    print("\n" + "=" * 52)
+    print("\n" + "=" * 64)
     print("ПЕРЕВІРКА АКТУАЛЬНОСТІ")
-    print("=" * 52)
+    print("=" * 64)
+    print(f"  запитів:           {st['requests']}")
     print(f"  перевірено:        {st['checked']}")
     print(f"  живі:              {st['alive']}")
     print(f"  знято з продажу:   {st['delisted']}")
     print(f"  повернулись:       {st['restored']}")
     print(f"  без висновку:      {st['unknown']}")
-    if st.get("skipped_blocked"):
-        print(f"  пропущено:         {st['skipped_blocked']} "
-              f"(джерело відмовляє: {', '.join(st['blocked_sources'])})")
-    print("=" * 52)
-    print(f"  (blago не перевіряється: сайт не відрізняє видалене планування)")
+    if st["by_host"]:
+        print(f"\n  {'сайт':<16}{'запитів':>9}{'відмов':>9}{'':>4}")
+        for host, h in sorted(st["by_host"].items()):
+            note = "  чергу зупинено" if h["stopped_early"] else ""
+            share = 100 * h["blocked"] / h["requests"] if h["requests"] else 0
+            print(f"  {host:<16}{h['requests']:>9}{h['blocked']:>9}"
+                  f" ({share:.1f}%){note}")
+    if st["by_source"]:
+        print(f"\n  {'джерело':<10}{'перевірено':>11}{'живі':>7}{'знято':>7}{'без висн.':>11}")
+        for name, b in sorted(st["by_source"].items()):
+            print(f"  {name:<10}{b['checked']:>11}{b['alive']:>7}{b['delisted']:>7}"
+                  f"{b['unknown']:>11}")
+    print("=" * 64)
+    print("  (blago не перевіряється: сайт не відрізняє видалене планування)")
     return 0
 
 
