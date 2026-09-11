@@ -58,6 +58,13 @@ MAX_CANDIDATES = 400
 # blago не перевіряється взагалі: сайт віддає 200 і на живе, і на вигадане
 # планування, тож ані перелік, ані поодинокий запит нічого не скажуть.
 ENUMERABLE = {"domria", "lun", "flombu"}
+
+# Як часто має сенс перелічувати кожне джерело. Число підібране під вартість
+# переліку, а не «щоб частіше»: DOM.RIA віддає 8.5 тисяч ідентифікаторів за
+# 43 запити, тож його дешево оновлювати щопрогону й мати затримку виявлення
+# в три години. LUN коштує 223 запити — там доба розумніша за три години.
+MIN_INTERVAL_HOURS = {"domria": 3, "lun": 24, "flombu": 24}
+DEFAULT_INTERVAL_HOURS = 24
 NOT_ENUMERABLE_REASON = {
     "olx": "видача обмежена 25 сторінками (~1100 із 2488) — перелік неповний",
     "blago": "сайт не відрізняє знятого планування від живого",
@@ -198,7 +205,18 @@ def candidate_listing_ids(source: str, external_ids: list[str]) -> list[int]:
                 Listing.is_active.is_(True))).all())
 
 
-def run(sources: list[str] | None = None, confirm: bool = True) -> dict:
+def hours_until_due(source: str) -> float:
+    """Скільки годин лишилось до наступного переліку. 0 — можна зараз."""
+    previous = load(source)
+    if previous is None:
+        return 0.0
+    interval = MIN_INTERVAL_HOURS.get(source, DEFAULT_INTERVAL_HOURS)
+    age = (_now() - previous.taken_at).total_seconds() / 3600
+    return max(0.0, interval - age)
+
+
+def run(sources: list[str] | None = None, confirm: bool = True,
+        force: bool = False) -> dict:
     """Повний цикл: перелічити, порівняти, підтвердити кандидатів запитом.
 
     Повертає звіт із числами по кожному джерелу — скільки запитів витрачено
@@ -216,6 +234,11 @@ def run(sources: list[str] | None = None, confirm: bool = True) -> dict:
             reason = NOT_ENUMERABLE_REASON.get(name, "перелік недоступний")
             report["skipped"][name] = reason
             log.info("%s: різниця списків не застосовна — %s", name, reason)
+            continue
+
+        if not force and (wait := hours_until_due(name)) > 0:
+            report["skipped"][name] = (
+                f"перелік свіжий, наступний через {wait:.1f} год")
             continue
         try:
             current = capture(name)

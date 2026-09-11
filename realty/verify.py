@@ -50,24 +50,41 @@ MAX_CONSECUTIVE_BLOCKS = 5
 
 @dataclass(frozen=True)
 class HostRule:
-    """Правило для одного сайту: пауза між запитами до нього."""
+    """Правило для одного сайту: пауза між запитами й розмір порції.
+
+    Порція своя в кожного не для краси. Там, де зникнення знаходить різниця
+    списків, сліпий обхід — лише підстраховка, і витрачати на неї стільки ж
+    запитів, скільки на сайт без переліку, означає платити ні за що.
+    """
 
     delay: float
+    sweep_limit: int
 
 
 # Паузи підібрані під кожен сайт окремо. Сумарне навантаження на КОЖЕН сайт
 # від паралельної роботи не зростає — черги незалежні, бо й ліміти незалежні.
+# Джерела, за якими стежить різниця списків (`snapshot.ENUMERABLE`). Для них
+# сліпий обхід — підстраховка на випадок, коли оголошення лишилось у видачі,
+# але сторінка вже віддає 404. Дублюється тут навмисно: інакше два модулі
+# імпортували б один одного по колу. Збіг перевіряється тестом.
+SNAPSHOT_COVERED = {"domria", "lun", "flombu"}
+
 HOSTS: dict[str, HostRule] = {
-    "dom.ria.com": HostRule(delay=1.0),
+    # Різницю списків по DOM.RIA коштує 43 запити на 8.5 тисяч оголошень,
+    # тож сліпа черга тут потрібна лише як підстраховка.
+    "dom.ria.com": HostRule(delay=1.0, sweep_limit=40),
     # 3.0, а не менше: заміряно, що при 1.8 с сайт починає віддавати 403 після
     # п'яти запитів поспіль, а при 3.0 с — нуль відмов на тих самих посиланнях
     # (`probes/p_rieltor_403.py`). Стара спільна конфігурація мала 1.5 с, тобто
     # ще агресивніше; це не було видно лише тому, що черга сюди не доходила.
     # Власна пауза на сайт — саме те, заради чого черги нарізані по хостах:
     # вона нікого, крім rieltor.ua, не сповільнює.
-    "rieltor.ua": HostRule(delay=3.0),
-    "olx.ua": HostRule(delay=2.0),
-    "flombu.com": HostRule(delay=1.2),
+    "rieltor.ua": HostRule(delay=3.0, sweep_limit=40),
+    # А ось OLX перелічити не можна — видача обмежена 25 сторінками. Для нього
+    # поодинока черга не підстраховка, а єдиний механізм, тому порція більша:
+    # 200 за прогін × 8 прогонів на добу закривають 2488 оголошень за ~1.6 доби.
+    "olx.ua": HostRule(delay=2.0, sweep_limit=200),
+    "flombu.com": HostRule(delay=1.2, sweep_limit=15),
 }
 
 
@@ -153,13 +170,17 @@ def _order():
     return (
         Listing.check_failures.asc(),
         case((Listing.last_attempt.is_(None), 0), else_=1),
+        # Джерела під наглядом переліку йдуть після решти: там зникнення
+        # знаходить різниця списків, і сліпа перевірка майже не додає знань.
+        case((Listing.source.in_(SNAPSHOT_COVERED), 1), else_=0),
         case((Listing.id.in_(recent_drop), 0), else_=1),
         case((Listing.published_at < old_before, 0), else_=1),
         Listing.last_attempt.asc(),
     )
 
 
-def collect(session, limit_per_host: int, hosts: list[str] | None = None,
+def collect(session, limit_per_host: int | None = None,
+            hosts: list[str] | None = None,
             ids: list[int] | None = None) -> dict[str, list[Candidate]]:
     """Набирає кандидатів і розкладає їх по чергах хостів.
 
@@ -178,12 +199,15 @@ def collect(session, limit_per_host: int, hosts: list[str] | None = None,
         host = host_key(url)
         if host not in wanted or host not in HOSTS:
             continue
+        cap = limit_per_host if limit_per_host is not None else HOSTS[host].sweep_limit
         queue = queues.setdefault(host, [])
-        if ids is None and len(queue) >= limit_per_host:
+        if ids is None and len(queue) >= cap:
             continue
         queue.append(Candidate(listing_id, url, source, host))
-        if ids is None and all(len(q) >= limit_per_host for q in queues.values()) \
-                and len(queues) == len(wanted):
+        if ids is None and len(queues) == len(wanted) and all(
+                len(q) >= (limit_per_host if limit_per_host is not None
+                           else HOSTS[h].sweep_limit)
+                for h, q in queues.items()):
             break
     return queues
 
@@ -216,7 +240,7 @@ def _run_host(queue: list[Candidate], fetcher: Fetcher) -> HostResult:
     return result
 
 
-def verify_batch(limit: int = 200, sources: list[str] | None = None,
+def verify_batch(limit: int | None = None, sources: list[str] | None = None,
                  http: Fetcher | None = None, browser=None,
                  ids: list[int] | None = None, reason: str = "sweep") -> dict:
     """Перевіряє порцію оголошень. `limit` — на кожен сайт, не на всіх разом.

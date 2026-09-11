@@ -170,3 +170,27 @@ def test_sources_without_full_enumeration_are_skipped_explicitly():
     assert "blago" not in snapshot.ENUMERABLE
     assert snapshot.ENUMERABLE == {"domria", "lun", "flombu"}
     assert "25 сторінками" in snapshot.NOT_ENUMERABLE_REASON["olx"]
+
+
+def test_enumeration_interval_matches_its_cost(tmp_path, monkeypatch):
+    """Дешевий перелік оновлюється часто, дорогий — рідше.
+
+    DOM.RIA віддає 8.5 тисяч ідентифікаторів за 43 запити, LUN — за 223.
+    Однаковий інтервал для обох означав би або зайві тисячі запитів на добу,
+    або марно велику затримку виявлення.
+    """
+    assert snapshot.MIN_INTERVAL_HOURS["domria"] < snapshot.MIN_INTERVAL_HOURS["lun"]
+
+    monkeypatch.setattr(snapshot, "DIR", tmp_path)
+    assert snapshot.hours_until_due("domria") == 0.0      # переліку ще не було
+
+    fresh = _snap(n=100)
+    fresh.taken_at = snapshot._now()
+    snapshot.save(fresh)
+    assert snapshot.hours_until_due("domria") > 2.5
+
+    from datetime import timedelta
+    stale = _snap(n=100)
+    stale.taken_at = snapshot._now() - timedelta(hours=5)
+    snapshot.save(stale)
+    assert snapshot.hours_until_due("domria") == 0.0

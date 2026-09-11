@@ -73,9 +73,9 @@ def daily() -> dict:
     from ..verify import verify_batch
 
     log.info("Щоденна рутина: перевірка актуальності та нових записів")
-    # `limit` тепер означає порцію НА КОЖЕН сайт, а не на всіх разом: черги
-    # незалежні, бо й ліміти запитів у сайтів незалежні.
-    fresh = verify_batch(limit=60)
+    # Без `limit` кожен сайт бере свою порцію: там, де зникнення знаходить
+    # різниця списків, сліпий обхід потрібен лише як підстраховка.
+    fresh = verify_batch()
     new_records = revalidate(limit=500)
     return {"routine": "daily", "freshness": fresh, "revalidated": new_records}
 

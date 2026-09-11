@@ -6,7 +6,8 @@
   python cli.py backfill               # дозібрати записи з прогалинами
   python cli.py schedule install       # фоновий розклад (launchd)
   python cli.py dedup                  # звести дублі між сайтами
-  python cli.py verify --limit 200     # перевірити, які оголошення ще живі
+  python cli.py verify                 # перевірити, які оголошення ще живі
+  python cli.py snapshot               # знайти зниклі різницею списків
   python cli.py quality diagnose       # що не так із даними
   python cli.py quality audit          # аудит дедуплікації
   python cli.py serve --port 8000      # веб-інтерфейс
@@ -147,7 +148,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 
     init_db()
     names = [s.strip() for s in args.sources.split(",")] if args.sources else None
-    rep = run(names, confirm=not args.no_confirm)
+    rep = run(names, confirm=not args.no_confirm, force=args.force)
     print("\n" + "=" * 74)
     print("РІЗНИЦЯ СПИСКІВ")
     print("=" * 74)
@@ -330,7 +331,9 @@ def main() -> int:
     ql.set_defaults(func=cmd_quality)
 
     vf = sub.add_parser("verify", help="перевірити, які оголошення ще живі")
-    vf.add_argument("--limit", type=int, default=200, help="скільки перевірити за раз")
+    vf.add_argument("--limit", type=int, default=None,
+                    help="скільки перевірити за раз НА КОЖЕН САЙТ; "
+                         "без цього — власна порція кожного сайту")
     vf.add_argument("--sources", help="через кому; типово — усі, що вміємо перевіряти")
     vf.set_defaults(func=cmd_verify)
 
@@ -339,6 +342,8 @@ def main() -> int:
     sn.add_argument("--sources", help="через кому; типово всі")
     sn.add_argument("--no-confirm", action="store_true",
                     help="лише знайти кандидатів, без поодинокої перевірки")
+    sn.add_argument("--force", action="store_true",
+                    help="перелічити зараз, не чекаючи інтервалу")
     sn.set_defaults(func=cmd_snapshot)
 
     dd = sub.add_parser("dedup", help="звести однакові квартири в майстер-записи")

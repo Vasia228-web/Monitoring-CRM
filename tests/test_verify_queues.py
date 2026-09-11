@@ -373,3 +373,41 @@ def test_hopeless_links_stay_behind_every_priority(session):
     session.commit()
     order = [c.listing_id for c in verify.collect(session, 10)["dom.ria.com"]]
     assert order == [normal.id, hopeless.id]
+
+
+def test_snapshot_covered_sources_match_the_snapshot_module():
+    """Два модулі не імпортують один одного, тож збіг тримає тест."""
+    from realty import snapshot
+
+    assert verify.SNAPSHOT_COVERED == snapshot.ENUMERABLE
+
+
+def test_each_host_has_its_own_sweep_portion(session):
+    """Сайт під наглядом переліку не має з'їдати стільки ж, скільки OLX."""
+    for i in range(300):
+        _add(session, "dom.ria.com", i, source="domria")
+        _add(session, "olx.ua", i, source="olx")
+    session.commit()
+    queues = verify.collect(session)
+    assert len(queues["dom.ria.com"]) == verify.HOSTS["dom.ria.com"].sweep_limit
+    assert len(queues["olx.ua"]) == verify.HOSTS["olx.ua"].sweep_limit
+    assert len(queues["olx.ua"]) > len(queues["dom.ria.com"])
+
+
+def test_explicit_limit_overrides_every_host_portion(session):
+    for i in range(50):
+        _add(session, "olx.ua", i, source="olx")
+    session.commit()
+    assert len(verify.collect(session, limit_per_host=7)["olx.ua"]) == 7
+
+
+def test_sources_watched_by_snapshots_yield_the_queue(session):
+    """Сліпа перевірка витрачається насамперед туди, де переліку немає."""
+    now = verify._now()
+    watched = _add(session, "olx.ua", 1, source="lun", last_attempt=now,
+                   published_at=now - timedelta(days=400))
+    unwatched = _add(session, "olx.ua", 2, source="olx", last_attempt=now,
+                     published_at=now - timedelta(days=1))
+    session.commit()
+    order = [c.listing_id for c in verify.collect(session)["olx.ua"]]
+    assert order == [unwatched.id, watched.id]
