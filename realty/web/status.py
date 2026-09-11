@@ -135,6 +135,35 @@ def api_status():
     return JSONResponse(build_status())
 
 
+@router.get("/api/status/reports")
+def api_reports(limit: int = 50):
+    """Скарги «дані не збігаються» — накопичений список підтверджених помилок.
+
+    По ньому видно, які саме правила класифікації ламаються найчастіше. Це
+    найдешевше джерело для наступних виправлень: показує людина, яка справді
+    відкрила оголошення, а не вибіркова перевірка.
+    """
+    from ..models import DataReport
+
+    with SessionLocal() as s:
+        rows = s.scalars(
+            select(DataReport).where(DataReport.resolved_at.is_(None))
+            .order_by(DataReport.created_at.desc()).limit(min(limit, 200))).all()
+        by_field: dict[str, int] = {}
+        for row in rows:
+            by_field[row.field or "інше"] = by_field.get(row.field or "інше", 0) + 1
+        return JSONResponse({
+            "total": len(rows),
+            "by_field": sorted(by_field.items(), key=lambda kv: -kv[1]),
+            "items": [{
+                "id": r.id, "listing_id": r.listing_id,
+                "property_id": r.property_id, "field": r.field,
+                "created_at": r.created_at.isoformat(),
+                "snapshot": r.snapshot or {},
+            } for r in rows],
+        })
+
+
 @router.get("/api/status/runs")
 def api_runs(limit: int = 20):
     return JSONResponse(ops.recent_runs(min(limit, 100)))

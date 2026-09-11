@@ -223,6 +223,15 @@ th.r,td.r{text-align:right}
         <p class="hint">Рахується з моменту ввімкнення телеметрії. Модель викликається,
           лише коли парсер не дістав ціну, площу або кімнати.</p>
       </div>
+      <div class="panel">
+        <h3>Скарги «дані не збігаються»</h3>
+        <div class="rows" id="r-rows">
+          <div class="row"><span>поки жодної</span><b>—</b></div>
+        </div>
+        <p class="hint">Натискання з картки об'єкта. По цьому списку видно,
+          які правила ламаються найчастіше — це найдешевше джерело для
+          наступних виправлень.</p>
+      </div>
     </div>
   </section>
 
@@ -327,6 +336,20 @@ function render(d){
   }).join("") : `<tr><td colspan="9" style="color:var(--muted);padding:26px;text-align:center">Прогонів ще не було</td></tr>`;
 }
 
+const FIELD_LABEL = {condition: "стан", price: "ціна", rooms: "кімнатність",
+  area: "площа", gone: "вже продано", "інше": "інше"};
+
+function renderReports(d){
+  const rows = $("r-rows");
+  if (!d || !d.total){
+    rows.innerHTML = `<div class="row"><span>поки жодної</span><b>—</b></div>`;
+    return;
+  }
+  rows.innerHTML = d.by_field.map(([field, n]) =>
+    `<div class="row"><span>${FIELD_LABEL[field] || field}</span><b>${n}</b></div>`
+  ).join("") + `<div class="row"><span>усього нерозібраних</span><b>${d.total}</b></div>`;
+}
+
 let timer = null;
 async function refresh(){
   try{
@@ -336,6 +359,10 @@ async function refresh(){
   }catch(e){
     $("stamp").textContent = "не вдалося оновити: " + e.message;
   }
+  try{
+    const r = await fetch("/api/status/reports", {cache: "no-store"});
+    if (r.ok) renderReports(await r.json());
+  }catch(e){ /* скарги — не привід ламати всю сторінку */ }
 }
 
 function toast(text, kind){

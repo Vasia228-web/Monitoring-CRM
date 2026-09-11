@@ -211,6 +211,33 @@ class Property(Base):
                 f"{self.street or '?'} × {self.sources_count} джерел>")
 
 
+class DataReport(Base):
+    """Скарга користувача на те, що дані не збігаються з оголошенням.
+
+    Одне натискання, без форми. Сенс не в тому, щоб завести чергу заявок, а в
+    тому, щоб накопичити список підтверджених помилок: по ньому видно, які
+    саме правила класифікації ламаються найчастіше. Це найдешевше джерело для
+    наступних виправлень — дешевше за будь-який аудит, бо вказує людина, яка
+    справді відкрила оголошення.
+
+    Знімок полів на момент скарги зберігаємо тут же: дані потім зміняться, і
+    без знімка буде незрозуміло, на що саме скаржились.
+    """
+
+    __tablename__ = "data_reports"
+    __table_args__ = (Index("ix_report_listing", "listing_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
+    property_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    # Що саме не збігається, якщо людина уточнила. Порожнє значення — теж
+    # відповідь: «щось не так», і цього досить, щоб запис потрапив у список.
+    field: Mapped[str | None] = mapped_column(String(24))
+    snapshot: Mapped[dict | None] = mapped_column(JSON)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class CheckEvent(Base):
     """Одна перевірка одного оголошення — журнал, що дописується.
 

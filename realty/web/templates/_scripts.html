@@ -21,6 +21,30 @@
     }, 0);
   });
 
+  // «Дані не збігаються»: одне натискання, без форми й без діалогу.
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button.flag');
+    if (!btn) return;
+    btn.disabled = true;
+    fetch('/api/listings/' + btn.dataset.id + '/report', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({field: btn.dataset.field}),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'не вдалося');
+      btn.classList.add('sent');
+      btn.textContent = 'дякую, записав';
+      var row = btn.closest('.report');
+      if (row) row.querySelectorAll('button.flag').forEach(function (b) {
+        if (b !== btn) b.remove();
+      });
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = 'не вдалось';
+      console.error(e);
+    });
+  });
+
   // «Взято в обробку»: статус зберігається в базі, тож переживає перезапуск
   // і видно його з будь-якого пристрою.
   document.addEventListener('click', function (ev) {

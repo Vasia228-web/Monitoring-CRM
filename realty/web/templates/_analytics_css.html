@@ -110,6 +110,15 @@
 .roadmap li:last-child{border-bottom:0}
 .roadmap .mark{color:var(--ok);font-weight:600}
 .roadmap .when{font-variant-numeric:tabular-nums;color:var(--ink)}
+.report{margin:18px 0 0;font-size:13px;color:var(--muted);display:flex;
+  flex-wrap:wrap;gap:7px;align-items:center}
+button.flag{font:inherit;font-size:12.5px;padding:5px 11px;border-radius:999px;
+  cursor:pointer;border:1px solid var(--line);background:var(--card);
+  color:var(--ink-2)}
+button.flag:hover{border-color:var(--warn);color:var(--warn)}
+button.flag:disabled{opacity:.55;cursor:default}
+button.flag.sent{border-color:var(--ok);color:var(--ok);background:var(--card)}
+
 .back{font-size:13.5px;color:var(--muted);text-decoration:none}
 .back:hover{color:var(--accent)}
 a.analyse{color:var(--accent);text-decoration:none}

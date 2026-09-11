@@ -5,8 +5,10 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+import logging
+
+from fastapi import APIRouter, Body, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import func, select
 
 from ..analytics import cache, forecast
@@ -19,9 +21,42 @@ from ..analytics.segments import (
 from ..analytics.settings import load
 from ..analytics.survival import Observation, estimate
 from ..db import SessionLocal
-from ..models import Listing
+from ..models import DataReport, Listing
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+FIELDS = {"condition": "стан", "market": "тип ринку", "rooms": "кімнатність",
+          "area": "площа", "price": "ціна", "gone": "оголошення вже немає",
+          "": "щось не збігається"}
+
+
+@router.post("/api/listings/{listing_id}/report")
+def api_report(listing_id: int, payload: dict = Body(default={})):
+    """«Дані не збігаються» — одне натискання, без форми."""
+    field = (payload.get("field") or "").strip()
+    if field not in FIELDS:
+        return JSONResponse({"ok": False, "error": "невідоме поле"}, status_code=400)
+    with SessionLocal() as s:
+        row = s.get(Listing, listing_id)
+        if row is None:
+            return JSONResponse({"ok": False, "error": "оголошення не знайдено"},
+                                status_code=404)
+        s.add(DataReport(
+            listing_id=row.id, property_id=row.property_id, field=field or None,
+            # Знімок полів: дані потім зміняться, і без нього буде незрозуміло,
+            # на що саме скаржились.
+            snapshot={"price_usd": row.price_usd, "rooms": row.rooms,
+                      "area_total": row.area_total,
+                      "condition": row.condition.value,
+                      "market_type": row.market_type.value,
+                      "source": row.source, "url": row.original_url},
+        ))
+        s.commit()
+    return JSONResponse({"ok": True, "field": field or None,
+                         "label": FIELDS[field]})
 
 
 def _in_work(session) -> int:
@@ -92,13 +127,42 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
     })
 
 
+def _refresh_liveness(session, property_id: int) -> dict:
+    """Перевіряє саме це оголошення просто зараз.
+
+    Один запит у момент, коли він справді потрібен: людина відкрила картку й
+    зараз на неї дивитиметься. Мертве посилання у видачі дратує найбільше саме
+    тут, а черга сліпих перевірок дійде сюди нескоро.
+
+    Заодно піднімаємо об'єкт у черзі: те, що відкривають, варто перевіряти
+    частіше за те, на що ніхто не дивиться.
+    """
+    from ..verify import is_checkable, verify_batch
+
+    ids = [row.id for row in session.scalars(
+        select(Listing).where(Listing.property_id == property_id,
+                              Listing.is_active.is_(True))).all()
+        if is_checkable(row.original_url)]
+    if not ids:
+        return {"checked": 0, "delisted": 0}
+    try:
+        stats = verify_batch(limit=len(ids), ids=ids, reason="opened")
+    except Exception as e:                                      # noqa: BLE001
+        # Сторінка не має падати через те, що джерело не відповіло.
+        log.warning("Перевірка при відкритті %s не вдалась: %s", property_id, e)
+        return {"checked": 0, "delisted": 0}
+    return {"checked": stats["checked"], "delisted": stats["delisted"]}
+
+
 @router.get("/property/{property_id}", response_class=HTMLResponse)
-def property_page(request: Request, property_id: int):
+def property_page(request: Request, property_id: int, verify: str = Query("1")):
     """Аналітика однієї квартири — головна відповідь «краща чи гірша за ринок»."""
     from .app import templates
 
     cfg = load()
     with SessionLocal() as s:
+        if verify != "0":
+            _refresh_liveness(s, property_id)
         snapshot = cache.get(s)
         data = analyse(s, snapshot.universe, property_id, cfg)
         in_work = _in_work(s)

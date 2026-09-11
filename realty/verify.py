@@ -36,7 +36,7 @@ from sqlalchemy import case, func, select
 
 from .db import session_scope
 from .fetcher import Fetcher
-from .models import CheckEvent, Listing, PriceEvent
+from .models import CheckEvent, DataReport, Listing, PriceEvent
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +160,14 @@ def _order():
     now = _now()
     old_before = now - timedelta(days=OLD_LISTING_DAYS)
     drop_after = now - timedelta(days=PRICE_DROP_WINDOW_DAYS)
+    # Оголошення, на які хтось поскаржився або які відкривали. Мертве
+    # посилання дратує найбільше саме там, куди дивляться, тож черга має це
+    # враховувати — сліпий обхід дійде туди нескоро.
+    reported = (
+        select(DataReport.listing_id)
+        .where(DataReport.created_at >= now - timedelta(days=14))
+        .scalar_subquery()
+    )
     recent_drop = (
         select(PriceEvent.listing_id)
         .where(PriceEvent.observed_at >= drop_after)
@@ -173,6 +181,7 @@ def _order():
         # Джерела під наглядом переліку йдуть після решти: там зникнення
         # знаходить різниця списків, і сліпа перевірка майже не додає знань.
         case((Listing.source.in_(SNAPSHOT_COVERED), 1), else_=0),
+        case((Listing.id.in_(reported), 0), else_=1),
         case((Listing.id.in_(recent_drop), 0), else_=1),
         case((Listing.published_at < old_before, 0), else_=1),
         Listing.last_attempt.asc(),
