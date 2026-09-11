@@ -175,3 +175,64 @@ def test_a_failing_source_does_not_break_the_page(client, monkeypatch):
 
     monkeypatch.setattr("realty.verify.verify_batch", boom)
     assert client.get(f"/property/{_checkable_property()}").status_code == 200
+
+
+def test_opening_a_card_counts_as_a_view(client):
+    """Те, на що дивляться, має перевірятись частіше за те, на що ніхто не дивиться."""
+    from sqlalchemy import select as sa_select
+
+    from realty.db import SessionLocal
+
+    pid = _checkable_property()
+    with SessionLocal() as s:
+        before = sum(r.views or 0 for r in s.scalars(
+            sa_select(Listing).where(Listing.property_id == pid)))
+    client.get(f"/property/{pid}", params={"verify": "0"})
+    with SessionLocal() as s:
+        rows = list(s.scalars(sa_select(Listing).where(Listing.property_id == pid)))
+    assert sum(r.views or 0 for r in rows) > before
+    assert all(r.viewed_at is not None for r in rows)
+
+
+def test_recently_viewed_listings_come_before_untouched_ones(tmp_path, monkeypatch):
+    """Популярний об'єкт піднімається в черзі, старий перегляд — ні."""
+    from contextlib import contextmanager
+
+    engine = create_engine(f"sqlite:///{tmp_path/'v.db'}", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def scope():
+        s = Session()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    monkeypatch.setattr(verify, "session_scope", scope)
+    now = verify._now()
+    with Session() as s:
+        untouched = Listing(source="olx", external_id="1", last_attempt=now,
+                            original_url="https://olx.ua/d/uk/obyavlenie/a-IDa.html",
+                            published_at=now - timedelta(days=400))
+        viewed = Listing(source="olx", external_id="2", last_attempt=now,
+                         original_url="https://olx.ua/d/uk/obyavlenie/b-IDb.html",
+                         published_at=now - timedelta(days=1),
+                         views=4, viewed_at=now)
+        stale_view = Listing(source="olx", external_id="3", last_attempt=now,
+                             original_url="https://olx.ua/d/uk/obyavlenie/c-IDc.html",
+                             published_at=now - timedelta(days=1),
+                             views=9,
+                             viewed_at=now - timedelta(days=verify.VIEW_WINDOW_DAYS + 5))
+        s.add_all([untouched, viewed, stale_view])
+        s.commit()
+        ids = {"untouched": untouched.id, "viewed": viewed.id,
+               "stale": stale_view.id}
+        order = [c.listing_id for c in verify.collect(s)["olx.ua"]]
+
+    assert order[0] == ids["viewed"]
+    # Перегляд двотижневої давності нічим не цікавіший за решту: він має
+    # поступитись оголошенню, яке давно на ринку.
+    assert order.index(ids["untouched"]) < order.index(ids["stale"])

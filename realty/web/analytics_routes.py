@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -127,21 +128,34 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
     })
 
 
+def _count_view(session, property_id: int) -> None:
+    """Відмічає, що картку відкривали.
+
+    Лічильник рухає чергу перевірок: те, на що дивляться, варто перевіряти
+    частіше за те, на що ніхто не дивиться. Рахується окремо від самої
+    перевірки — відкриття є фактом незалежно від того, чи ходили ми цього
+    разу на сайт.
+    """
+    now = datetime.now()
+    for row in session.scalars(
+            select(Listing).where(Listing.property_id == property_id)):
+        row.views = (row.views or 0) + 1
+        row.viewed_at = now
+    session.commit()
+
+
 def _refresh_liveness(session, property_id: int) -> dict:
     """Перевіряє саме це оголошення просто зараз.
 
     Один запит у момент, коли він справді потрібен: людина відкрила картку й
-    зараз на неї дивитиметься. Мертве посилання у видачі дратує найбільше саме
-    тут, а черга сліпих перевірок дійде сюди нескоро.
-
-    Заодно піднімаємо об'єкт у черзі: те, що відкривають, варто перевіряти
-    частіше за те, на що ніхто не дивиться.
+    зараз на неї дивитиметься. Мертве посилання дратує найбільше саме тут, а
+    черга сліпих перевірок дійде сюди нескоро.
     """
     from ..verify import is_checkable, verify_batch
 
     ids = [row.id for row in session.scalars(
         select(Listing).where(Listing.property_id == property_id,
-                              Listing.is_active.is_(True))).all()
+                              Listing.is_active.is_(True)))
         if is_checkable(row.original_url)]
     if not ids:
         return {"checked": 0, "delisted": 0}
@@ -161,6 +175,7 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
 
     cfg = load()
     with SessionLocal() as s:
+        _count_view(s, property_id)
         if verify != "0":
             _refresh_liveness(s, property_id)
         snapshot = cache.get(s)

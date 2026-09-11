@@ -309,3 +309,55 @@ def test_past_commissioning_year_is_fine():
     rec = _rec(condition=Condition.RENOVATED, description="Гарна квартира",
                built_year=2021)
     assert validate(rec, _thresholds())[0] == "ok"
+
+
+def test_reclassify_only_fills_gaps_never_overwrites(tmp_path, monkeypatch):
+    """Перекласифікація не має права скасовувати рішення джерела.
+
+    Вона перечитує лише те, що збережено — заголовок, опис, рік. Параметрів
+    картки («Вид об'єкта: Вторинний ринок») у базі немає, тож її здогад
+    слабший за те, що вже стоїть. Перший варіант цієї функції перезаписував
+    усе підряд і за один прогін стер 810 явних заяв джерела.
+    """
+    from contextlib import contextmanager
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from realty.quality import housekeeping
+
+    engine = create_engine(f"sqlite:///{tmp_path/'rc.db'}", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def scope():
+        s = Session()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    monkeypatch.setattr(housekeeping, "session_scope", scope)
+    with Session() as s:
+        # Текст кричить «новобудова», але джерело сказало «вторинний ринок».
+        declared = Listing(source="olx", external_id="1", original_url="https://x/1",
+                           title="Квартира в ЖК Манхеттен, новобудова",
+                           market_type=MarketType.SECONDARY,
+                           condition=Condition.RENOVATED)
+        blank = Listing(source="olx", external_id="2", original_url="https://x/2",
+                        title="Квартира в ЖК Манхеттен, новобудова",
+                        market_type=MarketType.UNKNOWN,
+                        condition=Condition.UNKNOWN)
+        s.add_all([declared, blank])
+        s.commit()
+        ids = (declared.id, blank.id)
+
+    housekeeping.reclassify()
+
+    with Session() as s:
+        kept = s.get(Listing, ids[0])
+        filled = s.get(Listing, ids[1])
+        assert kept.market_type is MarketType.SECONDARY, "рішення джерела скасовано"
+        assert filled.market_type is MarketType.PRIMARY, "порожнє поле не заповнене"

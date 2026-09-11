@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select
 
 from .db import session_scope
 from .fetcher import Fetcher
@@ -136,6 +136,8 @@ OLD_LISTING_DAYS = 45
 # Наскільки недавнє зниження ціни вважаємо сигналом. Падіння ціни — сильний
 # натяк на близьке завершення: продавець поспішає.
 PRICE_DROP_WINDOW_DAYS = 21
+# Скільки днів відкриття картки тримає об'єкт у пріоритеті.
+VIEW_WINDOW_DAYS = 14
 
 
 def _order():
@@ -168,6 +170,9 @@ def _order():
         .where(DataReport.created_at >= now - timedelta(days=14))
         .scalar_subquery()
     )
+    # Нещодавно відкриті. Поріг — саме «недавно»: об'єкт, який дивились
+    # півроку тому, нічим не цікавіший за решту.
+    viewed_after = now - timedelta(days=VIEW_WINDOW_DAYS)
     recent_drop = (
         select(PriceEvent.listing_id)
         .where(PriceEvent.observed_at >= drop_after)
@@ -182,6 +187,8 @@ def _order():
         # знаходить різниця списків, і сліпа перевірка майже не додає знань.
         case((Listing.source.in_(SNAPSHOT_COVERED), 1), else_=0),
         case((Listing.id.in_(reported), 0), else_=1),
+        case((and_(Listing.views > 0, Listing.viewed_at >= viewed_after), 0),
+             else_=1),
         case((Listing.id.in_(recent_drop), 0), else_=1),
         case((Listing.published_at < old_before, 0), else_=1),
         Listing.last_attempt.asc(),

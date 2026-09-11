@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 
 from ..db import SessionLocal, session_scope
-from ..models import Listing
+from ..models import Condition, Listing, MarketType
 from . import audit, diagnose
 from .rules import compute_thresholds, load_thresholds, save_thresholds, validate
 
@@ -73,6 +73,63 @@ def revalidate(limit: int | None = None, thresholds=None) -> dict:
             after[status or "—"] = n
 
     return {"checked": len(rows), "before": before, "after": after}
+
+
+def reclassify(limit: int | None = None) -> dict:
+    """Переставляє стан і тип ринку за поточними правилами.
+
+    Класифікація робиться при зборі, тож виправлене правило саме собою старі
+    записи не чіпає — вони оновляться лише коли оголошення знову трапиться у
+    видачі. Для 15 тисяч записів це тижні, тому є окремий прогін.
+
+    ТІЛЬКИ ДОПОВНЮЄ. Перечитуємо з того, що збережено — заголовок, опис,
+    назву ЖК і рік, — а це менше, ніж бачив парсер під час збору: параметрів
+    картки в базі немає. Тому наше рішення тут СЛАБШЕ за те, що вже стоїть, і
+    перезаписувати ним визначене значення не можна.
+
+    Урок дорогий: перший варіант цієї функції перезаписував усе підряд і за
+    один прогін стер 810 явних «Вторинний ринок», які OLX і DOM.RIA заявили
+    власним полем, підмінивши їх здогадом із тексту. Відновлювати довелось
+    повним перезбором.
+    """
+    from ..normalize import classify_condition, classify_market
+
+    changed = {"condition": 0, "market": 0}
+    before = {"condition": {}, "market": {}}
+    after = {"condition": {}, "market": {}}
+
+    with session_scope() as s:
+        stmt = select(Listing)
+        if limit:
+            stmt = stmt.limit(limit)
+        rows = s.scalars(stmt).all()
+        for row in rows:
+            before["condition"][row.condition.value] = \
+                before["condition"].get(row.condition.value, 0) + 1
+            before["market"][row.market_type.value] = \
+                before["market"].get(row.market_type.value, 0) + 1
+
+            market = classify_market(row.title, row.description, row.complex_name,
+                                     built_year=row.built_year)
+            condition = classify_condition(row.title, row.description,
+                                           market=market)
+            # Заповнюємо лише порожнє. Значення, яке вже стоїть, могло прийти
+            # з поля самого сайту — а його в базі немає, тож ми не в змозі
+            # відтворити це рішення й не маємо права його скасовувати.
+            if row.market_type is MarketType.UNKNOWN and market is not MarketType.UNKNOWN:
+                row.market_type = market
+                changed["market"] += 1
+            if row.condition is Condition.UNKNOWN and condition is not Condition.UNKNOWN:
+                row.condition = condition
+                changed["condition"] += 1
+
+            after["condition"][row.condition.value] = \
+                after["condition"].get(row.condition.value, 0) + 1
+            after["market"][row.market_type.value] = \
+                after["market"].get(row.market_type.value, 0) + 1
+
+    return {"checked": len(rows), "changed": changed,
+            "before": before, "after": after}
 
 
 def daily() -> dict:

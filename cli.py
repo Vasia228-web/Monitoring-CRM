@@ -57,6 +57,20 @@ def cmd_quality(args: argparse.Namespace) -> int:
     init_db()
     action = args.action
 
+    if action == "reclassify":
+        st = housekeeping.reclassify()
+        print(f"\nПЕРЕКЛАСИФІКАЦІЯ: перевірено {st['checked']}")
+        print(f"  змінено стан:  {st['changed']['condition']}")
+        print(f"  змінено ринок: {st['changed']['market']}")
+        for field in ("condition", "market"):
+            print(f"\n  {field}:")
+            keys = sorted(set(st["before"][field]) | set(st["after"][field]))
+            for k in keys:
+                b, a = st["before"][field].get(k, 0), st["after"][field].get(k, 0)
+                mark = "" if a == b else f"  ({a - b:+d})"
+                print(f"    {k:<14} {b:>6} → {a:>6}{mark}")
+        return 0
+
     if action == "diagnose":
         d = diagnose.run()
         print(json.dumps(d, ensure_ascii=False, indent=1, default=str))
@@ -325,7 +339,8 @@ def main() -> int:
 
     ql = sub.add_parser("quality", help="контроль якості даних")
     ql.add_argument("action", choices=("diagnose", "thresholds", "revalidate",
-                                       "audit", "daily", "weekly", "monthly"))
+                                       "reclassify", "audit", "daily", "weekly",
+                                       "monthly"))
     ql.add_argument("--limit", type=int, help="скільки записів обробити")
     ql.add_argument("--recompute", action="store_true", help="перерахувати пороги")
     ql.set_defaults(func=cmd_quality)

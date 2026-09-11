@@ -177,3 +177,59 @@ def test_unbuilt_without_any_repair_claim_is_still_needs_repair():
     """Правило про сирець у новобудові лишилось там, де воно обґрунтоване."""
     txt = "Продається квартира від забудовника. Здача ЖК заявлена в 1 кварталі 2028 року."
     assert classify_condition(txt, market=MarketType.PRIMARY) is Condition.NEEDS_REPAIR
+
+
+# --- тип ринку: за силою доказу -----------------------------------------------
+
+def test_explicit_secondary_beats_the_weak_new_building_hint():
+    """Пряма згадка вторинного ринку сильніша за слово «ЖК».
+
+    Саме тут була вада: «ЖК» стояло першим у перевірках і перемагало
+    конкретну згадку. Оголошення «квартира в ЖК, житловий фонд від 2011 р.»
+    ішло як новобудова, хоч будинку півтора десятка років.
+    """
+    assert classify_market("Квартира в ЖК, житловий фонд від 2011 р.") is MarketType.SECONDARY
+    assert classify_market("Новобудова, житловий фонд від 2011 р.") is MarketType.SECONDARY
+    assert classify_market("Новобудова, вторинний ринок") is MarketType.SECONDARY
+    assert classify_market("Квартира в ЖК, хрущовка") is MarketType.SECONDARY
+
+
+def test_newest_housing_stock_category_is_not_a_build_year():
+    """«Житловий фонд ВІД 2021 р.» — категорія «2021 і новіші», а не дата здачі.
+
+    Прочитати цей рік як «збудовано 2021, отже старий» означало б оголосити
+    понад тисячу новобудов вторинкою.
+    """
+    assert classify_market("Житловий фонд від 2021 р.") is not MarketType.SECONDARY
+    assert classify_market("Житловий фонд 2021-2025, від забудовника") is MarketType.PRIMARY
+
+
+def test_build_year_stays_the_last_argument():
+    """Рік здачі сам по собі не каже, хто продає.
+
+    Спокуса поставити його вище велика — це ж факт. Але об'єкти, яких він
+    перекидав би у вторинку (будинки 2019–2023), коштують як новобудови:
+    1162 за м² проти 1209 у новобудов і 1583 у вторинки. Великі комплекси
+    продаються забудовником роками після здачі.
+    """
+    assert classify_market("Квартира в новобудові", built_year=2019) is MarketType.PRIMARY
+    # А без жодної згадки в тексті рік лишається єдиним, що в нас є.
+    assert classify_market("Продається квартира", built_year=2005) is MarketType.SECONDARY
+    assert classify_market("Продається квартира", built_year=2026) is MarketType.PRIMARY
+
+
+def test_complex_name_alone_still_means_primary():
+    """Слабка ознака лишається в справі — на даних вона себе виправдовує.
+
+    Медіана за м² у групі «тільки ЖК» (1955 / 1866 / 1828 для 1–3 кімнат) вища
+    за явну вторинку (1804 / 1534 / 1190) і не нижча за явну новобудову. Ці
+    об'єкти поводяться як первинний ринок, тож викидати ознаку не можна —
+    вона просто має поступатися конкретним фактам.
+    """
+    assert classify_market("Квартира в ЖК Манхеттен") is MarketType.PRIMARY
+    assert classify_market("Продається квартира в новобудові") is MarketType.PRIMARY
+
+
+def test_no_signal_stays_unknown():
+    assert classify_market("Продається квартира в центрі") is MarketType.UNKNOWN
+    assert classify_market("") is MarketType.UNKNOWN
