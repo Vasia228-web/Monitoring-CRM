@@ -142,7 +142,7 @@ def test_estimate_returns_curve_once_events_are_enough():
     assert result["available"] is True
     assert result["events"] >= 50
     assert abs(result["median_days"] - TRUE_MEDIAN) < 0.2 * TRUE_MEDIAN
-    assert "не обов'язково продаж" in result["disclaimer"]
+    assert "не обов'язково продано" in result["disclaimer"]
 
 
 # --- відкладений вхід (ліве зрізання) -----------------------------------------

@@ -19,8 +19,9 @@ from .survival import Observation, estimate
 
 # Спостереження почалось разом із системою, а не з появою оголошення. Тому
 # «перша ціна» — це перша ціна, яку побачили МИ, і підпис має це говорити.
-FIRST_PRICE_NOTE = ("Перша ціна, яку зафіксувала система, а не перша ціна "
-                    "об'єкта в історії: спостереження почалось {since}.")
+FIRST_PRICE_NOTE = ("Це перша ціна, яку ми побачили, — ми стежимо за цією "
+                    "квартирою з {since}. Скільки вона коштувала раніше, "
+                    "ми не знаємо.")
 
 
 def _now() -> datetime:
@@ -77,9 +78,9 @@ def price_history(session, property_id: int) -> dict:
         "single_point": changes == 0,
         "note": FIRST_PRICE_NOTE.format(since=first["at"].strftime("%d.%m.%Y")),
         "multi_note": (
-            "Записи з різних майданчиків ідуть спільною стрічкою, але відсоток "
-            "рахується всередині одного оголошення: поява об'єкта на другому "
-            "сайті — не зміна ціни продавцем."
+            "Тут зібрані ціни з кількох сайтів. Відсоток показуємо лише тоді, "
+            "коли ціну змінили в тому самому оголошенні: поява квартири на "
+            "другому сайті — це не зміна ціни продавцем."
         ) if len(previous) > 1 else None,
     }
 
@@ -120,12 +121,12 @@ def days_on_market(universe: Universe, item: Item, cfg: Settings | None = None) 
     cfg = cfg or load()
     if item.days_listed is None:
         return {"available": False,
-                "message": "Дата публікації невідома — вік оголошення не порахувати."}
+                "message": "Невідомо, коли оголошення з'явилось."}
     comparison = compare(universe, item, cfg, value=lambda o: o.days_listed,
                          sided="upper")
     if comparison is None:
         return {"available": False, "days": round(item.days_listed),
-                "message": "Замало схожих об'єктів, щоб порівняти вік оголошення."}
+                "message": "Схожих квартир у базі надто мало, щоб порівняти."}
     return {
         "available": True,
         "days": round(item.days_listed),
@@ -134,7 +135,8 @@ def days_on_market(universe: Universe, item: Item, cfg: Settings | None = None) 
         "delta_pct": diff_pct(item.days_listed, comparison.median),
         "n": comparison.n, "label": comparison.label,
         "longer": item.days_listed > comparison.median,
-        "note": "Вік оголошення, а не строк продажу: об'єкт ще на ринку.",
+        "note": "Це скільки квартира вже продається, а не скільки "
+                "продаватиметься: вона ще в продажу.",
     }
 
 
@@ -149,7 +151,7 @@ def liquidity(universe: Universe, item: Item, cfg: Settings | None = None) -> di
                          sided="upper")
     if comparison is None:
         return {"available": False, "events": 0, "needed": cfg.survival_min_events,
-                "message": "Замало схожих об'єктів для оцінки ліквідності."}
+                "message": "Схожих квартир надто мало, щоб про це говорити."}
     peers = [o for o in universe.items
              if o.band == item.band and o.condition == item.condition
              and o.market == item.market]
@@ -178,8 +180,8 @@ def analyse(session, universe: Universe, property_id: int,
         "item": item,
         "verdict": market_verdict,
         "no_verdict_reason": None if market_verdict else (
-            "Замало схожих об'єктів навіть у найширшому сегменті — "
-            f"поріг {cfg.min_sample} об'єктів не набирається."),
+            "Схожих квартир у базі надто мало, щоб порівнювати — "
+            f"треба хоча б {cfg.min_sample}."),
         "price_band": {
             "median": round(price_comparison.median),
             "q1": round(price_comparison.summary.q1),

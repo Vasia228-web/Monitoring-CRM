@@ -16,8 +16,10 @@ from ..analytics import cache, forecast
 from ..analytics.inventory import check_rate
 from ..analytics.objects import analyse
 from ..analytics.segments import (
-    COND_LABEL, MARKET_LABEL, days_distribution, liquidity_proxy,
-    primary_vs_secondary, rooms_label,
+    COND_LABEL, MARKET_LABEL, by_condition, by_market, by_rooms,
+    days_by_condition, days_distribution, headline_condition, headline_days,
+    headline_market, headline_rooms,
+    liquidity_proxy, primary_vs_secondary, rooms_label,
 )
 from ..analytics.settings import load
 from ..analytics.survival import Observation, estimate
@@ -94,8 +96,7 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
     pairs = [r for r in primary_vs_secondary(universe, cfg)
              if (not rooms or str(r["rooms"] or "") == rooms)
              and (not condition or r["condition"] == condition)]
-    days = _filtered(days_distribution(universe, cfg),
-                     rooms=rooms, condition=condition, market=market)
+    day_rows = days_by_condition(universe, cfg)
     proxy = _filtered(liquidity_proxy(universe, cfg),
                       rooms=rooms, condition=condition, market=market)
 
@@ -108,13 +109,31 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
     liquidity = estimate([Observation(days=obs[0], event=obs[1], entry=obs[2])
                           for o in peers if (obs := o.observation) is not None], cfg)
 
+    # Прості зрізи для сторінки: один графік — одна думка. Складені сегменти
+    # лишаються для порівняння конкретної квартири, де вони й потрібні.
+    cuts = [
+        {"key": "rooms", "rows": by_rooms(universe, cfg),
+         "title": headline_rooms(by_rooms(universe, cfg)),
+         "note": "Менша квартира зазвичай дорожча за метр — так на ринку "
+                 "буває завжди."},
+        {"key": "condition", "rows": by_condition(universe, cfg),
+         "title": headline_condition(by_condition(universe, cfg)),
+         "note": "Порівняні тільки ті квартири, де стан вказано прямо."},
+        {"key": "market", "rows": by_market(universe, cfg),
+         "title": headline_market(by_market(universe, cfg)),
+         "note": "Новобудовою вважаємо квартиру, яку так назвав сам продавець "
+                 "або майданчик."},
+    ]
+    cuts = [c for c in cuts if len(c["rows"]) >= 2]
+
     covered = sum(r["n"] for r in segments)
     return templates.TemplateResponse(request, "analytics.html", {
         "page": "analytics", "in_work": in_work, "path": "/analytics",
-        "segments": segments, "pairs": pairs, "days": days,
+        "segments": segments, "pairs": pairs,
         "sources": snapshot.sources_matched,
         "composition": snapshot.sources_composition,
         "below": snapshot.below, "covered": covered, "liquidity": liquidity,
+        "cuts": cuts, "days": day_rows, "days_title": headline_days(day_rows),
         "sweep": sweep, "proxy": proxy,
         "universe_size": len(universe),
         "forecast": forecast_state,

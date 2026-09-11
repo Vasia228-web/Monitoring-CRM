@@ -65,6 +65,7 @@ def _plural(count, one: str, few: str, many: str) -> str:
 
 from .navstate import carry, reset_url  # noqa: E402
 from .pagination import PAGE_SIZES, build as build_page  # noqa: E402
+from ..quality.rules import SEGMENT_MIN_SAMPLE, load_thresholds  # noqa: E402
 
 # Доступні в кожному шаблоні: навігація має нести стан, а не скидати його.
 templates.env.globals["carry"] = carry
@@ -173,6 +174,29 @@ def _stats(session) -> dict:
     }
 
 
+def _peer_comparison(row, thresholds) -> dict:
+    """Наскільки об'єкт дорожчий або дешевший за схожі.
+
+    «Схожі» — та сама кімнатність, стан і тип ринку. Якщо таких у базі замало,
+    чесна відповідь — «мало схожих квартир», а не число з нізвідки. Раніше
+    порівняння йшло з медіаною по всій базі, і кожен рядок виходив «вище
+    медіани»: однокімнатна з ремонтом у новобудові порівнювалась із
+    трикімнатним сирцем на вторинці.
+    """
+    value = row.price_per_sqm
+    if not value:
+        return {"known": False, "reason": "немає ціни за м²"}
+    key = thresholds.segment_key({"rooms": row.rooms, "condition": row.condition,
+                                  "market_type": row.market_type})
+    entry = thresholds.segment_median_sqm.get(key)
+    if not entry or entry.get("n", 0) < SEGMENT_MIN_SAMPLE or not entry.get("median"):
+        return {"known": False, "reason": "мало схожих квартир для порівняння"}
+    delta = round(100 * (value / entry["median"] - 1))
+    return {"known": True, "delta": delta, "n": entry["n"],
+            "median": round(entry["median"]),
+            "direction": "дорожче" if delta > 0 else "дешевше" if delta < 0 else "як у схожих"}
+
+
 def _render_list(request: Request, template: str, *, in_progress: bool | None,
                  condition: str, market: str, source: str, rooms: str,
                  price_min: str | None, price_max: str | None, sort: str,
@@ -188,6 +212,12 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         lo = hi = None
 
     collapse = all_ads != "1"
+    # Відхилення ціни за м² рахується в межах сегмента, а не по всій базі.
+    # Медіана по всій базі змішує однокімнатні з п'ятикімнатними, новобудови
+    # з сирцем і ремонт із його відсутністю — через це кожен рядок показував
+    # «+55%», «+76%», і цифра переставала щось означати: якщо всі вище
+    # медіани, це вже не порівняння.
+    thresholds = load_thresholds()
     stmt = listing_query(condition=condition, market=market, source=source,
                          rooms=rooms, price_min=lo, price_max=hi, sort=sort,
                          in_progress=in_progress, collapse=collapse)
@@ -201,8 +231,10 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         stats = _stats(s)
         in_work = s.scalar(select(func.count()).select_from(Listing)
                            .where(Listing.in_progress.is_(True))) or 0
+    peers = {row.id: _peer_comparison(row, thresholds) for row in rows}
     return templates.TemplateResponse(request, template, {
         "rows": rows, "stats": stats, "sources": sorted(stats["by_source"]),
+        "peers": peers,
         "matched": matched, "warning": warning, "pager": pager,
         "page_sizes": PAGE_SIZES, "collapse": collapse,
         "in_work": in_work,

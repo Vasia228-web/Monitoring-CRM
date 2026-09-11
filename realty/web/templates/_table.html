@@ -40,11 +40,17 @@
             <div class="sqm num">
               {% if r.price_per_sqm %}
                 ${{ r.price_per_sqm | money }}
-                {% if stats.median_sqm %}
-                  {% set dev = ((r.price_per_sqm - stats.median_sqm) / stats.median_sqm * 100) | round | int %}
-                  {% if dev <= -10 or dev >= 10 %}
-                    <span class="dev">{{ '+' if dev > 0 }}{{ dev }}% від медіани</span>
+                {% set p = peers.get(r.id) %}
+                {% if p and p.known %}
+                  {% if p.delta >= 8 %}
+                    <span class="dev up">↑ на {{ p.delta }}% дорожче за схожі</span>
+                  {% elif p.delta <= -8 %}
+                    <span class="dev down">↓ на {{ -p.delta }}% дешевше за схожі</span>
+                  {% else %}
+                    <span class="dev same">як у схожих</span>
                   {% endif %}
+                {% elif p %}
+                  <span class="dev none">{{ p.reason }}</span>
                 {% endif %}
               {% else %}—{% endif %}
             </div>
@@ -118,7 +124,9 @@
       Показані лише записи, що пройшли контроль якості й ще продаються;
       підозрілі, відхилені та зняті з продажу видно на <a href="/status">сторінці стану</a>.
       «Не вказано» означає, що продавець не заповнив це поле в джерелі — сюди не пишуться здогади.
-      Відсоток біля ціни за м² показує відхилення від медіани по всій базі.
+      Порівняння біля ціни за м² — зі схожими квартирами: та сама кімнатність,
+      стан і тип ринку. Якщо таких у базі менше тридцяти, показуємо це прямо,
+      а не вигадуємо число.
     </p>
   {% else %}
     <div class="empty">

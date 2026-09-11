@@ -17,8 +17,11 @@ from dataclasses import dataclass
 
 from .settings import Settings, load
 
-DISCLAIMER = ("Зникнення оголошення — не обов'язково продаж: власник міг "
-              "передумати або оголошення протермінувалось.")
+# Одне просте речення, яке лишається поруч із цифрами завжди. Прибрати його
+# разом із термінологією було б помилкою: воно не про метод, а про те, що
+# цифра означає насправді.
+DISCLAIMER = ("Оголошення зникло — не обов'язково продано: власник міг "
+              "передумати або просто зняти оголошення.")
 
 
 @dataclass(frozen=True)
@@ -151,10 +154,9 @@ def estimate(observations: list[Observation], cfg: Settings | None = None) -> di
             "available": False, "events": events, "needed": cfg.survival_min_events,
             "n": len(observations),
             "message": (
-                f"Строк продажу поки не рахується: потрібно щонайменше "
-                f"{cfg.survival_min_events} зафіксованих зникнень оголошення, "
-                f"зараз їх {events}. Крива виживання по такій кількості подій "
-                f"була б плоскою лінією без змісту."),
+                f"Щоб сказати це надійно, треба побачити, як "
+                f"{cfg.survival_min_events} квартир зникли з продажу. "
+                f"Поки бачили {events}."),
             "disclaimer": DISCLAIMER,
         }
     median = curve.quantile(0.5)
@@ -173,9 +175,9 @@ def estimate(observations: list[Observation], cfg: Settings | None = None) -> di
         "horizon_days": round(horizon),
         "median_days": round(median) if median is not None else None,
         "median_note": None if median is not None else
-        (f"Медіанного строку поки не видно: зникло лише "
-         f"{round(100 * curve.events / curve.n, 1)}% об'єктів, і крива ще не "
-         f"опустилась до половини. Контрольні точки нижче вже осмислені."),
+        (f"Скільки часу займає продаж, поки сказати не можемо: з продажу зникло "
+         f"лише {round(100 * curve.events / curve.n, 1)}% квартир. Але те, що "
+         f"нижче, вже має сенс."),
         "q25_days": (lambda v: round(v) if v is not None else None)(curve.quantile(0.25)),
         "curve": [{"day": p.time, "survival": p.survival,
                    "low": p.low, "high": p.high, "at_risk": p.at_risk}

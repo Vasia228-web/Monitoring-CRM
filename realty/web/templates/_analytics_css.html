@@ -132,3 +132,45 @@ a.analyse:hover{text-decoration:underline}
   .tl .d{grid-column:1/-1}
 }
 </style>
+
+/* ---------- подача графіків ---------- */
+/* Єдина палітра: один акцент на всі графіки, без строкатості. Значення
+   ніколи не передається самим лише кольором — поруч завжди число, стрілка
+   або підпис, бо частина людей відтінків не розрізняє. */
+.chart{margin-top:46px}
+.chart > h2{font-size:22px;font-weight:640;letter-spacing:-.02em;
+  line-height:1.28;margin:0 0 18px;max-width:22ch;color:var(--ink)}
+.chart .said{margin:14px 0 0;font-size:14px;color:var(--ink-2);
+  line-height:1.6;max-width:70ch}
+
+/* Стовпчики: суцільна заливка — типова ціна, світліша смуга — розкид. */
+.bars.big .bar{padding:13px 0}
+.bars .track{position:relative;height:26px;background:var(--line-2);
+  border-radius:6px;overflow:hidden}
+.bars.big .track{height:34px}
+.bars .fill{position:absolute;inset:0 auto 0 0;background:var(--accent);
+  border-radius:6px;transform-origin:left center;
+  animation:grow .5s cubic-bezier(.2,.8,.25,1) both;
+  animation-delay:calc(var(--i, 0) * 55ms)}
+.bars .spread{position:absolute;top:0;bottom:0;border-radius:6px;
+  background:color-mix(in srgb, var(--accent) 26%, transparent);
+  outline:1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  outline-offset:-1px}
+@keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@media (prefers-reduced-motion:reduce){.bars .fill{animation:none}}
+
+.bars .val{font-size:19px;font-weight:650;letter-spacing:-.02em}
+.bars.big .val{font-size:23px}
+.bars .name b{font-size:15px}
+.bars .name{font-size:12.5px;color:var(--muted)}
+
+.grid .nodata{color:var(--muted)}
+.grid td small{font-size:11px;color:var(--muted);font-weight:400;display:block}
+
+@media (max-width:820px){
+  /* Не горизонтальна прокрутка, а перебудова: підпис зверху, стовпчик під ним. */
+  .chart > h2{font-size:19px;max-width:none}
+  .bars .bar{grid-template-columns:1fr auto;gap:6px 12px}
+  .bars .track{grid-column:1/-1;order:3}
+  .bars .val{font-size:20px}
+}

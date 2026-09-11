@@ -26,11 +26,11 @@
       {{ 'дорожче за схожі' if up else 'дешевше за схожі' if verdict.delta_pct < 0 else 'на рівні ринку' }}
     </div>
     <p class="what">
-      ${{ item.ppsqm | round | int | money }} за м² проти медіани
-      ${{ verdict.median | round | int | money }} у схожих об'єктів.
-      {% if verdict.percentile >= 50 %}Дорожче за {{ verdict.percentile }}%
-      {%- else %}Дешевше за {{ (100 - verdict.percentile) | round(1) }}%{% endif %}
-      об'єктів сегмента.
+      ${{ item.ppsqm | round | int | money }} за метр. У схожих квартир —
+      близько ${{ verdict.median | round | int | money }}.
+      {% if verdict.percentile >= 50 %}Дорожча за {{ verdict.percentile | round | int }}
+      {%- else %}Дешевша за {{ (100 - verdict.percentile) | round | int }}{% endif %}
+      зі ста схожих.
     </p>
 
     {% if price_band %}
@@ -48,29 +48,27 @@
         <span>${{ hi | round | int | money }}</span>
       </div>
       <p class="scale-note">
-        Середня половина схожих об'єктів коштує
-        ${{ price_band.q1 | money }} – ${{ price_band.q3 | money }},
-        медіана ${{ price_band.median | money }} · {{ price_band.n }}
-        {{ price_band.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}
+        Більшість схожих квартир коштує від
+        <b>${{ price_band.q1 | money }}</b> до <b>${{ price_band.q3 | money }}</b>.
+        Порахували по {{ price_band.n | money }}
+        {{ price_band.n | plural('квартирі', 'квартирах', 'квартирах') }}.
       </p>
     {% endif %}
 
     <p class="seg-note">
-      Порівняння в сегменті: <b>{{ verdict.label }}</b> — {{ verdict.n }} {{ verdict.n | plural('об\'єкт', 'об\'єкти', 'об\'єктів') }}.
+      Порівняли зі схожими: <b>{{ verdict.label }}</b> — {{ verdict.n | money }} {{ verdict.n | plural('квартира', 'квартири', 'квартир') }}.
       {% if verdict.level in ('area', 'area_wide', 'district_area') %}
-        Смуга площі врахована навмисно: ціна за м² залежить від розміру квартири
-        навіть усередині однієї кімнатності.
+        Брали квартири схожої площі: менша квартира майже завжди дорожча за метр.
       {% elif verdict.level == 'base' %}
-        Район не врахований — у цьому районі замає схожих об'єктів для окремої статистики.
+        Район не враховували — таких квартир саме в цьому районі надто мало.
       {% elif verdict.level in ('rooms', 'rooms_market') %}
-        Це найширший рівень порівняння: вужчі сегменти не набрали
-        {{ cfg.min_sample }} об'єктів.
+        Це найширше коло порівняння: точніших схожих квартир у базі бракує.
       {% endif %}
     </p>
   </div>
 {% else %}
   <div class="gap">
-    <span class="badge">Недостатньо даних</span>
+    <span class="badge">Поки мало даних</span>
     <p>{{ no_verdict_reason }}</p>
   </div>
 {% endif %}
@@ -86,24 +84,24 @@
     <span class="k">{{ history.changes | plural('зміна', 'зміни', 'змін') }} ціни зафіксовано</span></div>
 </div>
 
-{# --- вік проти сегмента --- #}
+{# --- скільки продається проти схожих --- #}
 <section class="sect">
-  <h2>Скільки висить проти схожих</h2>
+  <h2>Скільки вже продається</h2>
   {% if age.available %}
     <p class="cap">
-      Об'єкт на ринку <b>{{ age.days }} днів</b>, медіана схожих —
-      <b>{{ age.median }} днів</b> (середня половина: {{ age.q1 }}–{{ age.q3 }}).
-      Порівняння на {{ age.n }} {{ age.n | plural('об\'єкті', 'об\'єктах', 'об\'єктах') }}: {{ age.label }}.
+      Ця квартира продається <b>{{ age.days | money }} {{ age.days | plural('день','дні','днів') }}</b>,
+      схожі — зазвичай <b>{{ age.median | money }} {{ age.median | plural('день','дні','днів') }}</b>.
+      Порахували по {{ age.n | money }} {{ age.n | plural('квартирі','квартирах','квартирах') }}.
     </p>
     {% set amax = [age.q3, age.days, age.median] | max %}
     <div class="bars">
       <div class="bar">
-        <span class="name"><b>цей об'єкт</b></span>
+        <span class="name"><b>ця квартира</b></span>
         <span class="track"><i class="you med" style="left:{{ (100 * age.days / amax) | round(1) }}%"></i></span>
         <span class="val num">{{ age.days }} дн.</span>
       </div>
       <div class="bar">
-        <span class="name"><b>схожі об'єкти</b>медіана й розмах</span>
+        <span class="name"><b>схожі квартири</b>звичайний строк</span>
         <span class="track">
           <i class="iqr" style="left:{{ (100 * age.q1 / amax) | round(1) }}%;
              width:{{ (100 * (age.q3 - age.q1) / amax) | round(1) }}%"></i>
@@ -114,12 +112,11 @@
     </div>
     <p class="legend">
       {{ age.note }}
-      {% if age.longer %}Висить довше за медіану — сигнал, що ціна може бути завищена
-      або попит на такий об'єкт нижчий.{% else %}Висить менше за медіану —
-      робити з цього висновок про попит поки рано.{% endif %}
+      {% if age.longer %}Продається довше за схожі — часто це ознака завищеної
+      ціни.{% else %}Продається не довше за схожі.{% endif %}
     </p>
   {% else %}
-    <div class="gap"><span class="badge">Недостатньо даних</span><p>{{ age.message }}</p></div>
+    <div class="gap"><span class="badge">Поки мало даних</span><p>{{ age.message }}</p></div>
   {% endif %}
 </section>
 
@@ -128,7 +125,7 @@
   <h2>Історія ціни</h2>
   {% if history.points %}
     <p class="cap">
-      Усі зафіксовані ціни по всіх оголошеннях цього об'єкта разом.
+      Усі ціни, які ми бачили, з усіх оголошень про цю квартиру.
       {% if history.change_pct %}
         Від першої зафіксованої ціни —
         <b>{{ '+' if history.change_pct > 0 }}{{ history.change_pct }}%</b>.
@@ -155,22 +152,21 @@
       {{ history.note }}
       {% if history.multi_note %} {{ history.multi_note }}{% endif %}
       {% if history.single_point %}
-        Жодне з оголошень не міняло ціну за час спостереження — це набір точок,
-        а не лінія тренду. Динаміка з'явиться, коли накопичаться зміни.
+        Ціну поки жодного разу не міняли — показувати тут ще нічого.
       {% endif %}
     </p>
   {% else %}
-    <div class="gap"><span class="badge">Недостатньо даних</span>
-      <p>Для цього об'єкта не зафіксовано жодної ціни.</p></div>
+    <div class="gap"><span class="badge">Поки мало даних</span>
+      <p>Для цієї квартири ми ще не бачили жодної ціни.</p></div>
   {% endif %}
 </section>
 
 {# --- джерела --- #}
 <section class="sect">
-  <h2>Той самий об'єкт на майданчиках</h2>
+  <h2>Та сама квартира на різних сайтах</h2>
   {% if sources.count > 1 %}
     <p class="cap">
-      Оголошення зведені дедуплікацією в один об'єкт.
+      Кілька оголошень про ту саму квартиру зведені разом.
       {% if sources.spread_pct %}
         Розбіжність цін між майданчиками — <b>{{ sources.spread_pct }}%</b>
         (${{ sources.min | round | int | money }} … ${{ sources.max | round | int | money }}).
@@ -179,12 +175,12 @@
     {% if sources.suspect_merge %}
       <div class="gap" style="margin-bottom:14px">
         <span class="badge">Перевірте склейку</span>
-        <p>Різниця цін понад {{ sources.suspect_threshold }}% на «той самий» об'єкт
-           найчастіше означає, що дедуплікація звела дві різні квартири, а не що
+        <p>Різниця цін понад {{ sources.suspect_threshold | round | int }}% на «ту саму» квартиру
+           найчастіше означає, що ми помилково злили дві різні квартири, а не що
            продавець просить по-різному. Перш ніж спиратись на цифри вище,
            відкрийте оголошення нижче й порівняйте адресу та поверх.</p>
-        <p style="margin:0">У розрахунках сегментів цей об'єкт бере участь
-           з медіанною ціною своїх оголошень — один викид не тягне статистику.</p>
+        <p style="margin:0">У загальних підрахунках ця квартира бере участь
+           із середньою зі своїх цін, тож одне дивне число нічого не перекошує.</p>
       </div>
     {% elif sources.spread_pct %}
       <p class="legend" style="margin-top:0">Невелика різниця нормальна:
@@ -228,22 +224,22 @@
   {% endif %}
 </section>
 
-{# --- ліквідність --- #}
+{# --- скільки займає продаж --- #}
 <section class="sect">
-  <h2>Оцінка ліквідності</h2>
+  <h2>Скільки часу займає продаж</h2>
   {% if liquidity.available %}
     <div class="facts">
       <div><span class="v num">{{ liquidity.median_days or '—' }} дн.</span>
-        <span class="k">медіанний строк на ринку</span></div>
+        <span class="k">днів — стільки зазвичай іде на продаж</span></div>
       <div><span class="v num">{{ liquidity.events }}</span>
-        <span class="k">зафіксованих зникнень</span></div>
+        <span class="k">квартир уже зникло з продажу</span></div>
       <div><span class="v num">{{ liquidity.censored }}</span>
-        <span class="k">ще на ринку (враховані)</span></div>
+        <span class="k">ще продаються — теж враховані</span></div>
     </div>
     <p class="legend">{{ liquidity.disclaimer }}</p>
   {% else %}
     <div class="gap">
-      <span class="badge">Недостатньо даних</span>
+      <span class="badge">Поки мало даних</span>
       <p>{{ liquidity.message }}</p>
       <p class="legend" style="margin:0">{{ liquidity.disclaimer }}</p>
     </div>
@@ -252,17 +248,16 @@
 
 {# --- прогноз --- #}
 <section class="sect">
-  <h2>Прогноз ціни для цього об'єкта</h2>
+  <h2>Що буде з ціною</h2>
   {% if forecast.readiness.ready %}
     <p>{{ forecast.message }}</p>
   {% else %}
     <div class="gap">
-      <span class="badge">Недостатньо даних</span>
+      <span class="badge">Поки мало даних</span>
       <p>{{ forecast.message }}</p>
-      <p>Прогноз для окремої квартири будується з динаміки її сегмента, а
-         сегментної динаміки поки немає — див.
-         <a class="analyse" href="/analytics">сторінку аналітики</a>, там розписано,
-         коли який горизонт стане доступним.</p>
+      <p>Щоб сказати, куди піде ціна саме цієї квартири, треба спершу бачити,
+         куди йдуть ціни на схожі. Ми стежимо за ними ще надто мало часу —
+         точні дати є <a class="analyse" href="/analytics">на сторінці цін</a>.</p>
     </div>
   {% endif %}
 </section>

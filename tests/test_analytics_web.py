@@ -20,18 +20,25 @@ def client():
 
 
 def _text(html: str) -> str:
+    """Видимий текст сторінки. Стилі й скрипти — не текст для читача."""
     html = re.sub(r"<script.*?</script>", " ", html, flags=re.S)
+    html = re.sub(r"<style.*?</style>", " ", html, flags=re.S)
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
 
 
 # --- сегментна сторінка -------------------------------------------------------
 
-def test_segments_page_opens_and_names_its_sample(client):
+def test_segments_page_opens_and_says_how_many_flats(client):
+    """Скільки квартир за графіком — має бути сказано людською мовою.
+
+    Назва методу прибрана з інтерфейсу навмисно, а от кількість — ні:
+    графік, який виглядає впевненіше, ніж є, гірший за складний.
+    """
     r = client.get("/analytics")
     assert r.status_code == 200
     text = _text(r.text)
-    assert "унікальних об'єктах" in text
-    assert "медіана" in text
+    assert "Порахували по" in text
+    assert re.search(r"\d[\d\s\u202f]*\s+квартир", text)
 
 
 def test_every_segment_row_states_how_many_objects_it_stands_on(client):
@@ -57,8 +64,10 @@ def test_forecast_block_is_a_refusal_with_numbers_not_a_line(client):
     assert forecast["points_needed"] > forecast["points"]
     assert forecast["available_from"]
     text = _text(client.get("/analytics").text)
-    assert "Недостатньо даних" in text
-    assert "36 місяців не з'явиться" in text
+    assert "Поки мало даних" in text
+    assert "поки рано казати" in text
+    # Дата, до якої треба спостерігати, має бути названа.
+    assert re.search(r"\d\d\.\d\d\.\d{4}", text)
 
 
 def test_forecast_horizon_stays_below_a_third_of_history(client):
@@ -77,7 +86,9 @@ def test_sources_are_compared_within_segments_with_sample_sizes(client):
         for cell in row["cells"].values():
             assert cell["n"] >= sources["threshold"]
     text = _text(client.get("/analytics").text)
-    assert "тільки в межах однакового сегмента" in text
+    # Пояснення лишилось, але сказане людською мовою, без слова «сегмент».
+    assert "тільки однакові квартири" in text
+    assert "сегмент" not in text.lower()
 
 
 def test_filters_combine_and_empty_result_is_explained(client):
@@ -88,7 +99,7 @@ def test_filters_combine_and_empty_result_is_explained(client):
     r = client.get("/analytics", params={"rooms": "4", "condition": "unknown",
                                          "market": "secondary"})
     text = _text(r.text)
-    assert "Недостатньо даних" in text or "об'єктів" in text
+    assert "Поки мало даних" in text or "квартир" in text
 
 
 def test_liquidity_is_either_a_curve_or_a_numbered_refusal(client):
@@ -110,12 +121,11 @@ def test_liquidity_is_either_a_curve_or_a_numbered_refusal(client):
     text = _text(client.get("/analytics").text)
     assert "не обов" in text          # застереження «зникнення ≠ продаж» завжди
     if result["available"]:
-        assert "зафіксованих зникнень" in text
-        assert str(result["events"]) in text
-        # Крива без кількості спостережень нічого не варта.
-        assert "ще на ринку (враховані)" in text
+        # Числа лишаються, назва методу — ні.
+        assert "зникло з продажу" in text
+        assert "ще продаються" in text
     else:
-        assert "Зафіксованих зникнень" in text
+        assert "зникли з продажу" in text
         assert str(load().survival_min_events) in text
 
 

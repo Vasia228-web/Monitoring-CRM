@@ -298,7 +298,10 @@ def test_forecast_is_refused_on_a_short_history(session):
     assert r.ready is False
     assert r.points == 0
     assert r.available_from is not None
-    assert "не будується" in r.message()
+    # Повідомлення має назвати дату, а не термін: читач має зрозуміти, коли
+    # цифра буде, а не як вона рахується.
+    assert r.available_from.strftime("%d.%m.%Y") in r.message()
+    assert "стежимо за цінами" in r.message()
 
 
 def test_forecast_horizon_never_exceeds_a_third_of_the_history(session):

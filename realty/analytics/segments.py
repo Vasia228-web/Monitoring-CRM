@@ -527,3 +527,125 @@ def liquidity_proxy(universe: Universe, cfg: Settings | None = None) -> list[dic
         })
     # Важче йде те, де більше знижень ціни; за рівності — де старші оголошення.
     return sorted(rows, key=lambda r: (-r["drop_share"], -r["median_age"]))
+
+
+def _by(universe: Universe, key, cfg: Settings, value=None) -> list[dict]:
+    """Групує об'єкти однією ознакою й рахує типову ціну за м².
+
+    Для сторінки, де кожен графік має нести одну думку, зрізи потрібні
+    прості: окремо кімнатність, окремо ремонт, окремо ринок. Складені
+    сегменти лишаються для порівняння конкретної квартири.
+    """
+    value = value or (lambda o: o.ppsqm)
+    groups: dict[str, list[float]] = {}
+    for o in universe.items:
+        got = value(o)
+        if got is None:
+            continue
+        label = key(o)
+        if label is None:
+            continue
+        groups.setdefault(label, []).append(got)
+
+    rows = []
+    for label, values in groups.items():
+        summary = summarise(values, cfg)
+        if summary is None or summary.n < cfg.min_sample:
+            continue
+        rows.append({"label": label, "n": summary.n,
+                     "typical": round(summary.median),
+                     "low": round(summary.q1), "high": round(summary.q3)})
+    return rows
+
+
+def by_rooms(universe: Universe, cfg: Settings | None = None) -> list[dict]:
+    """Ціна метра за кімнатністю — одна думка, три-чотири стовпчики."""
+    cfg = cfg or load()
+    rows = _by(universe, lambda o: rooms_label(o.band) if o.band else None, cfg)
+    order = {rooms_label(b): b for b in (1, 2, 3, 4)}
+    return sorted(rows, key=lambda r: order.get(r["label"], 9))
+
+
+def by_condition(universe: Universe, cfg: Settings | None = None) -> list[dict]:
+    """Що дає ремонт. Порівнюємо лише там, де решта умов однакова."""
+    cfg = cfg or load()
+    rows = _by(universe, lambda o: COND_LABEL.get(o.condition)
+               if o.condition in ("renovated", "needs_repair") else None, cfg)
+    return sorted(rows, key=lambda r: -r["typical"])
+
+
+def by_market(universe: Universe, cfg: Settings | None = None) -> list[dict]:
+    cfg = cfg or load()
+    rows = _by(universe, lambda o: MARKET_LABEL.get(o.market)
+               if o.market in ("primary", "secondary") else None, cfg)
+    return sorted(rows, key=lambda r: -r["typical"])
+
+
+def _gap(rows: list[dict]) -> int | None:
+    """На скільки відсотків найдорожча група дорожча за найдешевшу."""
+    if len(rows) < 2 or not rows[-1]["typical"]:
+        return None
+    return round(100 * (rows[0]["typical"] / rows[-1]["typical"] - 1))
+
+
+def days_by_condition(universe: Universe, cfg: Settings | None = None) -> list[dict]:
+    """Скільки днів квартира вже продається — однією ознакою.
+
+    Раніше тут був список із двадцяти семи рядків: кімнатність × стан × ринок.
+    Прочитати з нього думку неможливо. Одна ознака — одна думка.
+    """
+    cfg = cfg or load()
+    rows = _by(universe,
+               lambda o: COND_LABEL.get(o.condition)
+               if o.condition in ("renovated", "needs_repair") else None,
+               cfg, value=lambda o: o.days_listed)
+    return sorted(rows, key=lambda r: -r["typical"])
+
+
+def headline_days(rows: list[dict]) -> str | None:
+    """Заголовок не має вдавати різницю там, де її немає.
+
+    95 днів проти 93 — це не «продаються довше», це однаково. Фраза про
+    перевагу з'являється лише тоді, коли перевага справді є.
+    """
+    gap = _gap(rows)
+    if gap is None:
+        return None
+    if gap < 10:
+        return (f"Квартири продаються приблизно однаково довго — "
+                f"близько {rows[0]['typical']} дн.")
+    return (f"Квартири {rows[0]['label']} продаються довше — "
+            f"{rows[0]['typical']} дн. проти {rows[-1]['typical']}")
+
+
+def headline_rooms(rows: list[dict]) -> str | None:
+    """Заголовок графіка — це висновок, а не назва величини.
+
+    «Однокімнатні коштують за метр на 12% більше» замість «Динаміка ціни за м²
+    в розрізі кімнатності». Людина має зрозуміти графік, не читаючи його.
+    """
+    gap = _gap(rows)
+    if gap is None:
+        return None
+    if gap < 3:
+        return "Метр коштує приблизно однаково, скільки б не було кімнат"
+    return (f"{rows[0]['label']} коштують за метр на {gap}% більше, "
+            f"ніж {rows[-1]['label'].lower()}")
+
+
+def headline_condition(rows: list[dict]) -> str | None:
+    gap = _gap(rows)
+    if gap is None:
+        return None
+    if gap < 3:
+        return "Ремонт майже не впливає на ціну метра"
+    return f"Ремонт додає {gap}% до ціни метра"
+
+
+def headline_market(rows: list[dict]) -> str | None:
+    gap = _gap(rows)
+    if gap is None:
+        return None
+    if gap < 5:
+        return "Новобудова і вторинка коштують майже однаково"
+    return f"{rows[0]['label'].capitalize()} дорожча на {gap}%"

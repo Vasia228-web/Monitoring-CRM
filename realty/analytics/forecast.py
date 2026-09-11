@@ -48,18 +48,19 @@ class Readiness:
         return round(self.horizon_days / 30.4, 1)
 
     def message(self) -> str:
-        """Текст для порожнього блоку — з конкретним числом, а не «замало даних»."""
+        """Текст для порожнього блоку — з конкретним числом і датою.
+
+        Людською мовою, без назв методів: читач має зрозуміти, чому цифри
+        поки немає і коли вона буде, а не як саме вона рахується.
+        """
         if self.ready:
-            return (f"Прогноз до {self.horizon_months} міс. — "
-                    f"це третина спостережених {self.span_days:.0f} днів історії.")
-        need = self.points_needed - self.points
-        return (f"Прогноз поки не будується: є {self.points} тижневих точок "
-                f"історії з потрібних {self.points_needed}. "
-                f"Потрібно ще {need} тиж. спостережень — це приблизно "
-                f"{self.days_to_wait} днів, до "
-                f"{self.available_from.strftime('%d.%m.%Y') if self.available_from else '—'}. "
-                f"Горизонт прогнозу на той момент — близько "
-                f"{round(self.horizon_when_ready / 30.4, 1)} міс.")
+            return (f"Можемо заглядати приблизно на {self.horizon_months:.0f} "
+                    f"міс. вперед — це третина того часу, що ми спостерігаємо.")
+        date = (self.available_from.strftime("%d.%m.%Y")
+                if self.available_from else "—")
+        return (f"Ми стежимо за цінами {self.span_days:.0f} днів. Щоб показати, "
+                f"куди вони рухаються, і не збрехати, треба спостерігати до "
+                f"{date}.")
 
 
 def observed_span(session) -> float:
