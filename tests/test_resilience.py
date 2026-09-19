@@ -43,7 +43,7 @@ class _Boom(BaseSource):
         raise RuntimeError("мережа зникла")
 
 
-def test_source_crash_keeps_what_was_collected(monkeypatch, tmp_path):
+def test_source_crash_keeps_what_was_collected(monkeypatch, tmp_path, isolated_ops):
     """Збій джерела не має забирати з собою вже зібране й решту джерел."""
     import realty.db as db
     from sqlalchemy import create_engine, func, select
@@ -74,7 +74,7 @@ def test_source_crash_keeps_what_was_collected(monkeypatch, tmp_path):
     assert "мережа зникла" in (last["message"] or "")
 
 
-def test_dead_run_is_reaped():
+def test_dead_run_is_reaped(isolated_ops):
     """Прогін, чий процес уже помер, має закритись, а не висіти вічно."""
     run_id = ops.start_run("проба-зависання", mode="fresh", trigger="manual")
     with ops.ops_session() as s:

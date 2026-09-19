@@ -59,7 +59,8 @@ def cmd_cycle(args: argparse.Namespace) -> int:
     kwargs = {}
     if args.run_timeout:
         kwargs["run_timeout"] = args.run_timeout * 60
-    result = runner.run_cycle(trigger=args.trigger, sources=names, **kwargs)
+    result = runner.run_cycle(trigger=args.trigger, sources=names,
+                              tasks=not args.only_sources, **kwargs)
     print(runner.render(result))
     # Ненульовий код — лише коли сам диригент не зміг відпрацювати. «Нічого не
     # зібрано» — це стан системи, його бачить сигнал тиші, а не systemd.
@@ -428,6 +429,8 @@ def main() -> int:
     cy.add_argument("--sources", help="через кому; типово всі ввімкнені")
     cy.add_argument("--trigger", default="schedule", choices=("cli", "manual", "schedule"))
     cy.add_argument("--run-timeout", type=float, help="стеля циклу в хвилинах")
+    cy.add_argument("--only-sources", action="store_true",
+                    help="лише збір, без переліку, перевірки, дублів і бекапу (для проб)")
     cy.set_defaults(func=cmd_cycle)
 
     bk = sub.add_parser("backup", help="бекап бази: копія, перевірка, відновлення, вивантаження")

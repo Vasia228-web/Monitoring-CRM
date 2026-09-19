@@ -103,13 +103,15 @@ def _quality_routine(today: datetime) -> str:
 
 
 def default_steps(trigger: str = "schedule", sources: list[str] | None = None,
-                  today: datetime | None = None) -> list[Step]:
+                  today: datetime | None = None, tasks: bool = True) -> list[Step]:
     steps = [
         Step(f"збір: {name}",
              _cli("scrape", "--sources", name, "--trigger", trigger),
              source_timeout(name), kind="source", source=name)
         for name in (sources or enabled_sources())
     ]
+    if not tasks:
+        return steps
     routine = _quality_routine(today or datetime.now())
     steps += [
         Step("різниця списків", _cli("snapshot"), TASK_TIMEOUTS["snapshot"]),
@@ -280,6 +282,7 @@ def _close_killed_runs(pid: int, source: str, note: str) -> None:
 
 def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
               steps: list[Step] | None = None, run_timeout: float = RUN_TIMEOUT,
+              tasks: bool = True,
               lock_path: Path = LOCK_PATH, disabled_flag: Path = DISABLED_FLAG
               ) -> CycleResult:
     started_wall = ops._now()
@@ -305,7 +308,8 @@ def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
     child_pids: list[int] = []
     timed_out = False
     try:
-        for step in steps if steps is not None else default_steps(trigger, sources):
+        for step in steps if steps is not None else default_steps(trigger, sources,
+                                                                          tasks=tasks):
             remaining = run_timeout - (time.monotonic() - started)
             if remaining <= 1:
                 timed_out = True
