@@ -111,7 +111,20 @@ def _fresh_runs(session, source: str, limit: int = 22) -> list[ops.RunRecord]:
         .order_by(ops.RunRecord.started_at.desc()).limit(limit)))
 
 
+def _written(run) -> int:
+    """Скільки записів цього прогону дійшло до бази."""
+    return (run.inserted or 0) + (run.updated or 0)
+
+
 def check_sources(now: datetime) -> list[Alert]:
+    """Джерело живе, але нічого не приносить.
+
+    Міряємо ЗАПИСАНЕ, а не зібране. DIM.RIA і OLX чесно зупиняються після
+    першої сторінки, коли нових оголошень немає: зібрано 20 замість 160 — і це
+    норма, а не поломка (перша версія правила саме на цьому й помилилась).
+    Поломка — коли не записано НІЧОГО: або картки перестали розбиратись, або
+    карантин не прийняв пакет.
+    """
     alerts = []
     ops.init_ops()
     with ops.ops_session() as s:
@@ -120,18 +133,16 @@ def check_sources(now: datetime) -> list[Alert]:
             recent, older = runs[:DROP_CONSECUTIVE], runs[DROP_CONSECUTIVE:]
             if len(recent) < DROP_CONSECUTIVE:
                 continue
-            base = [r.kept for r in older if r.status == "ok" and r.kept]
-            if len(base) >= 3:
-                usual = statistics.median(base)
-                if usual >= DROP_MIN_BASELINE and all(r.kept < DROP_RATIO * usual
-                                                      for r in recent):
-                    got = ", ".join(str(r.kept) for r in recent)
-                    why = next((r.message for r in recent if r.message), None)
-                    alerts.append(Alert(f"drop:{name}", (
-                        f"📉 {name}: у двох останніх прогонах зібрано {got} при звичайних "
-                        f"~{usual:.0f}. Схоже, сайт змінив розмітку і парсер тихо збирає "
-                        f"порожнечу, або сайт не відповідає."
-                        + (f"\nОстання помилка: {why[:200]}" if why else ""))))
+            base = [_written(r) for r in older if r.status == "ok" and _written(r)]
+            if len(base) >= 3 and statistics.median(base) >= DROP_MIN_BASELINE \
+                    and all(_written(r) == 0 for r in recent):
+                why = next((r.message for r in recent if r.message), None)
+                alerts.append(Alert(f"drop:{name}", (
+                    f"📉 {name}: у {DROP_CONSECUTIVE} останніх прогонах до бази не дійшло "
+                    f"жодного оголошення (звичайно ~{statistics.median(base):.0f}). "
+                    f"Схоже, сайт змінив розмітку і парсер збирає порожнечу, або пакет "
+                    f"не пройшов карантин."
+                    + (f"\nОстання помилка: {why[:200]}" if why else ""))))
             # Блокування — по останньому прогону з помітною кількістю запитів.
             def share(r):
                 total = (r.requests_ok or 0) + (r.requests_failed or 0)

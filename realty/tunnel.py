@@ -125,6 +125,9 @@ def run() -> int:
         announce(p["url"], p["mode"])
     log.info("тунель: режим %s", p["mode"])
     current = None
+    # Ознака, що тимчасовий тунель у цій мережі неможливий: до Cloudflare
+    # не достукатись. Перезапуски тут не допоможуть — потрібен домен.
+    unreachable = False
     proc = subprocess.Popen([binary, *p["args"]], env={**os.environ, **p["env"]},
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             bufsize=1)
@@ -132,6 +135,8 @@ def run() -> int:
         for line in proc.stdout:
             sys.stdout.write(line)
             sys.stdout.flush()
+            if "failed to request quick Tunnel" in line:
+                unreachable = True
             if p["mode"] == "quick" and (m := QUICK_URL.search(line)):
                 url = m.group(0)
                 if url != current and responds(url):
@@ -142,5 +147,18 @@ def run() -> int:
     finally:
         code = proc.wait()
     log.warning("cloudflared завершився з кодом %s", code)
+    if unreachable:
+        text = ("Тимчасова адреса Cloudflare недоступна з цієї мережі: "
+                "trycloudflare.com не відкривається (перевірено з обох машин, "
+                "сам Cloudflare працює). Перезапуски не допоможуть — потрібен "
+                "домен і іменований тунель; точки входу для нього відкриті.")
+        log.error(text)
+        if notify.configured():
+            try:
+                notify.send_message("🚫 " + text)
+            except notify.NotifyError:
+                pass
+        # 78 — конфігурація/мережа: systemd не крутить перезапуски по колу.
+        return EX_CONFIG
     # Ненульовий код — systemd перезапустить; нульовий теж не нормальний стан.
     return code or 1

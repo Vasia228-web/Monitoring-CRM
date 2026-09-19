@@ -35,10 +35,12 @@ def _cycle(status, finished, kept=0, message=None):
                               finished_at=finished, kept=kept, message=message))
 
 
-def _run(source, started, kept, status="ok", ok=50, failed=0, blocked=0):
+def _run(source, started, kept, status="ok", ok=50, failed=0, blocked=0, written=None):
+    written = kept if written is None else written
     with ops.ops_session() as s:
         s.add(ops.RunRecord(source=source, mode="fresh", status=status, started_at=started,
                             finished_at=started + timedelta(minutes=3), kept=kept,
+                            updated=written,
                             requests_ok=ok, requests_failed=failed, requests_blocked=blocked))
 
 
@@ -101,17 +103,28 @@ def test_source_that_quietly_collects_nothing(env):
     for i in range(8):
         _run("domria", NOW - timedelta(hours=3 * (i + 3)), kept=160)
     _run("domria", NOW - timedelta(hours=6), kept=0)
-    _run("domria", NOW - timedelta(hours=3), kept=2)
+    _run("domria", NOW - timedelta(hours=3), kept=52, written=0)   # зібрав, але карантин не пустив
     rep = env["run"](NOW)
     assert rep["sent"] == ["drop:domria"]
-    assert "тихо збирає порожнечу" in env["sent"][0]
+    assert "не дійшло жодного оголошення" in env["sent"][0]
+
+
+def test_early_stop_is_not_a_drop(env):
+    """Регресія: DIM.RIA зупиняється після першої сторінки, коли новинок немає
+    (20 замість 160) — перша версія правила вважала це поломкою."""
+    _cycle("ok", NOW - timedelta(hours=1), kept=200)
+    for i in range(8):
+        _run("domria", NOW - timedelta(hours=3 * (i + 3)), kept=160)
+    _run("domria", NOW - timedelta(hours=6), kept=20)
+    _run("domria", NOW - timedelta(hours=3), kept=20)
+    assert env["run"](NOW)["active"] == []
 
 
 def test_single_bad_run_is_not_yet_an_alarm(env):
     _cycle("ok", NOW - timedelta(hours=1), kept=200)
     for i in range(8):
         _run("domria", NOW - timedelta(hours=3 * (i + 2)), kept=160)
-    _run("domria", NOW - timedelta(hours=3), kept=0)
+    _run("domria", NOW - timedelta(hours=3), kept=0, written=0)
     assert env["run"](NOW)["active"] == []
 
 
