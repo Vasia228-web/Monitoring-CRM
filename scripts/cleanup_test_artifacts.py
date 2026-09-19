@@ -24,7 +24,7 @@ import argparse
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -61,7 +61,7 @@ def find_test_views(con, stamps: list[datetime]) -> list[sqlite3.Row]:
     `viewed_at` пишеться місцевим часом, а скарги — UTC, тому звіряємось і з
     самим часом, і зі зсувом на місцевий пояс.
     """
-    offset = datetime.now() - datetime.utcnow()
+    offset = datetime.now() - datetime.now(timezone.utc).replace(tzinfo=None)
     windows = [s for s in stamps] + [s + offset for s in stamps]
     out = []
     for row in con.execute("SELECT id, views, viewed_at FROM listings WHERE views > 0"):
@@ -79,7 +79,7 @@ def fresh_backup_exists(hours: int = FRESH_BACKUP_HOURS) -> tuple[bool, str]:
     last = backup.last_success_at()
     if last is None:
         return False, "успішного бекапу ще не було"
-    age = (datetime.utcnow() - last).total_seconds() / 3600
+    age = (datetime.now(timezone.utc).replace(tzinfo=None) - last).total_seconds() / 3600
     return age <= hours, f"останній успішний бекап {age:.1f} год тому"
 
 
