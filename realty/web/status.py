@@ -124,9 +124,33 @@ def build_status() -> dict:
         "sources": sources,
         "quality": quality,
         "llm": {"all_time": ops.llm_totals(), "last_24h": ops.llm_totals(24)},
+        "autonomy": _autonomy(),
         "quality_24h": ops.quality_totals(24),
         "jobs": live,
         "runs": ops.recent_runs(10),
+    }
+
+
+def _autonomy() -> dict:
+    """Те, що відповідає на питання «чи живе система без людини»."""
+    from .. import backup, watchdog
+
+    cycles = ops.last_cycles(5)
+    last_bk = backup.last_attempt()
+    alerts = {k: v for k, v in watchdog.load_state().items() if not k.startswith("_")}
+    return {
+        "last_success": as_utc_iso(ops.last_success_at()),
+        "cycles": [{"status": c.status, "started_at": as_utc_iso(c.started_at),
+                    "finished_at": as_utc_iso(c.finished_at), "kept": c.kept,
+                    "message": c.message} for c in cycles],
+        "backup": None if last_bk is None else {
+            "status": last_bk.status, "at": as_utc_iso(last_bk.created_at),
+            "size_mb": round((last_bk.size or 0) / 1e6, 1), "offsite": last_bk.offsite,
+            "message": last_bk.message},
+        "backup_last_success": as_utc_iso(backup.last_success_at()),
+        "public_url": watchdog.public_url(),
+        "alerts": [{"key": k, "since": v.get("since"), "text": v.get("text")}
+                   for k, v in alerts.items()],
     }
 
 

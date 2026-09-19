@@ -1,0 +1,23 @@
+[Unit]
+Description=Realty: регулярний цикл збору й обслуговування
+# Після падіння — повтор через 10 хв, але не більше трьох разів за 6 год:
+# сайт, що лежить, не варто штурмувати.
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py cycle --trigger schedule
+# Другий шар поверх RUN_TIMEOUT (2 год) у коді: якщо навіть диригент завис,
+# systemd вб'є всю групу процесів, включно з браузером.
+TimeoutStartSec=2h20min
+KillMode=control-group
+Restart=on-failure
+RestartSec=10min
+Nice=5
+# 3,7 ГБ на всю машину: Chromium не має витіснити решту системи.
+MemoryHigh=1800M
+MemoryMax=2600M

@@ -47,8 +47,10 @@ def test_fills_only_missing_fields():
         "rooms": None, "area_total": 55.0, "location": "Івано-Франківськ",
         "market_type": MarketType.UNKNOWN, "condition": Condition.UNKNOWN,
     }
+    # Модель погоджується з парсером у ціні й площі (з округленням) — тому її
+    # кімнатам можна вірити. Розбіжність розбирає test_llm_crosscheck.py.
     p = _pipeline(ExtractedListing(
-        price=99999, rooms=3, area_total=12.3, location="вул. Інша",
+        price=64000, rooms=3, area_total=55.4, location="вул. Інша",
         currency="USD", market_type="secondary", condition="renovated",
     ))
     out = p._apply_llm(dict(rec), PAGE)

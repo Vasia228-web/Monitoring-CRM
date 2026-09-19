@@ -31,6 +31,13 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     """Пропускає далі лише з правильним логіном і паролем."""
 
     async def dispatch(self, request, call_next):
+        response = await self._dispatch(request, call_next)
+        # Заборона індексації на рівні заголовка — діє і для JSON, і для 401,
+        # де мета-тегу сторінки немає.
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+    async def _dispatch(self, request, call_next):
         creds = credentials()
         if creds is None or request.url.path in OPEN_PATHS:
             return await call_next(request)

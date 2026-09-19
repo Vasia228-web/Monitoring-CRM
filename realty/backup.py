@@ -256,7 +256,14 @@ def run(db_url: str | None = None, dest: Path | None = None,
                     res.problems.append(f"{name}: {str(e)[:300]}")
         res.pruned = prune(dest)
         # Успіх — лише коли копія цілісна, відновлюється І лежить поза машиною.
-        res.status = "ok" if (res.restored_ok and res.offsite) else "failed"
+        # Свідомо локальна копія (--no-upload, напр. для перенесення бази) —
+        # окремий статус «local»: сигнал тиші її успішним бекапом не вважає.
+        if not res.restored_ok:
+            res.status = "failed"
+        elif res.offsite:
+            res.status = "ok"
+        else:
+            res.status = "local" if not upload else "failed"
     except Exception as e:
         res.problems.append(f"{type(e).__name__}: {str(e)[:400]}")
         log.exception("бекап не вдався")

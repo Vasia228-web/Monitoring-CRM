@@ -3,6 +3,8 @@
 
   python cli.py cycle                  # регулярний цикл із лімітами часу (для розкладу)
   python cli.py backup                 # бекап бази з перевіркою відновлення
+  python cli.py watchdog               # сигнал тиші: Telegram, якщо системі погано
+  python cli.py tunnel                 # доступ ззовні через Cloudflare Tunnel
   python cli.py scrape                 # зібрати з усіх джерел
   python cli.py scrape --sources olx,lun --pages 3
   python cli.py backfill               # дозібрати записи з прогалинами
@@ -106,7 +108,36 @@ def cmd_backup(args: argparse.Namespace) -> int:
         print(f"  прибрано старих: {len(res.pruned)}")
     for p in res.problems:
         print(f"  ! {p}")
-    return 0 if res.status == "ok" else 1
+    return 0 if res.status in ("ok", "local") else 1
+
+
+def cmd_watchdog(args: argparse.Namespace) -> int:
+    from realty import notify, watchdog
+
+    if not notify.configured():
+        print("Telegram не налаштовано: задайте TELEGRAM_BOT_TOKEN і TELEGRAM_CHAT_ID у .env")
+        return 2
+    if args.test:
+        msg_id = watchdog.test_message()
+        print(f"тестове повідомлення прийняте Telegram, message_id={msg_id}")
+        return 0
+    rep = watchdog.run()
+    print(f"активні: {rep['active'] or '—'}")
+    print(f"надіслано: {rep['sent'] or '—'}   притримано: {rep['held'] or '—'}   "
+          f"відновилось: {rep['resolved'] or '—'}")
+    for e in rep["errors"]:
+        print(f"  ! {e}")
+    return 1 if rep["errors"] else 0
+
+
+def cmd_tunnel(args: argparse.Namespace) -> int:
+    from realty import tunnel
+
+    if args.plan:
+        p = tunnel.plan()
+        print(p.get("error") or f"режим: {p['mode']}, адреса: {p['url'] or 'видасть Cloudflare'}")
+        return tunnel.EX_CONFIG if "error" in p else 0
+    return tunnel.run()
 
 
 def cmd_quality(args: argparse.Namespace) -> int:
@@ -408,6 +439,15 @@ def main() -> int:
                     help="лише якщо останній успішний бекап старший за BACKUP_EVERY_HOURS")
     bk.add_argument("--no-upload", action="store_true", help="не вивантажувати поза машину")
     bk.set_defaults(func=cmd_backup)
+
+    wd = sub.add_parser("watchdog", help="сигнал тиші й інші тривоги в Telegram")
+    wd.add_argument("--test", action="store_true",
+                    help="надіслати тестове повідомлення тим самим шляхом, що й тривогу")
+    wd.set_defaults(func=cmd_watchdog)
+
+    tn = sub.add_parser("tunnel", help="доступ ззовні через Cloudflare Tunnel")
+    tn.add_argument("--plan", action="store_true", help="лише показати, що буде запущено")
+    tn.set_defaults(func=cmd_tunnel)
 
     bf = sub.add_parser("backfill", help="дозібрати наявні записи з прогалинами")
     bf.add_argument("--sources", help="через кому: domria,lun,olx,flombu,blago")

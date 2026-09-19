@@ -1,0 +1,11 @@
+[Unit]
+Description=Realty: щоденний бекап бази
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py backup --if-due
+TimeoutStartSec=20min
+Nice=10

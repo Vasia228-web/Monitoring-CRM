@@ -86,6 +86,10 @@ class RunRecord(OpsBase):
     q_rejected: Mapped[int] = mapped_column(Integer, default=0)
     llm_passed: Mapped[int] = mapped_column(Integer, default=0)
     llm_failed: Mapped[int] = mapped_column(Integer, default=0)
+    # Звірка відповіді моделі з парсером там, де обидва щось дали.
+    llm_agreed: Mapped[int] = mapped_column(Integer, default=0)
+    llm_disagreed: Mapped[int] = mapped_column(Integer, default=0)
+    llm_uncomparable: Mapped[int] = mapped_column(Integer, default=0)
 
     pid: Mapped[int | None] = mapped_column(Integer)
     message: Mapped[str | None] = mapped_column(Text)
@@ -416,14 +420,18 @@ def llm_totals(hours: int | None = None) -> dict:
         func.sum(RunRecord.llm_calls), func.sum(RunRecord.llm_in_tokens),
         func.sum(RunRecord.llm_out_tokens), func.sum(RunRecord.llm_cost_usd),
         func.sum(RunRecord.llm_passed), func.sum(RunRecord.llm_failed),
+        func.sum(RunRecord.llm_agreed), func.sum(RunRecord.llm_disagreed),
+        func.sum(RunRecord.llm_uncomparable),
     )
     if hours:
         stmt = stmt.where(RunRecord.started_at >= _now() - timedelta(hours=hours))
     with ops_session() as s:
-        calls, tin, tout, cost, passed, failed = s.execute(stmt).one()
+        calls, tin, tout, cost, passed, failed, agreed, disagreed, blind = s.execute(stmt).one()
     return {"calls": int(calls or 0), "in_tokens": int(tin or 0),
             "out_tokens": int(tout or 0), "cost_usd": round(float(cost or 0), 4),
-            "passed": int(passed or 0), "failed": int(failed or 0)}
+            "passed": int(passed or 0), "failed": int(failed or 0),
+            "agreed": int(agreed or 0), "disagreed": int(disagreed or 0),
+            "uncomparable": int(blind or 0)}
 
 
 def quality_totals(hours: int = 24) -> dict:

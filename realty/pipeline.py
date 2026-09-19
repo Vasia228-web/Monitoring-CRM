@@ -14,6 +14,7 @@ from .llm import LLMExtractor
 from .models import Condition, Listing, MarketType, PriceEvent
 from .normalize import compute_price_per_sqm, to_uah, to_usd
 from .sources import REGISTRY
+from .quality import llm_check
 from .quality.staging import QualityGate
 from .verify import sweep_after_full_run
 from .sources.base import BaseSource
@@ -88,6 +89,8 @@ class Pipeline:
         self.gate = gate if gate is not None else QualityGate()
         self.report = RunReport()
         self.llm = LLMExtractor() if use_llm else None
+        # Звірка відповідей моделі з парсером — лічильники для /status.
+        self.llm_check = {"agreed": 0, "disagreed": 0, "uncomparable": 0}
         self._http: Fetcher | None = None
         self._browser: BrowserFetcher | None = None
 
@@ -165,24 +168,46 @@ class Pipeline:
         return self._apply_llm(rec, html) if (llm_ready and missing_critical) else rec
 
     def _apply_llm(self, rec: dict, html: str) -> dict:
-        """Доповнює ЛИШЕ відсутні поля; наявні дані парсера не перезаписує."""
+        """Доповнює ЛИШЕ відсутні поля; наявні дані парсера не перезаписує.
+
+        Перед доповненням відповідь моделі звіряється з тим, що вже дав
+        парсер (`quality.llm_check`). Розбіжність хоч в одному спільному полі —
+        з відповіді не беремо нічого, запис іде в карантин із поясненням.
+        """
         if not self.llm or not self.llm.available:
             return rec
         got = self.llm.extract(html, rec.get("original_url", ""))
         if got is None:
             return rec
 
+        compared, conflicts = llm_check.compare(rec, got)
+        if conflicts:
+            self.llm_check["disagreed"] += 1
+            rec["llm_conflict"] = "; ".join(conflicts)
+            log.warning("LLM розійшовся з парсером (%s): %s",
+                        (rec.get("original_url") or "")[:70], rec["llm_conflict"])
+            return rec
+        self.llm_check["agreed" if compared else "uncomparable"] += 1
+
         changed = False
+        price_from_llm = False
         for f in ("price", "rooms", "area_total", "location"):
             if not rec.get(f) and getattr(got, f, None):
                 rec[f] = getattr(got, f)
                 changed = True
-        if got.currency and not rec.get("price") is None and rec.get("currency") in (None, "USD"):
+                price_from_llm = price_from_llm or f == "price"
+        # Валюта йде в парі з ціною: беремо її від моделі, лише якщо й ціну
+        # дала модель. Раніше тут стояло `not rec.get("price") is None`, тобто
+        # «ціна від парсера Є» — і модель перезаписувала валюту парсера, а слідом
+        # перераховувалась ціна в доларах.
+        if price_from_llm and got.currency:
             rec["currency"] = got.currency
-        if rec.get("market_type") in (None, MarketType.UNKNOWN) and got.market_type:
+        if rec.get("market_type") in (None, MarketType.UNKNOWN) and got.market_type \
+                and got.market_type != "unknown":
             rec["market_type"] = MarketType(got.market_type)
             changed = True
-        if rec.get("condition") in (None, Condition.UNKNOWN) and got.condition:
+        if rec.get("condition") in (None, Condition.UNKNOWN) and got.condition \
+                and got.condition != "unknown":
             rec["condition"] = Condition(got.condition)
             changed = True
 
@@ -304,6 +329,13 @@ class Pipeline:
                 rec = {c.name: getattr(row, c.name) for c in Listing.__table__.columns}
                 out = self.complete(rec, src)
                 changed = False
+                if out.get("llm_conflict") and row.quality_status == "ok":
+                    # Модель прочитала інакше, ніж парсер: у карантин, поля не чіпаємо.
+                    row.quality_status = "review"
+                    row.quality_reason = "; ".join(filter(None, [
+                        row.quality_reason, f"LLM розійшовся з парсером: {out['llm_conflict']}"]))
+                    self.report.updated += 1
+                    continue
                 for field in updatable:
                     value = out.get(field)
                     if value is not None and getattr(row, field) != value:
@@ -325,13 +357,17 @@ class Pipeline:
     def _quality_delta(self, source: str) -> dict:
         """Скільки записів цього джерела пройшло контроль у цьому прогоні."""
         st = self.gate.report.by_source.get(source, {}) if self.gate else {}
-        llm = self.llm
         return {
             "q_accepted": st.get("accepted", 0), "q_review": st.get("review", 0),
             "q_rejected": st.get("rejected", 0),
-            "llm_passed": getattr(llm, "passed", 0),
-            "llm_failed": getattr(llm, "failed", 0),
         }
+
+    def _check_snapshot(self) -> dict:
+        llm = self.llm
+        return {"llm_passed": getattr(llm, "passed", 0), "llm_failed": getattr(llm, "failed", 0),
+                "llm_agreed": self.llm_check["agreed"],
+                "llm_disagreed": self.llm_check["disagreed"],
+                "llm_uncomparable": self.llm_check["uncomparable"]}
 
     def _llm_snapshot(self) -> tuple[int, int, int, float]:
         if not self.llm:
@@ -340,7 +376,7 @@ class Pipeline:
 
     def _record_source_run(self, run_id: int, name: str, stats: dict,
                            llm_before: tuple, counts_before: tuple,
-                           message: str | None = None) -> None:
+                           message: str | None = None, checks_before: dict | None = None) -> None:
         """Закриває запис прогону в телеметрії (окрема база, не основна)."""
         calls, tin, tout, cost = self._llm_snapshot()
         req = ops.take_counts(name)
@@ -359,6 +395,11 @@ class Pipeline:
             llm_out_tokens=tout - llm_before[2],
             llm_cost_usd=round(cost - llm_before[3], 6),
             **self._quality_delta(name),
+            # Лічильники моделі — приріст за це джерело, а не накопичене за
+            # прогін: інакше кожне наступне джерело повторно зараховувало
+            # виклики попередніх.
+            **{k: v - (checks_before or {}).get(k, 0)
+               for k, v in self._check_snapshot().items()},
         )
         ops.beat(f"завершено: {name}", busy=False)
 
@@ -381,6 +422,7 @@ class Pipeline:
             ops.beat(f"збір: {name}", busy=True)
             ops.take_counts(name)          # починаємо лічити з нуля
             llm_before = self._llm_snapshot()
+            checks_before = self._check_snapshot()
             before = (self.report.inserted, self.report.updated)
             cfg = SOURCES.get(name)
             browser = self._get_browser(cfg.delay) if (cfg and cfg.needs_browser) else None
@@ -416,7 +458,7 @@ class Pipeline:
                     log.exception("Не вдалося записати пакет %s", name)
                 self.report.per_source[name] = dict(src.stats)
                 self._record_source_run(run_id, name, src.stats, llm_before, before,
-                                        message=failure)
+                                        message=failure, checks_before=checks_before)
                 if src._fetcher is not None:
                     src._fetcher.close()
                 # Браузер закриваємо одразу після джерела, якому він був

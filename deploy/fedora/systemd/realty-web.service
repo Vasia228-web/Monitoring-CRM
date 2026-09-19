@@ -1,0 +1,14 @@
+[Unit]
+Description=Realty: веб-інтерфейс (лише localhost; назовні — через тунель)
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py serve --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

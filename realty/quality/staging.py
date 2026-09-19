@@ -105,6 +105,12 @@ class QualityGate:
                 verdict, reasons = validate(
                     rec, self.thresholds, self._previous_price(session, rec)
                 )
+                if rec.get("llm_conflict"):
+                    # Модель і парсер прочитали одне оголошення по-різному —
+                    # не вгадуємо, хто правий, а показуємо людині.
+                    reasons = [*reasons, f"LLM розійшовся з парсером: {rec['llm_conflict']}"]
+                    if verdict == "ok":
+                        verdict = "review"
                 decisions.append((rec, verdict, reasons))
 
             bad = sum(1 for _, v, _ in decisions if v == "rejected")

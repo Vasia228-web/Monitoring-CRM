@@ -1,0 +1,10 @@
+[Unit]
+Description=Realty: сигнал тиші й інші тривоги в Telegram
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py watchdog
+TimeoutStartSec=5min

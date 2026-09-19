@@ -1,0 +1,18 @@
+[Unit]
+Description=Realty: доступ ззовні через Cloudflare Tunnel
+After=realty-web.service
+Wants=realty-web.service
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py tunnel
+Restart=always
+RestartSec=15
+# 78 — немає пароля чи токена в .env: перезапуск не допоможе, чекаємо людину.
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target

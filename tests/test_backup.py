@@ -164,3 +164,11 @@ def test_telegram_errors_never_leak_the_token(monkeypatch):
     with pytest.raises(notify.NotifyError) as e:
         notify.send_message("тест")
     assert "дуже-секретний" not in str(e.value)
+
+
+def test_deliberately_local_copy_is_not_counted_as_backup(env):
+    con = _make_db(env / "live.db")
+    con.close()
+    res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk", upload=False)
+    assert res.status == "local" and res.restored_ok
+    assert backup.last_success_at() is None

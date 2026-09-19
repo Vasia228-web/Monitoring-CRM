@@ -1,0 +1,11 @@
+[Unit]
+Description=Realty: цикл кожні 3 години
+
+[Timer]
+OnCalendar=*-*-* 00/3:05:00
+# Машина була вимкнена в момент запуску — наздоганяємо одразу після старту.
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

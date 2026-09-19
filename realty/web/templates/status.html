@@ -201,6 +201,18 @@ th.r,td.r{text-align:right}
     <h2>Якість даних і витрати на модель</h2>
     <div class="panels">
       <div class="panel">
+        <h3>Автономність</h3>
+        <div class="rows">
+          <div class="row"><span>Останній успішний цикл</span><b id="a-last">—</b></div>
+          <div class="row"><span>Останні цикли</span><b id="a-cycles">—</b></div>
+          <div class="row"><span>Останній бекап</span><b id="a-backup">—</b></div>
+          <div class="row"><span>Адреса ззовні</span><b id="a-url">—</b></div>
+          <div class="row"><span>Активні тривоги</span><b id="a-alerts">—</b></div>
+        </div>
+        <p class="hint">Успішний цикл — той, що справді щось зібрав. Якщо його немає
+          довше, ніж зазвичай, приходить повідомлення в Telegram.</p>
+      </div>
+      <div class="panel">
         <h3>Дедуплікація</h3>
         <div class="rows">
           <div class="row"><span>Оголошень у базі</span><b id="q-listings">—</b></div>
@@ -219,9 +231,14 @@ th.r,td.r{text-align:right}
           <div class="row"><span>Викликів усього</span><b id="l-calls">—</b></div>
           <div class="row"><span>Токенів (вхід / вихід)</span><b id="l-tokens">—</b></div>
           <div class="row"><span>Вартість усього</span><b id="l-cost">—</b></div>
+          <div class="row"><span>Збіглось із парсером</span><b id="l-agreed">—</b></div>
+          <div class="row"><span>Розійшлось → у карантин</span><b id="l-disagreed">—</b></div>
+          <div class="row"><span>Нема з чим звірити</span><b id="l-blind">—</b></div>
         </div>
         <p class="hint">Рахується з моменту ввімкнення телеметрії. Модель викликається,
-          лише коли парсер не дістав ціну, площу або кімнати.</p>
+          лише коли парсер не дістав ціну, площу або кімнати. Її відповідь звіряється
+          з полями, які парсер таки дістав; розбіжність — запис іде на перевірку,
+          а не в базу.</p>
       </div>
       <div class="panel">
         <h3>Скарги «дані не збігаються»</h3>
@@ -306,6 +323,18 @@ function render(d){
     </tr>`;
   }).join("");
 
+  const au = d.autonomy || {};
+  $("a-last").textContent = au.last_success ? time(au.last_success) : "ще не було";
+  $("a-cycles").textContent = (au.cycles || []).map(c =>
+    ({ok: "✔", partial: "◐", failed: "✖", timeout: "⏱", running: "…"}[c.status] || c.status)
+    + " " + fmt(c.kept)).join("  ") || "—";
+  $("a-backup").textContent = au.backup
+    ? `${au.backup.status === "ok" ? "✔" : au.backup.status} ${time(au.backup.at)} · ${au.backup.size_mb} МБ`
+    : "ще не було";
+  $("a-url").textContent = au.public_url || "—";
+  $("a-alerts").textContent = (au.alerts || []).length
+    ? au.alerts.map(a => a.key).join(", ") : "немає";
+
   const q = d.quality;
   $("q-listings").textContent = fmt(q.listings);
   $("q-props").textContent = fmt(q.properties);
@@ -318,6 +347,9 @@ function render(d){
   $("l-calls").textContent = fmt(a.calls);
   $("l-tokens").textContent = fmt(a.in_tokens) + " / " + fmt(a.out_tokens);
   $("l-cost").textContent = "$" + a.cost_usd.toFixed(4);
+  $("l-agreed").textContent = fmt(a.agreed);
+  $("l-disagreed").textContent = fmt(a.disagreed);
+  $("l-blind").textContent = fmt(a.uncomparable);
 
   $("runs").innerHTML = d.runs.length ? d.runs.map(r => {
     const cls = r.status === "ok" ? "ok" : r.status === "running" ? "live" : "bad";
