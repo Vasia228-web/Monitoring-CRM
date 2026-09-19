@@ -17,7 +17,9 @@ from sqlalchemy import func, select
 from ..db import SessionLocal, session_scope
 from ..models import Condition, Listing, MarketType
 from . import audit, diagnose
-from .rules import compute_thresholds, load_thresholds, save_thresholds, validate
+from .rules import (
+    STICKY_REASONS, compute_thresholds, load_thresholds, save_thresholds, validate,
+)
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +64,12 @@ def revalidate(limit: int | None = None, thresholds=None) -> dict:
                 "built_year": row.built_year,
             }
             verdict, reasons = validate(rec, t)
+            sticky = [r for r in (row.quality_reason or "").split("; ")
+                      if r.startswith(STICKY_REASONS)]
+            if sticky:
+                reasons = [*reasons, *[r for r in sticky if r not in reasons]]
+                if verdict == "ok":
+                    verdict = "review"
             row.quality_status = verdict if verdict != "ok" else "ok"
             row.quality_reason = "; ".join(reasons) or None
             row.quality_checked_at = _now()

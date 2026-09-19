@@ -66,6 +66,12 @@ class Band:
 SEGMENT_LOW_RATIO = 0.55
 # Сегмент менший за це число не дає надійної медіани — не робимо висновків.
 SEGMENT_MIN_SAMPLE = 30
+# Менше за це — розподіл ще нічого не каже: пороги вважаються попередніми,
+# у файл не зберігаються й рахуються заново наступного разу.
+MIN_THRESHOLD_SAMPLE = 200
+# Причини карантину, які не знімає повторна перевірка правилами: вони
+# з'явились під час збору, і правила самі про них не знають.
+STICKY_REASONS = ("LLM розійшовся з парсером",)
 
 
 @dataclass
@@ -79,6 +85,9 @@ class Thresholds:
     # Ключ — рядок, щоб пороги лишались звичайним JSON-файлом, який можна
     # відкрити й прочитати очима.
     segment_median_sqm: dict = field(default_factory=dict)
+    # True — пороги пораховані на замалій вибірці (свіжа база): перевірка
+    # розподілом не працює, тож усе, що інакше пройшло б, іде на перегляд.
+    provisional: bool = False
 
     def segment_key(self, rec: dict) -> str:
         rooms = rec.get("rooms")
@@ -97,6 +106,7 @@ class Thresholds:
 
     def to_json(self) -> dict:
         d = asdict(self)
+        d.pop("provisional", None)
         return d
 
     @classmethod
@@ -173,11 +183,21 @@ def load_thresholds(session=None) -> Thresholds:
         except (json.JSONDecodeError, KeyError, TypeError):
             log.warning("Файл порогів пошкоджено — рахуємо заново")
     if session is None:
-        from ..db import SessionLocal
+        # Свіжа установка: таблиць може ще не бути. Раніше тут падав перший
+        # же збір на порожній базі — `no such table: listings`.
+        from ..db import SessionLocal, init_db
+        init_db()
         with SessionLocal() as s:
             t = compute_thresholds(s)
     else:
         t = compute_thresholds(session)
+    if t.sample_size < MIN_THRESHOLD_SAMPLE:
+        # Пороги з порожнечі не записуємо: файл, що вже існує, більше не
+        # перераховується, і свіжа база назавжди лишилася б без перевірки цін.
+        log.warning("Порогів ще немає: у базі %d записів із ціною, потрібно %d — "
+                    "нові записи підуть на перегляд", t.sample_size, MIN_THRESHOLD_SAMPLE)
+        t.provisional = True
+        return t
     save_thresholds(t)
     return t
 
@@ -242,6 +262,10 @@ def validate(rec: dict, t: Thresholds, previous_price_usd: float | None = None) 
                 verdict = "review"
             reasons.append(f"ціна змінилась на {delta * 100:+.0f}% "
                            f"(${previous_price_usd:,.0f} -> ${new_price:,.0f})")
+    if t.provisional and verdict == "ok":
+        verdict = "review"
+        reasons.append(f"пороги ще не пораховані: у базі {t.sample_size} записів із ціною, "
+                       f"потрібно {MIN_THRESHOLD_SAMPLE}")
     return verdict, reasons
 
 
