@@ -73,9 +73,16 @@ SOURCE_TIMEOUT = float(os.getenv("SOURCE_TIMEOUT", str(30 * 60)))
 RUN_TIMEOUT = float(os.getenv("RUN_TIMEOUT", str(120 * 60)))
 
 
+# Власні стелі джерел. OLX іде через браузер і дотягує сторінку деталей для
+# карток без кімнат: на Fedora звичайний прогін — 25 хв (заміряно 19.09, на
+# MacBook — 15), тож загальні 30 хв — впритул.
+SOURCE_TIMEOUTS = {"olx": 45 * 60}
+
+
 def source_timeout(name: str) -> float:
-    """Ліміт для конкретного джерела: SOURCE_TIMEOUT_OLX=… перекриває загальний."""
-    return float(os.getenv(f"SOURCE_TIMEOUT_{name.upper()}", SOURCE_TIMEOUT))
+    """Ліміт для конкретного джерела: SOURCE_TIMEOUT_OLX=… у .env перекриває все."""
+    default = SOURCE_TIMEOUTS.get(name, SOURCE_TIMEOUT)
+    return float(os.getenv(f"SOURCE_TIMEOUT_{name.upper()}", default))
 
 # --- LLM-фолбек ---------------------------------------------------------------
 LLM_ENABLED = os.getenv("LLM_FALLBACK", "1") not in ("0", "false", "False", "")
