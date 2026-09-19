@@ -172,3 +172,60 @@ def test_deliberately_local_copy_is_not_counted_as_backup(env):
     res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk", upload=False)
     assert res.status == "local" and res.restored_ok
     assert backup.last_success_at() is None
+
+
+def _fake_rclone(tmp_path, store: Path, log: Path) -> Path:
+    """Підробка rclone: копіює у «хмару»-теку й пише виклики в журнал."""
+    store.mkdir(exist_ok=True)
+    binary = tmp_path / "rclone"
+    binary.write_text(f"""#!/bin/bash
+echo "$@" >> {log}
+cmd="$1"; shift
+args=("$@")
+case "$cmd" in
+  copy) cp "${{args[@]: -2:1}}" {store}/ ;;          # copy [прапорці] ФАЙЛ remote:
+  lsjson) python3 -c "
+import json, os
+d = '{store}'
+print(json.dumps([{{'Name': n, 'Size': os.path.getsize(os.path.join(d, n))}}
+                  for n in os.listdir(d)]))" ;;
+  deletefile) rm -f "{store}/$(basename "${{args[@]: -1:1}}")" ;;
+esac
+""")
+    binary.chmod(0o755)
+    return binary
+
+
+def test_backup_goes_to_the_cloud_and_rotates_there(env, monkeypatch):
+    store, log = env / "cloud", env / "rclone.log"
+    monkeypatch.setenv("RCLONE_BIN", str(_fake_rclone(env, store, log)))
+    monkeypatch.setattr(backup, "RCLONE_REMOTE", "gdrive:realty-backups")
+    monkeypatch.setattr(backup, "TELEGRAM", False)
+    for i in range(8):                      # старі архіви вже в «хмарі»
+        (store / f"{backup.PREFIX}2026090{i}-000000.tar.xz").write_bytes(b"x")
+    (store / "чуже.tar.xz").write_bytes(b"x")
+
+    con = _make_db(env / "live.db", listings=3)
+    con.close()
+    res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk")
+
+    assert res.status == "ok" and res.offsite == ["rclone:gdrive:realty-backups"]
+    assert (store / res.file).stat().st_size == res.size     # долетів цілим
+    ours = sorted(p.name for p in store.iterdir() if p.name.startswith(backup.PREFIX))
+    assert len(ours) == backup.KEEP and res.file in ours     # старі прибрано
+    assert (store / "чуже.tar.xz").exists()                  # чуже не чіпаємо
+
+
+def test_cloud_upload_failure_is_not_a_success(env, monkeypatch):
+    broken = env / "rclone-broken"
+    broken.write_text("#!/bin/bash\necho 'directory not found' >&2\nexit 3\n")
+    broken.chmod(0o755)
+    monkeypatch.setenv("RCLONE_BIN", str(broken))
+    monkeypatch.setattr(backup, "RCLONE_REMOTE", "gdrive:realty-backups")
+    monkeypatch.setattr(backup, "TELEGRAM", False)
+    con = _make_db(env / "live.db")
+    con.close()
+    res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk")
+    assert res.status == "failed"
+    assert any("rclone" in p for p in res.problems)
+    assert backup.last_success_at() is None

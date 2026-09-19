@@ -46,7 +46,11 @@ KEEP = int(os.getenv("BACKUP_KEEP", "7"))
 # Куди ще класти копію поза машиною: `користувач@хост:тека` для scp.
 REMOTE = os.getenv("BACKUP_REMOTE", "").strip()
 # Telegram як сховище поза машиною — вмикається, якщо є токен і чат.
+# Тимчасове рішення: бот не надішле файл більший за 50 МБ, а база росте.
 TELEGRAM = os.getenv("BACKUP_TELEGRAM", "1") not in ("0", "false", "")
+# Хмарне сховище через rclone, напр. `gdrive:realty-backups` (Google Drive).
+# Доступ до акаунта дає людина одноразово (`rclone config`); ми лише копіюємо.
+RCLONE_REMOTE = os.getenv("BACKUP_RCLONE_REMOTE", "").strip()
 # Щоденний ритм: `--if-due` робить бекап, лише якщо останній успішний старший.
 DUE_AFTER_HOURS = float(os.getenv("BACKUP_EVERY_HOURS", "20"))
 PREFIX = "realty-backup-"
@@ -170,6 +174,43 @@ def _upload_scp(archive: Path) -> str:
     return f"scp:{REMOTE}"
 
 
+def _rclone() -> str:
+    binary = os.getenv("RCLONE_BIN", "").strip() or shutil.which("rclone")
+    local = Path.home() / ".local" / "bin" / "rclone"
+    if not binary and local.exists():
+        binary = str(local)
+    if not binary:
+        raise RuntimeError("rclone не знайдено (~/.local/bin/rclone або PATH)")
+    return binary
+
+
+def _rclone_run(*args: str, timeout: int = 900) -> str:
+    r = subprocess.run([_rclone(), *args], capture_output=True, text=True, timeout=timeout)
+    if r.returncode:
+        # У помилках rclone шляхи й назви віддалених тек, але не токени:
+        # вони лежать у ~/.config/rclone/rclone.conf і в вивід не потрапляють.
+        raise RuntimeError(f"rclone {args[0]}: {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout
+
+
+def _upload_rclone(archive: Path) -> str:
+    """Копія в хмару (Google Drive тощо). Розмір звіряємо на тому боці."""
+    _rclone_run("copy", "--no-traverse", str(archive), RCLONE_REMOTE)
+    listing = json.loads(_rclone_run("lsjson", "--files-only", RCLONE_REMOTE, timeout=120))
+    remote = {item["Name"]: item["Size"] for item in listing}
+    size = remote.get(archive.name)
+    if size is None:
+        raise RuntimeError(f"після копіювання {archive.name} немає в {RCLONE_REMOTE}")
+    if size != archive.stat().st_size:
+        raise RuntimeError(f"розмір у {RCLONE_REMOTE} ({size}) ≠ локальному")
+    # Ротація в хмарі — тільки наші архіви, найновіші лишаються.
+    ours = sorted((n for n in remote if n.startswith(PREFIX) and n.endswith(".tar.xz")),
+                  reverse=True)
+    for old in ours[KEEP:]:
+        _rclone_run("deletefile", f"{RCLONE_REMOTE.rstrip('/')}/{old}", timeout=120)
+    return f"rclone:{RCLONE_REMOTE}"
+
+
 def _upload_telegram(archive: Path, rows: dict, sha: str) -> str:
     caption = (f"Бекап {archive.name}\n"
                f"{socket.gethostname()} · {archive.stat().st_size / 1e6:.1f} МБ\n"
@@ -241,6 +282,8 @@ def run(db_url: str | None = None, dest: Path | None = None,
 
         if upload:
             targets = []
+            if RCLONE_REMOTE:
+                targets.append(("rclone", lambda: _upload_rclone(archive)))
             if TELEGRAM and notify.configured():
                 targets.append(("telegram", lambda: _upload_telegram(archive, res.rows,
                                                                      res.sha256)))

@@ -32,6 +32,30 @@ if [ ! -x "$HOME/.local/bin/cloudflared" ]; then
 fi
 "$HOME/.local/bin/cloudflared" --version
 
+echo "== rclone (копія бекапу в хмару)"
+if [ ! -x "$HOME/.local/bin/rclone" ]; then
+  tmp=$(mktemp -d); pushd "$tmp" >/dev/null
+  VER=$(curl -fsSL --max-time 60 https://downloads.rclone.org/version.txt | awk '{print $2}')
+  ZIP="rclone-$VER-linux-amd64.zip"
+  curl -fsSL --max-time 300 -O "https://downloads.rclone.org/$VER/$ZIP"
+  curl -fsSL --max-time 60 -O "https://downloads.rclone.org/$VER/SHA256SUMS"
+  want=$(grep " $ZIP$" SHA256SUMS | cut -d' ' -f1)
+  have=$(sha256sum "$ZIP" | cut -d' ' -f1)
+  [ "$want" = "$have" ] || { echo "   контрольна сума rclone не збіглась — пропускаю"; }
+  if [ "$want" = "$have" ]; then
+    unzip -qo "$ZIP"; mkdir -p "$HOME/.local/bin"
+    install -m 755 "rclone-$VER-linux-amd64/rclone" "$HOME/.local/bin/rclone"
+  fi
+  popd >/dev/null; rm -rf "$tmp"
+fi
+"$HOME/.local/bin/rclone" version 2>/dev/null | head -1 || echo "   rclone не встановлено"
+if "$HOME/.local/bin/rclone" listremotes 2>/dev/null | grep -q .; then
+  echo "   налаштовані сховища: $($HOME/.local/bin/rclone listremotes | tr '\n' ' ')"
+else
+  echo "   сховище ще не під'єднано — це робить людина одноразово:"
+  echo "   rclone config create gdrive drive scope=drive.file"
+fi
+
 echo "== .env"
 if [ -f .env ]; then
   chmod 600 .env
