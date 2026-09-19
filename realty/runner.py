@@ -51,6 +51,7 @@ TASK_TIMEOUTS = {
     "dedup": 15 * 60,
     "quality": 20 * 60,
     "forecast": 5 * 60,
+    "backup": 15 * 60,
 }
 KILL_GRACE = 15          # секунд між SIGTERM і SIGKILL
 
@@ -118,6 +119,8 @@ def default_steps(trigger: str = "schedule", sources: list[str] | None = None,
              TASK_TIMEOUTS["quality"]),
         Step("готовність аналітики", _cli("analytics", "forecast"),
              TASK_TIMEOUTS["forecast"]),
+        # Раз на добу: крок сам вирішує, чи настав час (--if-due).
+        Step("бекап", _cli("backup", "--if-due"), TASK_TIMEOUTS["backup"]),
     ]
     return steps
 

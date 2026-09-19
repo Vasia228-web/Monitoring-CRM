@@ -2,6 +2,7 @@
 """Точка входу: збір даних і запуск веб-інтерфейсу.
 
   python cli.py cycle                  # регулярний цикл із лімітами часу (для розкладу)
+  python cli.py backup                 # бекап бази з перевіркою відновлення
   python cli.py scrape                 # зібрати з усіх джерел
   python cli.py scrape --sources olx,lun --pages 3
   python cli.py backfill               # дозібрати записи з прогалинами
@@ -61,6 +62,51 @@ def cmd_cycle(args: argparse.Namespace) -> int:
     # Ненульовий код — лише коли сам диригент не зміг відпрацювати. «Нічого не
     # зібрано» — це стан системи, його бачить сигнал тиші, а не systemd.
     return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from realty import backup
+
+    if args.action == "verify":
+        r = backup.verify_archive(Path(args.file))
+        print(f"цілісність: {r['integrity']}")
+        print(f"рядків:     {r['rows']}")
+        print(f"маніфест:   {r['manifest']['rows']}  ({r['manifest']['created']})")
+        print("ВІДНОВЛЕННЯ ЗБІГЛОСЬ" if r["match"] else "НЕ ЗБІГЛОСЬ")
+        return 0 if r["match"] else 1
+    if args.action == "restore":
+        r = backup.restore(Path(args.file), Path(args.target))
+        print(f"розгорнуто в {args.target}: {r['rows']}")
+        return 0
+    if args.action == "status":
+        last = backup.last_attempt()
+        if last is None:
+            print("бекапів ще не було")
+            return 0
+        print(f"остання спроба: {last.created_at:%Y-%m-%d %H:%M} UTC — {last.status}")
+        print(f"  файл: {last.file} ({last.size / 1e6:.1f} МБ), відновлення: "
+              f"{'так' if last.restored_ok else 'ні'}")
+        print(f"  поза машиною: {last.offsite or '—'}")
+        if last.message:
+            print(f"  проблеми: {last.message}")
+        return 0
+
+    if args.if_due and not backup.is_due():
+        print(f"бекап не потрібен: останній успішний {backup.last_success_at():%Y-%m-%d %H:%M} UTC")
+        return 0
+    res = backup.run(upload=not args.no_upload)
+    print(f"\nБЕКАП: {res.status.upper()}")
+    print(f"  файл:         {res.file} ({res.size / 1e6:.1f} МБ)")
+    print(f"  рядків:       {res.rows}")
+    print(f"  відновлення:  {'збіглось' if res.restored_ok else 'НЕ перевірено/не збіглось'}")
+    print(f"  поза машиною: {', '.join(res.offsite) or '—'}")
+    if res.pruned:
+        print(f"  прибрано старих: {len(res.pruned)}")
+    for p in res.problems:
+        print(f"  ! {p}")
+    return 0 if res.status == "ok" else 1
 
 
 def cmd_quality(args: argparse.Namespace) -> int:
@@ -352,6 +398,16 @@ def main() -> int:
     cy.add_argument("--trigger", default="schedule", choices=("cli", "manual", "schedule"))
     cy.add_argument("--run-timeout", type=float, help="стеля циклу в хвилинах")
     cy.set_defaults(func=cmd_cycle)
+
+    bk = sub.add_parser("backup", help="бекап бази: копія, перевірка, відновлення, вивантаження")
+    bk.add_argument("action", nargs="?", default="run",
+                    choices=("run", "verify", "restore", "status"))
+    bk.add_argument("file", nargs="?", help="архів для verify/restore")
+    bk.add_argument("target", nargs="?", help="куди розгорнути (restore; файл не має існувати)")
+    bk.add_argument("--if-due", action="store_true",
+                    help="лише якщо останній успішний бекап старший за BACKUP_EVERY_HOURS")
+    bk.add_argument("--no-upload", action="store_true", help="не вивантажувати поза машину")
+    bk.set_defaults(func=cmd_backup)
 
     bf = sub.add_parser("backfill", help="дозібрати наявні записи з прогалинами")
     bf.add_argument("--sources", help="через кому: domria,lun,olx,flombu,blago")
