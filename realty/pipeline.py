@@ -96,11 +96,17 @@ class Pipeline:
 
     # --- LLM-фолбек -----------------------------------------------------------
 
-    def _get_browser(self, delay: float = 2.5) -> BrowserFetcher:
-        """Один браузер на весь прогін: Playwright sync API не дозволяє
-        запустити другий екземпляр із контексту першого."""
+    def _get_browser(self, delay: float = 2.5, label: str | None = None) -> BrowserFetcher:
+        """Один браузер на джерело: Playwright sync API не дозволяє
+        запустити другий екземпляр із контексту першого.
+
+        `label` — ім'я джерела. Без нього запити браузера лічились як «?», і
+        частка блокувань OLX на дашборді й у сторожі завжди була нульова.
+        """
         if self._browser is None:
-            self._browser = BrowserFetcher(delay=delay)
+            self._browser = BrowserFetcher(delay=delay, label=label)
+        elif label and self._browser.label is None:
+            self._browser.label = label
         return self._browser
 
     def _get_http(self, delay: float = 1.5) -> Fetcher:
@@ -116,7 +122,8 @@ class Pipeline:
         cfg = SOURCES.get(rec.get("source", ""))
         try:
             if cfg and cfg.needs_browser:
-                return self._get_browser(cfg.delay).render(url, settle_ms=2000)
+                return self._get_browser(cfg.delay, rec.get("source")).render(
+                    url, settle_ms=2000)
             return self._get_http(cfg.delay if cfg else 1.5).get(url)
         except FetchError as e:
             log.debug("Сторінку %s не завантажено (%s)", url, e)
@@ -298,7 +305,8 @@ class Pipeline:
             if cls is None:
                 return None
             cfg = SOURCES.get(name)
-            browser = self._get_browser(cfg.delay) if (cfg and cfg.needs_browser) else None
+            browser = (self._get_browser(cfg.delay, name)
+                       if (cfg and cfg.needs_browser) else None)
             cache[name] = cls(browser=browser, mode=self.mode)
         return cache[name]
 
@@ -425,7 +433,8 @@ class Pipeline:
             checks_before = self._check_snapshot()
             before = (self.report.inserted, self.report.updated)
             cfg = SOURCES.get(name)
-            browser = self._get_browser(cfg.delay) if (cfg and cfg.needs_browser) else None
+            browser = (self._get_browser(cfg.delay, name)
+                       if (cfg and cfg.needs_browser) else None)
             with session_scope() as s:
                 known = self._known_ids(s, name)
             src = cls(browser=browser, mode=self.mode, known_ids=known,
@@ -452,10 +461,18 @@ class Pipeline:
                 # Запис прогону закривається завжди — інакше він назавжди
                 # лишиться «виконується» і дашборд показуватиме хибний
                 # зелений сигнал.
+                escalated_before = len(self.gate.report.escalated) if self.gate else 0
                 try:
                     self._write(batch)
-                except Exception:
+                except Exception as e:
+                    # Раніше це лише логувалось, а прогін лишався «ok» — зібране
+                    # губилось тихо. Тепер це помилка прогону з текстом.
                     log.exception("Не вдалося записати пакет %s", name)
+                    failure = failure or f"пакет не записано: {type(e).__name__}: {str(e)[:240]}"
+                if self.gate and len(self.gate.report.escalated) > escalated_before:
+                    # Карантин не прийняв пакет цілком: зібрано, але не записано.
+                    failure = failure or ("ЕСКАЛАЦІЯ: " + "; ".join(
+                        self.gate.report.escalated[escalated_before:]) + " — пакет не прийнято")
                 self.report.per_source[name] = dict(src.stats)
                 self._record_source_run(run_id, name, src.stats, llm_before, before,
                                         message=failure, checks_before=checks_before)

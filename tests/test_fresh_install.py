@@ -74,3 +74,65 @@ def _scope(db):
         finally:
             s.close()
     return scope
+
+
+def test_tiny_sample_does_not_narrow_price_bounds(tmp_path, monkeypatch):
+    """Регресія з проби на Fedora: 26 оголошень flombu дали коридор цін
+    $18 900–80 900, і карантин відхилив 35% справжніх оголошень OLX."""
+    db = _fresh(tmp_path, monkeypatch)
+    db.init_db()
+    with db.SessionLocal() as s:
+        for i in range(26):
+            s.add(Listing(source="flombu", external_id=str(i), original_url=f"u{i}",
+                          price=30000 + 1000 * i, price_usd=30000.0 + 1000 * i,
+                          price_per_sqm=700.0 + 10 * i, area_total=45.0, rooms=2,
+                          location="вул. Тестова", is_active=True, quality_status="review",
+                          condition=Condition.UNKNOWN, market_type=MarketType.UNKNOWN))
+        s.commit()
+    t = rules.load_thresholds()
+    assert t.provisional
+    rec = {"price": 140000, "price_usd": 140000.0, "rooms": 3, "location": "вул. Тестова",
+           "original_url": "u", "area_total": 70.0, "price_per_sqm": 2000.0}
+    verdict, _ = rules.validate(rec, t)
+    assert verdict == "review"          # на перегляд, а не «відхилено»
+
+
+def test_rejected_batch_marks_the_run_failed(tmp_path, monkeypatch):
+    """Ескалація карантину: зібрано, але не записано — це не «ok»."""
+    from sqlalchemy import select
+
+    from realty import ops
+    from realty.pipeline import Pipeline
+    from realty.sources import REGISTRY
+    from realty.sources.base import BaseSource
+
+    db = _fresh(tmp_path, monkeypatch)
+    db.init_db()
+    import realty.pipeline as pl
+    monkeypatch.setattr(pl, "init_db", lambda: None)
+    monkeypatch.setattr(pl, "session_scope", _scope(db))
+    ops_engine = create_engine(f"sqlite:///{tmp_path / 'ops.db'}", future=True)
+    monkeypatch.setattr(ops, "engine", ops_engine)
+    monkeypatch.setattr(ops, "OpsSession", sessionmaker(bind=ops_engine, expire_on_commit=False,
+                                                        future=True))
+    ops.OpsBase.metadata.create_all(ops_engine)
+
+    class Junk(BaseSource):
+        name = "junk"
+
+        def iter_listings(self):
+            for i in range(30):      # без кімнат і адреси — усе буде відхилено
+                yield {"external_id": str(i), "original_url": f"https://x/{i}", "price": 1}
+
+    monkeypatch.setitem(REGISTRY, "junk", Junk)
+    Pipeline(sources=["junk"], use_llm=False).run()
+    with ops.ops_session() as s:
+        run = s.scalars(select(ops.RunRecord)).one()
+    assert run.status == "failed"
+    assert "ЕСКАЛАЦІЯ" in run.message and run.inserted == 0 and run.kept == 30
+
+
+def test_browser_requests_are_counted_for_their_source():
+    from realty.pipeline import Pipeline
+    p = Pipeline(use_llm=False)
+    assert p._get_browser(2.5, "olx").label == "olx"

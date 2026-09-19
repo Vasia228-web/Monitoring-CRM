@@ -249,21 +249,22 @@ def _reap_overdue_holder(lock: CycleLock, run_timeout: float) -> bool:
 # --- Цикл ----------------------------------------------------------------------------
 
 
-def _collected(child_pids: list[int], since: datetime) -> tuple[int, int]:
-    """Скільки зібрано й додано дочірніми процесами збору цього циклу."""
+def _collected(child_pids: list[int], since: datetime) -> tuple[int, int, int]:
+    """Скільки зібрано, додано й записано (додано + оновлено) цього циклу."""
     from sqlalchemy import func, select
 
     if not child_pids:
-        return 0, 0
+        return 0, 0, 0
     ops.init_ops()
     with ops.ops_session() as s:
-        kept, inserted = s.execute(
+        kept, inserted, updated = s.execute(
             select(func.coalesce(func.sum(ops.RunRecord.kept), 0),
-                   func.coalesce(func.sum(ops.RunRecord.inserted), 0))
+                   func.coalesce(func.sum(ops.RunRecord.inserted), 0),
+                   func.coalesce(func.sum(ops.RunRecord.updated), 0))
             .where(ops.RunRecord.pid.in_(child_pids),
                    ops.RunRecord.started_at >= since)
         ).one()
-    return int(kept), int(inserted)
+    return int(kept), int(inserted), int(inserted) + int(updated)
 
 
 def _close_killed_runs(pid: int, source: str, note: str) -> None:
@@ -325,20 +326,23 @@ def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
             if result.status == "timeout" and remaining < step.timeout:
                 timed_out = True
     finally:
-        kept, inserted = _collected(child_pids, started_wall)
+        kept, inserted, written = _collected(child_pids, started_wall)
         sources_run = [r for r in results if r.name.startswith("збір")]
         broken = [r for r in sources_run if r.status != "ok"]
+        # Успіх — те, що ДІЙШЛО до бази. Зібране, але не прийняте карантином
+        # чи не записане, — не успіх: саме так пройшов пакет OLX на пробі.
         if timed_out:
-            status = "partial" if kept else "timeout"
-        elif not kept:
+            status = "partial" if written else "timeout"
+        elif not written:
             status = "failed"
         elif broken:
             status = "partial"
         else:
             status = "ok"
         message = None
-        if not kept:
-            message = "за цикл не зібрано жодного оголошення"
+        if not written:
+            message = ("за цикл не зібрано жодного оголошення" if not kept else
+                       f"зібрано {kept}, але до бази не дійшло жодного")
         if broken:
             message = ((message + "; ") if message else "") + "проблемні кроки: " + ", ".join(
                 f"{r.name} ({r.status})" for r in broken)

@@ -196,6 +196,13 @@ def load_thresholds(session=None) -> Thresholds:
         # перераховується, і свіжа база назавжди лишилася б без перевірки цін.
         log.warning("Порогів ще немає: у базі %d записів із ціною, потрібно %d — "
                     "нові записи підуть на перегляд", t.sample_size, MIN_THRESHOLD_SAMPLE)
+        # Межі з кількох десятків записів одного джерела — не розподіл ринку:
+        # на свіжій базі 26 оголошень flombu дали коридор $18 900–80 900, і
+        # карантин відхилив 35% справжніх оголошень OLX. Поки вибірки мало,
+        # межами не користуємось зовсім — усе й так іде на перегляд.
+        open_band = Band(0.0, float("inf"), 0.0, float("inf"))
+        t.price_usd = t.price_per_sqm = t.area_total = open_band
+        t.segment_median_sqm = {}
         t.provisional = True
         return t
     save_thresholds(t)
