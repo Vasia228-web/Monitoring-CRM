@@ -59,3 +59,28 @@ def test_every_response_forbids_indexing(monkeypatch):
     for r in (c.get("/"), c.get("/healthz"), c.get("/", auth=("u", "p"))):
         assert r.headers.get("x-robots-tag") == "noindex, nofollow"
     assert c.get("/").status_code == 401
+
+
+def test_cloudflare_service_address_is_not_the_site_address():
+    """Регресія: у тексті помилки cloudflared є https://api.trycloudflare.com —
+    перша версія виразу записала її як адресу сайту й надіслала в Telegram."""
+    err = ('failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": '
+           'context deadline exceeded')
+    assert tunnel.QUICK_URL.search(err) is None
+    ok = "INF |  https://brave-otter-lamp-quiet.trycloudflare.com  |"
+    assert tunnel.QUICK_URL.search(ok).group(0).endswith("quiet.trycloudflare.com")
+
+
+def test_address_is_announced_only_after_it_answers(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tunnel.httpx, "get",
+                        lambda url, **kw: calls.append(url) or _Resp(502))
+    assert tunnel.responds("https://x.trycloudflare.com", attempts=1) is False
+    assert calls == ["https://x.trycloudflare.com/healthz"]
+    monkeypatch.setattr(tunnel.httpx, "get", lambda url, **kw: _Resp(200))
+    assert tunnel.responds("https://x.trycloudflare.com", attempts=1) is True
+
+
+class _Resp:
+    def __init__(self, code):
+        self.status_code = code

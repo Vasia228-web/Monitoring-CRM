@@ -20,8 +20,11 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import sys
 from pathlib import Path
+
+import httpx
 
 from . import notify
 from .config import DATA_DIR
@@ -29,7 +32,10 @@ from .config import DATA_DIR
 log = logging.getLogger(__name__)
 
 PUBLIC_URL_PATH = DATA_DIR / "public_url"
-QUICK_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+# `api.trycloudflare.com` — службова адреса самого Cloudflare: вона трапляється
+# в тексті ПОМИЛКИ («failed to request quick Tunnel: Post https://api…»), і
+# перша версія виразу прийняла її за адресу сайту.
+QUICK_URL = re.compile(r"https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com")
 EX_CONFIG = 78          # код «неправильна конфігурація»: systemd не перезапускає
 
 
@@ -62,6 +68,27 @@ def plan(env: dict | None = None) -> dict:
     return {"mode": "quick",
             "args": ["tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
             "env": {}, "url": None}
+
+
+def responds(url: str, attempts: int = 3) -> bool:
+    """Чи справді сайт відповідає за цією адресою.
+
+    Адресу оголошуємо лише після перевірки: повідомлення з непрацюючим
+    посиланням гірше за його відсутність. `/healthz` відкритий без пароля,
+    тому 200 — це саме наш сервіс.
+    """
+    for i in range(attempts):
+        try:
+            r = httpx.get(url.rstrip("/") + "/healthz", timeout=15,
+                          follow_redirects=True)
+            if r.status_code == 200:
+                return True
+            log.warning("адреса %s відповіла %s", url, r.status_code)
+        except Exception as e:
+            log.warning("адреса %s ще не відповідає (%s)", url, type(e).__name__)
+        if i + 1 < attempts:
+            time.sleep(5)
+    return False
 
 
 def remember(url: str) -> bool:
@@ -97,6 +124,7 @@ def run() -> int:
     if p["url"] and remember(p["url"]):
         announce(p["url"], p["mode"])
     log.info("тунель: режим %s", p["mode"])
+    current = None
     proc = subprocess.Popen([binary, *p["args"]], env={**os.environ, **p["env"]},
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             bufsize=1)
@@ -106,9 +134,11 @@ def run() -> int:
             sys.stdout.flush()
             if p["mode"] == "quick" and (m := QUICK_URL.search(line)):
                 url = m.group(0)
-                if remember(url):
-                    log.info("нова адреса: %s", url)
-                    announce(url, "quick")
+                if url != current and responds(url):
+                    current = url
+                    if remember(url):
+                        log.info("нова адреса: %s", url)
+                        announce(url, "quick")
     finally:
         code = proc.wait()
     log.warning("cloudflared завершився з кодом %s", code)
