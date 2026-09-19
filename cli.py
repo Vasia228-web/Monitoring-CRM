@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Точка входу: збір даних і запуск веб-інтерфейсу.
 
+  python cli.py cycle                  # регулярний цикл із лімітами часу (для розкладу)
   python cli.py scrape                 # зібрати з усіх джерел
   python cli.py scrape --sources olx,lun --pages 3
   python cli.py backfill               # дозібрати записи з прогалинами
@@ -44,6 +45,21 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     report = Pipeline(sources=names, use_llm=not args.no_llm, mode=args.mode,
                       trigger=args.trigger).run()
     print(report.render())
+    return 0
+
+
+def cmd_cycle(args: argparse.Namespace) -> int:
+    """Регулярний цикл: кожен крок — окремий процес зі стелею часу."""
+    from realty import runner
+
+    names = [x.strip() for x in args.sources.split(",")] if args.sources else None
+    kwargs = {}
+    if args.run_timeout:
+        kwargs["run_timeout"] = args.run_timeout * 60
+    result = runner.run_cycle(trigger=args.trigger, sources=names, **kwargs)
+    print(runner.render(result))
+    # Ненульовий код — лише коли сам диригент не зміг відпрацювати. «Нічого не
+    # зібрано» — це стан системи, його бачить сигнал тиші, а не systemd.
     return 0
 
 
@@ -330,6 +346,12 @@ def main() -> int:
     sc.add_argument("--mode", choices=("fresh", "full"), default="fresh",
                     help="fresh — тільки нові оголошення; full — без стелі глибини")
     sc.set_defaults(func=cmd_scrape)
+
+    cy = sub.add_parser("cycle", help="регулярний цикл: збір і обслуговування з лімітами часу")
+    cy.add_argument("--sources", help="через кому; типово всі ввімкнені")
+    cy.add_argument("--trigger", default="schedule", choices=("cli", "manual", "schedule"))
+    cy.add_argument("--run-timeout", type=float, help="стеля циклу в хвилинах")
+    cy.set_defaults(func=cmd_cycle)
 
     bf = sub.add_parser("backfill", help="дозібрати наявні записи з прогалинами")
     bf.add_argument("--sources", help="через кому: domria,lun,olx,flombu,blago")

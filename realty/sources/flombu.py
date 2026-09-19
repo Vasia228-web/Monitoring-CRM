@@ -90,7 +90,7 @@ class FlombuSource(BaseSource):
             try:
                 data = self.fetcher.get_json(API, self._params(page))
             except FetchError as e:
-                log.warning("flombu: сторінка %d не завантажилась: %s", page, e)
+                self.give_up(f"сторінка {page} не завантажилась", e)
                 break
             items = data.get("data") or []
             # Гео лежить окремо, в `included`; зв'язуємо за id відношення.

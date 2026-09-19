@@ -215,7 +215,7 @@ class DomRiaSource(BaseSource):
             try:
                 ids = self._search_page(page)
             except FetchError as e:
-                log.warning("DIM.RIA: сторінка %d не завантажилась: %s", page, e)
+                self.give_up(f"сторінка {page} не завантажилась", e)
                 break
             if not ids:
                 break

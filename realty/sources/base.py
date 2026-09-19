@@ -79,6 +79,18 @@ class BaseSource(abc.ABC):
         """Чи припинити обхід достроково."""
         return self._stop
 
+    def give_up(self, what: str, error: Exception) -> None:
+        """Джерело не відповіло — кидаємо його, але НЕ мовчки.
+
+        Раніше невдала сторінка списку просто обривала обхід, а прогін
+        записувався як успішний: нуль помилок, нуль зібраного. Тепер це
+        помилка з текстом — її видно на дашборді й у сигналі тиші.
+        """
+        self.stats["errors"] += 1
+        self.stats["last_error"] = f"{what}: {type(error).__name__}: {str(error)[:240]}"
+        log.warning("%s: %s — джерело кинуто: %s", self.name, what, error)
+        self._stop = True
+
     def begin_page(self, page: int | None = None) -> None:
         self._page_new = 0
         self.stats["pages"] += 1

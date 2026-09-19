@@ -44,6 +44,10 @@ class BlagoSource(BaseSource):
             try:
                 html = self.fetcher.get(url)
             except FetchError as e:
+                # Розділи каталогу незалежні: один не відкрився — решта ні до чого.
+                # Але це помилка, а не порожня сторінка.
+                self.stats["errors"] += 1
+                self.stats["last_error"] = f"{url}: {str(e)[:240]}"
                 log.warning("blago: %s не завантажилась: %s", url, e)
                 continue
             soup = BeautifulSoup(html, "lxml")

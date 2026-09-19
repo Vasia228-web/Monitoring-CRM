@@ -174,7 +174,7 @@ class OlxSource(BaseSource):
             try:
                 html = self.browser.render(url, wait_selector=CARD_SEL)
             except FetchError as e:
-                log.warning("OLX: %s не відрендерилась: %s", url, e)
+                self.give_up(f"{url} не відрендерилась", e)
                 break
             cards = BeautifulSoup(html, "lxml").select(CARD_SEL)
             log.info("OLX: %s — %d карток", url, len(cards))

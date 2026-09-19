@@ -137,7 +137,7 @@ class LunSource(BaseSource):
             try:
                 html = self.fetcher.get(url)
             except FetchError as e:
-                log.warning("LUN: %s не завантажилась: %s", url, e)
+                self.give_up(f"{url} не завантажилась", e)
                 break
             payload = extract_payload(html)
             if not payload:

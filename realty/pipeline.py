@@ -418,7 +418,13 @@ class Pipeline:
                 self._record_source_run(run_id, name, src.stats, llm_before, before,
                                         message=failure)
                 if src._fetcher is not None:
-                    src._fetcher.close()  # браузер спільний — закриємо в кінці
+                    src._fetcher.close()
+                # Браузер закриваємо одразу після джерела, якому він був
+                # потрібен, а не в кінці прогону: на машині з 3,7 ГБ пам'яті
+                # Chromium не має жити довше, ніж треба.
+                if self._browser is not None:
+                    self._browser.close()
+                    self._browser = None
 
         self._record_llm_cost()
         self.report.quality = self.gate.report.as_dict() if self.gate else {}

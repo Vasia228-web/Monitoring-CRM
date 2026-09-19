@@ -11,19 +11,22 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import signal
+import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
-from tenacity import (
-    retry, retry_if_exception_type, stop_after_attempt, wait_exponential,
-)
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from . import ops
 from .config import (
-    CACHE_DIR, CACHE_TTL, DEFAULT_DELAY, HTTP_RETRIES, HTTP_TIMEOUT, PROXY_URL, USER_AGENT,
+    BROWSER_OP_TIMEOUT, CACHE_DIR, CACHE_TTL, DEFAULT_DELAY, HTTP_RETRIES, HTTP_TIMEOUT,
+    PROXY_URL, REQUEST_TIMEOUT, USER_AGENT,
 )
 
 # Коди, за якими сайт відмовляє навмисно, а не через збій.
@@ -97,6 +100,26 @@ class FetchError(RuntimeError):
     """Запит не вдався після всіх спроб."""
 
 
+class DeadlineExceeded(FetchError):
+    """Зовнішня сторона не вклалась у ліміт часу.
+
+    Окремий клас, бо реакція інша, ніж на звичайну помилку: повтор тут не
+    допомагає, а лише множить очікування. Джерело, яке не відповіло, кидаємо
+    й ідемо до наступного.
+    """
+
+
+def _retryable(exc: BaseException) -> bool:
+    """Повторюємо збої мережі й 429/5xx, але НЕ таймаути.
+
+    Три спроби по 30 с до сайту, що мовчить, — це півтори хвилини простою
+    на кожному запиті, а не шанс на успіх.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return False
+    return isinstance(exc, (httpx.TransportError, httpx.HTTPStatusError))
+
+
 class Fetcher:
     """HTTP-клієнт із кешем, ретраями й обмеженням темпу."""
 
@@ -108,10 +131,11 @@ class Fetcher:
         self.cache = DiskCache() if use_cache else None
         self.client = httpx.Client(
             headers=BASE_HEADERS,
-            timeout=HTTP_TIMEOUT,
+            timeout=httpx.Timeout(HTTP_TIMEOUT, connect=min(15.0, HTTP_TIMEOUT)),
             follow_redirects=True,
             proxy=PROXY_URL,
         )
+        self.request_timeout = REQUEST_TIMEOUT
 
     def close(self) -> None:
         self.client.close()
@@ -122,17 +146,40 @@ class Fetcher:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    def _fetch(self, method: str, url: str, params: dict | None = None,
+               headers: dict | None = None, body: bool = True) -> tuple[httpx.Response, str]:
+        """Один запит із жорсткою стелею часу від початку до кінця.
+
+        Тайм-аути httpx обмежують кожну фазу окремо: з'єднання, очікування
+        чергового шматка. Сайт, що віддає тіло по краплі, жодної з них не
+        перевищує і може тягнути запит скільки завгодно. Тому тіло читаємо
+        шматками й після кожного звіряємося з годинником.
+        """
+        started = time.monotonic()
+        deadline = started + self.request_timeout
+        with self.client.stream(method, url, params=params, headers=headers) as r:
+            if not body:
+                return r, ""
+            chunks: list[bytes] = []
+            for chunk in r.iter_bytes():
+                chunks.append(chunk)
+                if time.monotonic() > deadline:
+                    raise DeadlineExceeded(
+                        f"відповідь не вклалась у {self.request_timeout:.0f} с для {url}")
+            content = b"".join(chunks)
+        return r, content.decode(r.encoding or "utf-8", errors="replace")
+
     @retry(
         stop=stop_after_attempt(HTTP_RETRIES),
         wait=wait_exponential(multiplier=1.5, min=2, max=20),
-        retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
+        retry=retry_if_exception(_retryable),
         reraise=True,
     )
     def _request(self, url: str, params: dict | None, headers: dict | None,
                  delay: float | None) -> str:
         self.limiter.wait(url, delay)
         try:
-            r = self.client.get(url, params=params, headers=headers)
+            r, text = self._fetch("GET", url, params=params, headers=headers)
         except Exception:
             ops.record_request(self.label, ok=False)
             raise
@@ -143,7 +190,7 @@ class Fetcher:
             r.raise_for_status()
         if r.status_code >= 400:
             raise FetchError(f"HTTP {r.status_code} для {url}")
-        return r.text
+        return text
 
     def get(self, url: str, params: dict | None = None, headers: dict | None = None,
             delay: float | None = None) -> str:
@@ -155,6 +202,8 @@ class Fetcher:
             text = self._request(url, params, headers, delay)
         except FetchError:
             raise
+        except httpx.TimeoutException as e:
+            raise DeadlineExceeded(f"{type(e).__name__} для {url}: {e}") from e
         except Exception as e:
             raise FetchError(f"{type(e).__name__} для {url}: {e}") from e
         if self.cache:
@@ -183,7 +232,8 @@ class Fetcher:
     def _probe_once(self, method: str, url: str, delay: float | None) -> int:
         self.limiter.wait(url, delay)
         try:
-            r = self.client.request(method, url)
+            # Тіло не читаємо навіть для GET: потрібен лише код.
+            r, _ = self._fetch(method, url, body=False)
         except Exception:
             ops.record_request(self.label, ok=False)
             return 0
@@ -200,22 +250,120 @@ class Fetcher:
             raise FetchError(f"Очікували JSON від {url}, отримали HTML/сміття") from e
 
 
+def _descendants(pid: int) -> list[int]:
+    """Усі нащадки процесу (діти, онуки...) — через pgrep, що є і на macOS, і в Linux."""
+    out: list[int] = []
+    queue = [pid]
+    while queue:
+        parent = queue.pop()
+        try:
+            r = subprocess.run(["pgrep", "-P", str(parent)], capture_output=True,
+                               text=True, timeout=5)
+        except Exception:
+            continue
+        kids = [int(x) for x in r.stdout.split() if x.strip().isdigit()]
+        out.extend(kids)
+        queue.extend(kids)
+    return out
+
+
+def kill_tree(pid: int) -> None:
+    """SIGKILL процесу разом із нащадками. Нащадків збираємо ДО вбивства:
+    після смерті батька вони переходять до init і вже не знаходяться."""
+    for p in [pid, *_descendants(pid)]:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+class Watchdog:
+    """Будильник для операцій, які самі не вміють здаватися.
+
+    Частина викликів Playwright не має параметра тайм-ауту взагалі
+    (`page.content()`, `new_page()`, `close()`). Якщо браузер перестав
+    відповідати, такий виклик чекає вічно — саме це й сталося 10.09.2026.
+    Сторож у окремому потоці: не встигла операція за `seconds` — він убиває
+    процес драйвера разом із браузером. Завислий виклик отримує обрив
+    з'єднання замість нескінченного очікування, і джерело кидається.
+    """
+
+    def __init__(self, seconds: float, pid_getter, label: str = "") -> None:
+        self.seconds = seconds
+        self._pid_getter = pid_getter
+        self.label = label
+        self.fired = False
+        self._timer: threading.Timer | None = None
+
+    def _fire(self) -> None:
+        pid = self._pid_getter()
+        if not pid:
+            return
+        self.fired = True
+        log.error("%s: браузер не відповів за %.0f с — зупиняємо процес %s",
+                  self.label or "браузер", self.seconds, pid)
+        kill_tree(pid)
+
+    def __enter__(self) -> "Watchdog":
+        self._timer = threading.Timer(self.seconds, self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+
+
 class BrowserFetcher:
     """Рендер сторінки справжнім Chromium — для сайтів, що вимагають JS.
 
     Це звичайний браузер із типовими налаштуваннями локалі: жодних
     stealth-патчів чи підміни відбитків.
+
+    Кожна операція йде під сторожем (`Watchdog`). Якщо браузер довелося
+    вбити, екземпляр позначається мертвим і далі одразу відповідає
+    `DeadlineExceeded`: джерело, що не відповіло, ми кидаємо, а не
+    перезапускаємо браузер по колу.
     """
 
     def __init__(self, delay: float = 2.5, headless: bool = True,
-                 label: str | None = None) -> None:
+                 label: str | None = None, op_timeout: float = BROWSER_OP_TIMEOUT) -> None:
         self.label = label
         self.limiter = RateLimiter(delay)
         self.headless = headless
         self.cache = DiskCache()
+        self.op_timeout = op_timeout
+        self.dead = False
         self._pw = None
         self._browser = None
         self._ctx = None
+
+    def _driver_pid(self) -> int | None:
+        """PID процесу драйвера Playwright; браузер — його нащадок."""
+        try:
+            return self._pw._impl_obj._connection._transport._proc.pid
+        except Exception:
+            return None
+
+    @contextmanager
+    def _guarded(self, what: str):
+        if self.dead:
+            raise DeadlineExceeded(f"браузер уже зупинено після тайм-ауту ({what})")
+        dog = Watchdog(self.op_timeout, self._driver_pid, label=self.label or "браузер")
+        try:
+            with dog:
+                yield
+        except Exception as e:
+            if dog.fired:
+                self.dead = True
+                raise DeadlineExceeded(
+                    f"браузер не відповів за {self.op_timeout:.0f} с ({what})") from e
+            raise
+        if dog.fired:
+            # Операція встигла повернутись у ту ж мить, коли сторож спрацював:
+            # браузер однаково вже вбитий.
+            self.dead = True
 
     def _ensure(self):
         if self._ctx is not None:
@@ -227,16 +375,20 @@ class BrowserFetcher:
                 "Потрібен Playwright: pip install playwright && playwright install chromium"
             ) from e
         self._pw = sync_playwright().start()
-        launch: dict = {"headless": self.headless}
-        if PROXY_URL:
-            launch["proxy"] = {"server": PROXY_URL}
-        self._browser = self._pw.chromium.launch(**launch)
-        self._ctx = self._browser.new_context(
-            locale="uk-UA",
-            timezone_id="Europe/Kyiv",
-            viewport={"width": 1366, "height": 900},
-            user_agent=USER_AGENT,
-        )
+        with self._guarded("запуск браузера"):
+            launch: dict = {"headless": self.headless}
+            if PROXY_URL:
+                launch["proxy"] = {"server": PROXY_URL}
+            self._browser = self._pw.chromium.launch(**launch)
+            self._ctx = self._browser.new_context(
+                locale="uk-UA",
+                timezone_id="Europe/Kyiv",
+                viewport={"width": 1366, "height": 900},
+                user_agent=USER_AGENT,
+            )
+            # Стеля для всіх викликів, що приймають тайм-аут; решту стереже Watchdog.
+            self._ctx.set_default_timeout(REQUEST_TIMEOUT * 1000)
+            self._ctx.set_default_navigation_timeout(REQUEST_TIMEOUT * 1000)
 
     def render(self, url: str, wait_selector: str | None = None,
                settle_ms: int = 2500, delay: float | None = None) -> str:
@@ -245,10 +397,21 @@ class BrowserFetcher:
             return hit
         self._ensure()
         self.limiter.wait(url, delay)
+        try:
+            with self._guarded(url):
+                html = self._render_page(url, wait_selector, settle_ms)
+        except DeadlineExceeded:
+            ops.record_request(self.label, ok=False)
+            raise
+        self.cache.set("render:" + url, html)
+        return html
+
+    def _render_page(self, url: str, wait_selector: str | None, settle_ms: int) -> str:
         page = self._ctx.new_page()
         try:
             try:
-                resp = page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                resp = page.goto(url, wait_until="domcontentloaded",
+                                 timeout=REQUEST_TIMEOUT * 1000)
             except Exception as e:
                 ops.record_request(self.label, ok=False)
                 # Playwright кидає власні помилки (обрив мережі, таймаут). Якщо
@@ -267,35 +430,57 @@ class BrowserFetcher:
                 except Exception:
                     log.warning("Селектор %s не з'явився на %s", wait_selector, url)
             page.wait_for_timeout(settle_ms)
-            html = page.content()
+            return page.content()
         finally:
-            page.close()
-        self.cache.set("render:" + url, html)
-        return html
+            if not self.dead:
+                try:
+                    page.close()
+                except Exception:
+                    pass
 
     def probe(self, url: str, delay: float | None = None) -> int:
         """Код відповіді без винятків — для перевірки, чи оголошення живе."""
-        self._ensure()
-        self.limiter.wait(url, delay)
-        page = self._ctx.new_page()
         try:
-            resp = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-            code = resp.status if resp is not None else 0
+            self._ensure()
+        except FetchError:
+            return 0
+        self.limiter.wait(url, delay)
+        code = 0
+        try:
+            with self._guarded(url):
+                page = self._ctx.new_page()
+                try:
+                    resp = page.goto(url, wait_until="domcontentloaded",
+                                     timeout=REQUEST_TIMEOUT * 1000)
+                    code = resp.status if resp is not None else 0
+                except Exception:
+                    code = 0
+                finally:
+                    page.close()
         except Exception:
             code = 0
-        finally:
-            page.close()
         ops.record_request(self.label, ok=0 < code < 400,
                            blocked=code in BLOCKING_CODES)
         return code
 
     def close(self) -> None:
-        for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
-            if obj is not None:
-                try:
-                    getattr(obj, meth)()
-                except Exception:
-                    pass
+        """Закриває браузер. Після тайм-ауту — просто добиває процес:
+        ввічливе закриття мертвого драйвера саме може зависнути."""
+        if self.dead:
+            if pid := self._driver_pid():
+                kill_tree(pid)
+        else:
+            try:
+                with Watchdog(30, self._driver_pid, label="закриття браузера"):
+                    for obj, meth in ((self._ctx, "close"), (self._browser, "close"),
+                                      (self._pw, "stop")):
+                        if obj is not None:
+                            try:
+                                getattr(obj, meth)()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
         self._ctx = self._browser = self._pw = None
 
     def __enter__(self) -> "BrowserFetcher":

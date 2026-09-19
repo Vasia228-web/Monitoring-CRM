@@ -111,6 +111,34 @@ class Heartbeat(OpsBase):
     busy: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class CycleRecord(OpsBase):
+    """Один регулярний цикл цілком: збір по всіх джерелах і службові кроки.
+
+    Сигнал тиші дивиться саме сюди: «коли востаннє був УСПІШНИЙ цикл».
+    Успішний — той, що зібрав хоч одне оголошення. Живий процес, який нічого
+    не приніс, — теж аварія.
+    """
+
+    __tablename__ = "cycles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(16), default="schedule")
+    host: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    kept: Mapped[int] = mapped_column(Integer, default=0)
+    inserted: Mapped[int] = mapped_column(Integer, default=0)
+    sources_ok: Mapped[int] = mapped_column(Integer, default=0)
+    sources_failed: Mapped[int] = mapped_column(Integer, default=0)
+    pid: Mapped[int | None] = mapped_column(Integer)
+    message: Mapped[str | None] = mapped_column(Text)
+    steps: Mapped[str | None] = mapped_column(Text)        # JSON: кроки з тривалістю
+
+
+SUCCESS_STATUSES = ("ok", "partial")
+
+
 engine = create_engine(OPS_DB_URL, future=True)
 OpsSession = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
@@ -211,6 +239,42 @@ def finish_run(run_id: int, status: str = "ok", message: str | None = None, **fi
         for key, value in fields.items():
             if hasattr(run, key) and value is not None:
                 setattr(run, key, value)
+
+
+def start_cycle(trigger: str, host: str | None = None) -> int:
+    init_ops()
+    with ops_session() as s:
+        c = CycleRecord(trigger=trigger, host=host, status="running", pid=os.getpid())
+        s.add(c)
+        s.flush()
+        return c.id
+
+
+def finish_cycle(cycle_id: int, **fields) -> None:
+    with ops_session() as s:
+        c = s.get(CycleRecord, cycle_id)
+        if c is None:
+            return
+        c.finished_at = _now()
+        for key, value in fields.items():
+            if hasattr(c, key):
+                setattr(c, key, value)
+
+
+def last_cycles(limit: int = 10) -> list[CycleRecord]:
+    init_ops()
+    with ops_session() as s:
+        return list(s.scalars(
+            select(CycleRecord).order_by(CycleRecord.started_at.desc()).limit(limit)))
+
+
+def last_success_at() -> datetime | None:
+    """Коли закінчився останній цикл, що справді щось зібрав."""
+    init_ops()
+    with ops_session() as s:
+        return s.scalar(
+            select(func.max(CycleRecord.finished_at))
+            .where(CycleRecord.status.in_(SUCCESS_STATUSES)))
 
 
 def beat(note: str | None = None, busy: bool | None = None) -> None:
