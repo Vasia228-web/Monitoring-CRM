@@ -18,9 +18,11 @@ TARGET="${1:?вкажіть user@host Fedora}"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$TARGET")
 
 echo "== 1. Вимикаю збір на MacBook"
+# Спершу прапорець: новий цикл його побачить і не почнеться. Агент launchd
+# вивантажуємо лише ПІСЛЯ того, як поточний цикл закінчиться, — bootout
+# убив би його посеред кроку.
 echo "базу перенесено на Fedora ($TARGET) $(date '+%Y-%m-%d %H:%M'); збір тут вимкнено свідомо" \
   > data/COLLECTOR_OFF
-launchctl bootout "gui/$(id -u)/com.yavasia.realty.incremental" 2>/dev/null || true
 # Чекаємо, поки поточний цикл відпустить замок (не довше за стелю циклу).
 .venv/bin/python - <<'PY'
 import fcntl, time, sys
@@ -37,6 +39,7 @@ with open("data/cycle.lock", "a+") as fh:
             time.sleep(30)
 print("   збір на MacBook зупинено")
 PY
+launchctl bootout "gui/$(id -u)/com.yavasia.realty.incremental" 2>/dev/null || true
 
 echo "== 2. Свіжа копія"
 .venv/bin/python cli.py backup --no-upload
