@@ -94,3 +94,20 @@ def test_address_is_announced_only_after_it_answers(monkeypatch):
 class _Resp:
     def __init__(self, code):
         self.status_code = code
+
+
+def test_failed_login_explains_itself_without_leaking(monkeypatch, caplog):
+    """У журналі має бути видно ПРИЧИНУ відмови, але не самі логін і пароль."""
+    import logging
+    from realty.web import auth
+
+    with caplog.at_level(logging.WARNING, logger="realty.web.auth"):
+        auth._explain_mismatch("Vasia", "секрет123", ("vasia", "секрет123"))
+        auth._explain_mismatch("vasia", "секрет123 ", ("vasia", "секрет123"))
+        auth._explain_mismatch("vasia", "коротко", ("vasia", "секрет123"))
+    text = "\n".join(r.getMessage() % r.args if r.args else r.getMessage()
+                     for r in caplog.records)
+    assert "інший регістр" in text
+    assert "зайві пробіли" in text
+    assert "інша довжина: 7 замість 9" in text
+    assert "vasia" not in text and "секрет123" not in text

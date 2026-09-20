@@ -58,8 +58,35 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
                     and secrets.compare_digest(password.encode(), creds[1].encode())):
                 return await call_next(request)
 
+            _explain_mismatch(user, password, creds)
+
         return Response(status_code=401, content="Потрібна авторизація",
                         headers={"WWW-Authenticate": f'Basic realm="{REALM}"'})
+
+
+def _explain_mismatch(user: str, password: str, creds: tuple[str, str]) -> None:
+    """Каже, ЩО не зійшлося, не кажучи, які саме значення.
+
+    Без цього невдалий вхід з чужого пристрою не діагностується взагалі:
+    у журналі лише «401». Тут не друкуються ні логін, ні пароль — лише
+    характер розбіжності (регістр, пробіли, довжина).
+    """
+    want_user, want_password = creds
+    def compare(got: str, want: str) -> str:
+        if got == want:
+            return "збігається"
+        if not got:
+            return "порожнє"
+        if got.strip() == want:
+            return "зайві пробіли по краях"
+        if got.lower() == want.lower():
+            return "інший регістр (на телефоні перша літера часто велика)"
+        if len(got) != len(want):
+            return f"інша довжина: {len(got)} замість {len(want)}"
+        return "не збігається"
+
+    log.warning("невдалий вхід: логін — %s; пароль — %s",
+                compare(user, want_user), compare(password, want_password))
 
 
 def robots_txt() -> PlainTextResponse:
