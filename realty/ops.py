@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect,
+    Boolean, DateTime, Float, Integer, String, Text, create_engine, event, func, inspect,
     select, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -144,6 +144,17 @@ SUCCESS_STATUSES = ("ok", "partial")
 
 
 engine = create_engine(OPS_DB_URL, future=True)
+
+
+@event.listens_for(engine, "connect")
+def _tune_ops_sqlite(dbapi_connection, _record) -> None:
+    """Те саме, що для основної бази: телеметрію пишуть кілька процесів одразу."""
+    cur = dbapi_connection.cursor()
+    try:
+        cur.execute("PRAGMA busy_timeout = 30000")
+        cur.execute("PRAGMA journal_mode = WAL")
+    finally:
+        cur.close()
 OpsSession = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 

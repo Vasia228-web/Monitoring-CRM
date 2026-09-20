@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 import logging
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import DB_URL
@@ -13,7 +13,29 @@ from .models import Base
 
 log = logging.getLogger(__name__)
 
+# Скільки чекати, якщо база зайнята чужим записом, перш ніж здатися.
+BUSY_TIMEOUT_MS = 30_000
+
 engine = create_engine(DB_URL, future=True)
+
+
+@event.listens_for(engine, "connect")
+def _tune_sqlite(dbapi_connection, _record) -> None:
+    """Режим WAL і терпіння до зайнятої бази.
+
+    20.09.2026 сторож не зміг прочитати `check_events`, поки цикл писав:
+    «database is locked». У звичайному режимі SQLite читач чекає на письменника
+    і за 5 секунд здається. У WAL читання й запис не заважають одне одному, а
+    busy_timeout дає запас на рідкісні збіги. Бекап це не ламає: копія
+    робиться через backup API, який враховує вміст -wal.
+    """
+    cur = dbapi_connection.cursor()
+    try:
+        cur.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+        cur.execute("PRAGMA journal_mode = WAL")
+        cur.execute("PRAGMA foreign_keys = ON")
+    finally:
+        cur.close()
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
