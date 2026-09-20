@@ -105,8 +105,7 @@ def test_failed_login_explains_itself_without_leaking(monkeypatch, caplog):
         auth._explain_mismatch("Vasia", "секрет123", ("vasia", "секрет123"))
         auth._explain_mismatch("vasia", "секрет123 ", ("vasia", "секрет123"))
         auth._explain_mismatch("vasia", "коротко", ("vasia", "секрет123"))
-    text = "\n".join(r.getMessage() % r.args if r.args else r.getMessage()
-                     for r in caplog.records)
+    text = "\n".join(r.getMessage() for r in caplog.records)
     assert "інший регістр" in text
     assert "зайві пробіли" in text
     assert "інша довжина: 7 замість 9" in text
