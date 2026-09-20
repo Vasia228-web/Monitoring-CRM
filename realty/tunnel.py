@@ -50,23 +50,38 @@ def find_binary() -> str | None:
 
 
 def plan(env: dict | None = None) -> dict:
-    """Що і як запускати — чиста функція, щоб перевірити без мережі."""
+    """Що і як запускати — чиста функція, щоб перевірити без мережі.
+
+    Іменований тунель піднімається двома способами, залежно від того, як
+    видано доступ до акаунта Cloudflare:
+      * `CLOUDFLARE_TUNNEL_TOKEN` — токен, створений у панелі;
+      * `CLOUDFLARE_TUNNEL_NAME` — ім'я тунелю, створеного на цій машині після
+        `cloudflared tunnel login` (облікові дані лежать у ~/.cloudflared).
+    Домен в обох випадках — лише значення `PUBLIC_DOMAIN`.
+    """
     env = dict(os.environ if env is None else env)
     port = env.get("PORT", "8000")
+    local = f"http://127.0.0.1:{port}"
     domain = env.get("PUBLIC_DOMAIN", "").strip().removeprefix("https://").strip("/")
     token = env.get("CLOUDFLARE_TUNNEL_TOKEN", "").strip()
+    name = env.get("CLOUDFLARE_TUNNEL_NAME", "").strip()
     if not (env.get("AUTH_USER", "").strip() and env.get("AUTH_PASSWORD", "").strip()):
         return {"error": "AUTH_USER і AUTH_PASSWORD не задані в .env — без пароля сайт "
                          "в інтернет не відкриваю"}
-    if domain and not token:
-        return {"error": "PUBLIC_DOMAIN задано, а CLOUDFLARE_TUNNEL_TOKEN — ні: для "
-                         "постійного домену потрібен іменований тунель"}
-    if domain:
+    if domain and not (token or name):
+        return {"error": "PUBLIC_DOMAIN задано, але немає ні CLOUDFLARE_TUNNEL_TOKEN, "
+                         "ні CLOUDFLARE_TUNNEL_NAME: для постійного домену потрібен "
+                         "іменований тунель"}
+    if token:
         # Токен — через оточення, не аргументом: аргументи видно в `ps`.
         return {"mode": "named", "args": ["tunnel", "--no-autoupdate", "run"],
-                "env": {"TUNNEL_TOKEN": token}, "url": f"https://{domain}"}
+                "env": {"TUNNEL_TOKEN": token}, "url": f"https://{domain}" if domain else None}
+    if name:
+        return {"mode": "named",
+                "args": ["tunnel", "--no-autoupdate", "run", "--url", local, name],
+                "env": {}, "url": f"https://{domain}" if domain else None}
     return {"mode": "quick",
-            "args": ["tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+            "args": ["tunnel", "--no-autoupdate", "--url", local],
             "env": {}, "url": None}
 
 

@@ -30,8 +30,18 @@ def test_refuses_to_open_site_without_password():
     assert "error" in tunnel.plan({"AUTH_USER": "u"})
 
 
-def test_domain_without_token_is_a_config_error():
+def test_domain_without_any_tunnel_credentials_is_a_config_error():
     assert "error" in tunnel.plan({**AUTH, "PUBLIC_DOMAIN": "x.org"})
+
+
+def test_named_tunnel_by_local_credentials():
+    """Після `cloudflared tunnel login` облікові дані лежать на машині —
+    тоді тунель запускається за іменем, без токена."""
+    p = tunnel.plan({**AUTH, "PUBLIC_DOMAIN": "mojkvartiry.link",
+                     "CLOUDFLARE_TUNNEL_NAME": "realty", "PORT": "8000"})
+    assert p["mode"] == "named" and p["url"] == "https://mojkvartiry.link"
+    assert p["args"] == ["tunnel", "--no-autoupdate", "run", "--url",
+                         "http://127.0.0.1:8000", "realty"]
 
 
 def test_quick_url_is_recognised_in_cloudflared_output():
