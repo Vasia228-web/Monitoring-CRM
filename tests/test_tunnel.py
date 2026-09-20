@@ -127,3 +127,13 @@ def test_space_added_by_phone_keyboard_does_not_block_login(monkeypatch):
     assert call(" vasia ", "pass word") == 200      # пробіли навколо логіна — прощаємо
     assert call("vasia", "pass word ") == 401       # зайвий пробіл у паролі — ні
     assert call("Vasia", "pass word") == 401        # інший регістр логіна — ні
+
+
+def test_favicon_does_not_demand_a_password(monkeypatch):
+    """Регресія з iPhone: іконку браузер просить без пароля, отримував 401
+    і знову показував діалог входу."""
+    monkeypatch.setenv("AUTH_USER", "vasia")
+    monkeypatch.setenv("AUTH_PASSWORD", "секрет")
+    from realty.web.app import app
+    r = TestClient(app).get("/favicon.ico")
+    assert r.status_code == 204

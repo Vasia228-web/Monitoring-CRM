@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
@@ -106,6 +106,12 @@ app.add_middleware(BasicAuthMiddleware)
 @app.get("/robots.txt", include_in_schema=False)
 def robots():
     return robots_txt()
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Порожня відповідь замість 401: іконку браузер просить без пароля."""
+    return Response(status_code=204)
 
 
 @app.get("/healthz", include_in_schema=False)

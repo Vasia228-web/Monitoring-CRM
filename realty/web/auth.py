@@ -18,7 +18,9 @@ log = logging.getLogger(__name__)
 
 REALM = "Realty Monitor"
 # Шляхи, доступні без пароля: перевірка живучості для хостингу й robots.
-OPEN_PATHS = {"/healthz", "/robots.txt"}
+# `/favicon.ico` теж відкритий: браузери просять іконку БЕЗ логіна й пароля,
+# отримували 401 і знову показували діалог входу — перевірено на iPhone.
+OPEN_PATHS = {"/healthz", "/robots.txt", "/favicon.ico"}
 
 
 def credentials() -> tuple[str, str] | None:
