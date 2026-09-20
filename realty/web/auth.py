@@ -49,6 +49,10 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             try:
                 raw = base64.b64decode(header[6:]).decode("utf-8")
                 user, _, password = raw.partition(":")
+                # Клавіатура телефона дописує пробіл після слова, і вхід
+                # відмовляв при правильному паролі. Логін обрізаємо, пароль —
+                # ніколи: у ньому пробіл може бути навмисним.
+                user = user.strip()
             except (ValueError, UnicodeDecodeError):
                 user = password = ""
             # Порівняння сталого часу: інакше пароль можна підібрати за

@@ -110,3 +110,20 @@ def test_failed_login_explains_itself_without_leaking(monkeypatch, caplog):
     assert "зайві пробіли" in text
     assert "інша довжина: 7 замість 9" in text
     assert "vasia" not in text and "секрет123" not in text
+
+
+def test_space_added_by_phone_keyboard_does_not_block_login(monkeypatch):
+    """Клавіатура телефона дописує пробіл після логіна — вхід має спрацювати."""
+    monkeypatch.setenv("AUTH_USER", "vasia")
+    monkeypatch.setenv("AUTH_PASSWORD", "pass word")     # пробіл у паролі — навмисний
+    from realty.web.app import app
+    import base64
+
+    c = TestClient(app)
+    def call(user, password):
+        token = base64.b64encode(f"{user}:{password}".encode()).decode()
+        return c.get("/healthz" if False else "/", headers={"Authorization": f"Basic {token}"}).status_code
+
+    assert call(" vasia ", "pass word") == 200      # пробіли навколо логіна — прощаємо
+    assert call("vasia", "pass word ") == 401       # зайвий пробіл у паролі — ні
+    assert call("Vasia", "pass word") == 401        # інший регістр логіна — ні
