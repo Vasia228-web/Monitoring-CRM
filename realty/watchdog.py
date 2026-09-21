@@ -207,6 +207,12 @@ def check_backup(now: datetime) -> Alert | None:
         return Alert("backup", (f"💾 Бекап не вдався ({_ago(last_try.created_at, now)}): "
                                 f"{(last_try.message or 'без пояснення')[:300]}\n"
                                 f"Останній успішний: {_ago(last_ok, now)}."))
+    if last_try is not None and last_try.status == "ok" and last_try.message:
+        # Копія поза машиною є, але не всюди, куди мала піти: напр., Drive
+        # упав, а Telegram спрацював. Без цієї перевірки така поломка мовчала б.
+        return Alert("backup-partial", (
+            f"💾 Бекап {_ago(last_try.created_at, now)} ліг не в усі сховища: "
+            f"{last_try.message[:300]}\nКопія поза машиною є ({last_try.offsite})."))
     if last_ok is not None and _hours(now - last_ok) > BACKUP_MAX_AGE_HOURS:
         return Alert("backup", f"💾 Останній успішний бекап {_ago(last_ok, now)} — "
                                f"щоденний бекап не відпрацював.")

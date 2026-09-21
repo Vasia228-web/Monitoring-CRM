@@ -24,23 +24,53 @@ REMOTE="${1:-gdrive}"
 echo "Значення беруться з Google Cloud → Credentials → OAuth client (Desktop app)."
 read -rp "client_id:     " CLIENT_ID
 read -rsp "client_secret: " CLIENT_SECRET; echo
-[ -n "$CLIENT_ID" ] && [ -n "$CLIENT_SECRET" ] || { echo "порожнє значення" >&2; exit 1; }
+CLIENT_ID="$(echo -n "$CLIENT_ID" | tr -d '[:space:]')"
+CLIENT_SECRET="$(echo -n "$CLIENT_SECRET" | tr -d '[:space:]')"
 
-# Копія налаштувань rclone — щоб було куди повернутись.
-cp -a "$HOME/.config/rclone/rclone.conf" "$HOME/.config/rclone/rclone.conf.bak.$(date +%Y%m%d-%H%M%S)"
+# Перевірки формату ДО того, як щось міняти. 21.09.2026 секрет вставився двічі
+# (70 символів, «GOCSPX-» двічі) — Google відповідав invalid_client.
+case "$CLIENT_ID" in
+  *.apps.googleusercontent.com) ;;
+  *) echo "client_id має закінчуватись на .apps.googleusercontent.com" >&2; exit 1 ;;
+esac
+[ "$(grep -o 'apps.googleusercontent.com' <<<"$CLIENT_ID" | wc -l)" -eq 1 ] || {
+  echo "client_id схоже вставлено двічі — вставте один раз" >&2; exit 1; }
+case "$CLIENT_SECRET" in
+  GOCSPX-*) ;;
+  *) echo "client_secret має починатись з GOCSPX-" >&2; exit 1 ;;
+esac
+[ "$(grep -o 'GOCSPX-' <<<"$CLIENT_SECRET" | wc -l)" -eq 1 ] || {
+  echo "client_secret схоже вставлено двічі (GOCSPX- трапляється більше одного разу)" >&2; exit 1; }
 
+CONF="$HOME/.config/rclone/rclone.conf"
+BACKUP="$CONF.bak.$(date +%Y%m%d-%H%M%S)"
+cp -a "$CONF" "$BACKUP"
+# Будь-яка невдача далі — повертаємо робочі налаштування самі, не людина.
+restore() {
+  cp -a "$BACKUP" "$CONF"
+  echo "НЕ ВДАЛОСЯ — налаштування rclone повернуто як було (копія: $BACKUP)" >&2
+}
+trap 'restore' ERR
+
+token_before="$("$RCLONE" config show "$REMOTE" | grep '^token' | sha256sum)"
 "$RCLONE" config update "$REMOTE" client_id "$CLIENT_ID" client_secret "$CLIENT_SECRET" \
   --non-interactive >/dev/null
 echo "ключ підставлено; тепер Google попросить видати дозвіл заново"
+echo "(відкриється браузер — кришка ноутбука має бути відкрита)"
 
 # Повторний дозвіл: старий токен виданий на спільний ключ і з новим не працює.
-"$RCLONE" config reconnect "$REMOTE": || {
-  echo "дозвіл не видано — налаштування лишились зі старим ключем;" >&2
-  echo "повернути попередній стан: cp ~/.config/rclone/rclone.conf.bak.* ~/.config/rclone/rclone.conf" >&2
-  exit 1; }
+"$RCLONE" config reconnect "$REMOTE":
+token_after="$("$RCLONE" config show "$REMOTE" | grep '^token' | sha256sum)"
+if [ "$token_before" = "$token_after" ]; then
+  echo "Google не видав нового токена — дозвіл не завершено" >&2
+  false
+fi
+echo "новий токен отримано"
 
 echo "--- перевірка доступу"
-"$RCLONE" lsd "$REMOTE": >/dev/null && echo "сховище відповідає"
+"$RCLONE" lsd "$REMOTE": >/dev/null
+echo "сховище відповідає"
+trap - ERR
 
 echo "--- справжній бекап через новий ключ"
 set -a; . ./.env; set +a

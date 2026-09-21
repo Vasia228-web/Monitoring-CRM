@@ -147,3 +147,15 @@ def test_failed_backup_is_reported(env):
     rep = env["run"](NOW)
     assert rep["sent"] == ["backup"]
     assert "поза машиною" in env["sent"][0]
+
+
+def test_partial_backup_failure_is_reported(env):
+    """Drive упав, Telegram спрацював: бекап «ok», але мовчати не можна."""
+    _cycle("ok", NOW - timedelta(hours=1), kept=200)
+    with ops.ops_session() as s:
+        s.add(backup.BackupRecord(status="ok", created_at=NOW - timedelta(hours=2),
+                                  offsite="telegram:9",
+                                  message="rclone: couldn't fetch token: invalid_client"))
+    rep = env["run"](NOW)
+    assert rep["sent"] == ["backup-partial"]
+    assert "invalid_client" in env["sent"][0] and "telegram:9" in env["sent"][0]
