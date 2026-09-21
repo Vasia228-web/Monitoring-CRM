@@ -73,7 +73,12 @@ def _drop_obsolete_url_unique() -> None:
     log.warning("Міграція: знімаємо UNIQUE(original_url) — перебудова таблиці")
     with engine.begin() as conn:
         conn.execute(text("PRAGMA foreign_keys=off"))
+        # legacy_alter_table=ON: інакше SQLite перепише посилання в ІНШИХ
+        # таблицях на `listings_legacy`, яку ми зараз видалимо. Саме так
+        # `price_events` лишився з битим ключем (виправлено 21.09.2026).
+        conn.execute(text("PRAGMA legacy_alter_table=ON"))
         conn.execute(text("ALTER TABLE listings RENAME TO listings_legacy"))
+        conn.execute(text("PRAGMA legacy_alter_table=OFF"))
         for ix in old_indexes:
             conn.execute(text(f'DROP INDEX IF EXISTS "{ix}"'))
     Base.metadata.create_all(engine)

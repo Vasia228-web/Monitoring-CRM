@@ -141,6 +141,42 @@ def cmd_tunnel(args: argparse.Namespace) -> int:
     return tunnel.run()
 
 
+def cmd_schema(args: argparse.Namespace) -> int:
+    """Перевірка й ремонт зовнішніх ключів робочої бази."""
+    import sqlite3
+    from pathlib import Path
+
+    from realty import schema_repair
+    from realty.config import DB_URL
+
+    path = Path(args.db or DB_URL.removeprefix("sqlite:///"))
+    if args.action == "check":
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        bad = schema_repair.find_dangling(con)
+        print(f"база: {path}")
+        print("биті зовнішні ключі:", [f"{d.table}.{d.column}→{d.missing}" for d in bad] or "немає")
+        print("foreign_key_check:", con.execute("PRAGMA foreign_key_check").fetchall()
+              if not bad else "пропущено: є биті ключі")
+        print("integrity_check:", con.execute("PRAGMA integrity_check").fetchone()[0])
+        return 1 if bad else 0
+
+    rep = schema_repair.repair(path, apply=not args.dry_run)
+    print(f"база: {path}   режим: {'проба (відкат)' if args.dry_run else 'РЕМОНТ'}")
+    for d in rep.dangling:
+        print(f"  {d.table}.{d.column}: {d.missing} → {d.target}")
+    if rep.before:
+        print(f"  {'таблиця':<14}{'рядків до':>11}{'рядків після':>14}  вміст")
+        for t, (n, h) in rep.before.items():
+            n2, h2 = rep.after.get(t, (None, None))
+            print(f"  {t:<14}{n:>11}{str(n2):>14}  {'збігається' if h == h2 else 'РІЗНИЙ'}")
+    print(f"  integrity_check: {rep.integrity or '—'}")
+    print(f"  foreign_key_check: {len(rep.fk_violations)} порушень")
+    for p_ in rep.problems:
+        print(f"  ! {p_}")
+    print("ЗАФІКСОВАНО" if rep.applied else ("НЕ ЗАФІКСОВАНО" if rep.dangling else "ремонт не потрібен"))
+    return 0 if rep.ok else 1
+
+
 def cmd_quality(args: argparse.Namespace) -> int:
     import json
 
@@ -451,6 +487,12 @@ def main() -> int:
     tn = sub.add_parser("tunnel", help="доступ ззовні через Cloudflare Tunnel")
     tn.add_argument("--plan", action="store_true", help="лише показати, що буде запущено")
     tn.set_defaults(func=cmd_tunnel)
+
+    sm = sub.add_parser("schema", help="перевірка й ремонт зовнішніх ключів бази")
+    sm.add_argument("action", choices=("check", "repair"))
+    sm.add_argument("--dry-run", action="store_true", help="усе порахувати й відкотити")
+    sm.add_argument("--db", help="шлях до файлу бази (типово — робоча)")
+    sm.set_defaults(func=cmd_schema)
 
     bf = sub.add_parser("backfill", help="дозібрати наявні записи з прогалинами")
     bf.add_argument("--sources", help="через кому: domria,lun,olx,flombu,blago")
