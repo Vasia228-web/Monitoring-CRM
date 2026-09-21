@@ -137,3 +137,16 @@ def test_favicon_does_not_demand_a_password(monkeypatch):
     from realty.web.app import app
     r = TestClient(app).get("/favicon.ico")
     assert r.status_code == 204
+
+
+def test_cycle_unit_start_limit_leaves_room_for_manual_runs():
+    """Регресія 21.09: ліміт «3 старти за 6 год» відхилив ручний цикл — systemd
+    рахує всі старти, а таймер сам дає 2 за 6 годин."""
+    import re
+    unit = (Path(__file__).resolve().parent.parent / "deploy" / "fedora" / "systemd"
+            / "realty-cycle.service").read_text()
+    burst = int(re.search(r"^StartLimitBurst=(\d+)", unit, re.M).group(1))
+    timer = (Path(__file__).resolve().parent.parent / "deploy" / "fedora" / "systemd"
+             / "realty-cycle.timer").read_text()
+    assert "00/3" in timer                 # кожні 3 год → 2 старти за 6 год
+    assert burst >= 2 + 6                  # і щонайменше 6 ручних / перезапусків зверху
