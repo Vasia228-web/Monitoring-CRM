@@ -43,3 +43,29 @@ def test_new_listing_and_price_change_are_written_into_the_real_schema():
         events = s.scalar(select(func.count()).select_from(PriceEvent)
                           .where(PriceEvent.listing_id == lid))
     assert events == 2                                           # і зміна ціни записалась
+
+
+@pytest.mark.skipif(not _has_real_data(), reason="немає копії робочої бази")
+def test_foreign_keys_are_enforced_on_a_clean_schema():
+    """Перевірка ключів увімкнена, у схемі немає битих посилань, сиріт немає."""
+    import sqlite3
+
+    from sqlalchemy import text
+
+    from realty.schema_repair import find_dangling
+    with engine.connect() as c:
+        assert c.execute(text("PRAGMA foreign_keys")).scalar() == 1
+        assert c.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    raw = sqlite3.connect(str(engine.url).removeprefix("sqlite:///"))
+    assert find_dangling(raw) == []
+
+
+@pytest.mark.skipif(not _has_real_data(), reason="немає копії робочої бази")
+def test_price_event_for_a_missing_listing_is_refused():
+    from sqlalchemy.exc import IntegrityError
+    with SessionLocal() as s:
+        s.add(PriceEvent(listing_id=987654321, source="olx", price=1, currency="USD",
+                         price_usd=1))
+        with pytest.raises(IntegrityError):
+            s.commit()
+

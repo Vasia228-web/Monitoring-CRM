@@ -33,11 +33,11 @@ def _tune_sqlite(dbapi_connection, _record) -> None:
     try:
         cur.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         cur.execute("PRAGMA journal_mode = WAL")
-        # foreign_keys НЕ вмикаємо: 20.09.2026 я ввімкнув їх разом із WAL, і
-        # записи почали падати — у схемі лишились посилання на таблицю
-        # `listings_legacy` від старої міграції (SQLite при перейменуванні
-        # переписав їх на нове ім'я). Поки схему не виправлено, перевірка
-        # зовнішніх ключів ламає запис.
+        # Перевірка зовнішніх ключів. 20.09 я ввімкнув її, не перевіривши схему,
+        # і добу падав запис: `price_events` посилався на `listings_legacy`.
+        # 21.09 схему відремонтовано (`cli.py schema repair`, звірка кожного
+        # рядка) — тепер перевірка знову ввімкнена й захищає від сиріт.
+        cur.execute("PRAGMA foreign_keys = ON")
     finally:
         cur.close()
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
