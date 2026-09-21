@@ -91,6 +91,7 @@ class Pipeline:
         self.llm = LLMExtractor() if use_llm else None
         # Звірка відповідей моделі з парсером — лічильники для /status.
         self.llm_check = {"agreed": 0, "disagreed": 0, "uncomparable": 0}
+        self._write_error: str | None = None
         self._http: Fetcher | None = None
         self._browser: BrowserFetcher | None = None
 
@@ -285,6 +286,10 @@ class Pipeline:
                         setattr(self.report, action, getattr(self.report, action) + 1)
                     except Exception as e:
                         self.report.skipped += 1
+                        # Перша причина — у запис прогону: 20.09 записи падали
+                        # добу, а прогін лишався «ok», бо помилка жила лише в логу.
+                        self._write_error = self._write_error or \
+                            f"{type(e).__name__}: {str(e)[:200]}"
                         log.warning("Не записано %s: %s",
                                     rec.get("original_url"), str(e)[:160])
 
@@ -396,6 +401,7 @@ class Pipeline:
             new=stats.get("new", 0), errors=stats.get("errors", 0),
             inserted=self.report.inserted - counts_before[0],
             updated=self.report.updated - counts_before[1],
+            skipped=self.report.skipped - counts_before[2],
             requests_ok=req["ok"], requests_failed=req["failed"],
             requests_blocked=req["blocked"],
             llm_calls=calls - llm_before[0],
@@ -431,7 +437,8 @@ class Pipeline:
             ops.take_counts(name)          # починаємо лічити з нуля
             llm_before = self._llm_snapshot()
             checks_before = self._check_snapshot()
-            before = (self.report.inserted, self.report.updated)
+            before = (self.report.inserted, self.report.updated, self.report.skipped)
+            self._write_error = None
             cfg = SOURCES.get(name)
             browser = (self._get_browser(cfg.delay, name)
                        if (cfg and cfg.needs_browser) else None)
@@ -469,6 +476,10 @@ class Pipeline:
                     # губилось тихо. Тепер це помилка прогону з текстом.
                     log.exception("Не вдалося записати пакет %s", name)
                     failure = failure or f"пакет не записано: {type(e).__name__}: {str(e)[:240]}"
+                not_written = self.report.skipped - before[2]
+                if not_written:
+                    failure = failure or (f"не записано {not_written} із {len(batch)}: "
+                                          f"{self._write_error}")
                 if self.gate and len(self.gate.report.escalated) > escalated_before:
                     # Карантин не прийняв пакет цілком: зібрано, але не записано.
                     failure = failure or ("ЕСКАЛАЦІЯ: " + "; ".join(

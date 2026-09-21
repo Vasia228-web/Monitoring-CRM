@@ -136,3 +136,44 @@ def test_browser_requests_are_counted_for_their_source():
     from realty.pipeline import Pipeline
     p = Pipeline(use_llm=False)
     assert p._get_browser(2.5, "olx").label == "olx"
+
+
+def test_write_failure_marks_the_run_failed(tmp_path, monkeypatch):
+    """Запис падає в базі — прогін «failed» з причиною і лічильником, а не «ok»."""
+    from sqlalchemy import select
+
+    from realty import ops
+    from realty.pipeline import Pipeline
+    from realty.sources import REGISTRY
+    from realty.sources.base import BaseSource
+
+    db = _fresh(tmp_path, monkeypatch)
+    db.init_db()
+    import realty.pipeline as pl
+    monkeypatch.setattr(pl, "init_db", lambda: None)
+    monkeypatch.setattr(pl, "session_scope", _scope(db))
+    ops_engine = create_engine(f"sqlite:///{tmp_path / 'ops.db'}", future=True)
+    monkeypatch.setattr(ops, "engine", ops_engine)
+    monkeypatch.setattr(ops, "OpsSession", sessionmaker(bind=ops_engine, expire_on_commit=False,
+                                                        future=True))
+    ops.OpsBase.metadata.create_all(ops_engine)
+
+    class Fine(BaseSource):
+        name = "fine"
+
+        def iter_listings(self):
+            for i in range(5):
+                yield {"external_id": str(i), "original_url": f"https://x/{i}", "price": 60000,
+                       "rooms": 2, "location": "вул. Тестова", "area_total": 55.0}
+
+    def broken_upsert(session, rec):
+        raise RuntimeError("no such table: main.listings_legacy")
+
+    monkeypatch.setitem(REGISTRY, "fine", Fine)
+    monkeypatch.setattr(Pipeline, "_upsert", staticmethod(broken_upsert))
+    Pipeline(sources=["fine"], use_llm=False).run()
+    with ops.ops_session() as s:
+        run = s.scalars(select(ops.RunRecord)).one()
+    assert run.status == "failed"
+    assert run.skipped == 5 and "не записано 5 із 5" in run.message
+    assert "listings_legacy" in run.message

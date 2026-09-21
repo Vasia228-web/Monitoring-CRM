@@ -69,6 +69,9 @@ class RunRecord(OpsBase):
     new: Mapped[int] = mapped_column(Integer, default=0)
     inserted: Mapped[int] = mapped_column(Integer, default=0)
     updated: Mapped[int] = mapped_column(Integer, default=0)
+    # Зібрано, але не записано через помилку бази — окремо від «відхилено
+    # карантином». 20.09 саме це й мовчало добу.
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
     errors: Mapped[int] = mapped_column(Integer, default=0)
 
     requests_ok: Mapped[int] = mapped_column(Integer, default=0)

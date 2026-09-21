@@ -44,6 +44,10 @@ DROP_CONSECUTIVE = 2        # …два прогони поспіль (один 
 BLOCK_SHARE = 0.20          # частка блокувань, яка сама по собі тривожна
 BLOCK_RISE = 0.15           # або ріст на 15 п.п. від звичайної
 BLOCK_MIN_REQUESTS = 10
+# Зібране, але не записане: тривога вже з кількох записів — це завжди помилка
+# системи, а не джерела. 20.09 так губились усі нові оголошення й зміни цін.
+WRITE_FAIL_MIN = 3
+WRITE_FAIL_SHARE = 0.02
 BACKUP_MAX_AGE_HOURS = 30
 STATE_PATH = DATA_DIR / "alerts.json"
 PUBLIC_URL_PATH = DATA_DIR / "public_url"
@@ -143,6 +147,13 @@ def check_sources(now: datetime) -> list[Alert]:
                     f"Схоже, сайт змінив розмітку і парсер збирає порожнечу, або пакет "
                     f"не пройшов карантин."
                     + (f"\nОстання помилка: {why[:200]}" if why else ""))))
+            last = recent[0]
+            if (last.skipped or 0) >= WRITE_FAIL_MIN and \
+                    (last.skipped or 0) >= WRITE_FAIL_SHARE * max(last.kept or 0, 1):
+                alerts.append(Alert(f"write:{name}", (
+                    f"🧱 {name}: зібрано {last.kept}, але {last.skipped} записів не вдалося "
+                    f"ЗАПИСАТИ в базу. Це не сайт і не карантин — помилка бази.\n"
+                    f"{(last.message or '')[:240]}")))
             # Блокування — по останньому прогону з помітною кількістю запитів.
             def share(r):
                 total = (r.requests_ok or 0) + (r.requests_failed or 0)

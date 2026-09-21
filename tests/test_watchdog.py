@@ -159,3 +159,19 @@ def test_partial_backup_failure_is_reported(env):
     rep = env["run"](NOW)
     assert rep["sent"] == ["backup-partial"]
     assert "invalid_client" in env["sent"][0] and "telegram:9" in env["sent"][0]
+
+
+def test_records_that_fail_to_write_raise_an_alarm(env):
+    """Регресія 20.09: прогін «ok», оновлення проходять, а нові оголошення й
+    зміни цін падають на записі — добу ніхто не знав."""
+    _cycle("ok", NOW - timedelta(hours=1), kept=200)
+    for i in range(6):
+        _run("olx", NOW - timedelta(hours=3 * (i + 2)), kept=250)
+    with ops.ops_session() as s:
+        s.add(ops.RunRecord(source="olx", mode="fresh", status="failed",
+                            started_at=NOW - timedelta(hours=1),
+                            finished_at=NOW - timedelta(minutes=40), kept=250, updated=110,
+                            skipped=140, message="не записано 140 із 250: IntegrityError: …"))
+    rep = env["run"](NOW)
+    assert "write:olx" in rep["sent"]
+    assert "не вдалося ЗАПИСАТИ" in env["sent"][rep["sent"].index("write:olx")]
