@@ -311,3 +311,25 @@ class PropertyRedirect(Base):
     old_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     new_id: Mapped[int] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class DedupDecision(Base):
+    """Рішення власника про зведення: «це різні квартири» / «це одна квартира».
+
+    Сильніше за будь-яке правило, і перебудова його не скасовує. Зберігається
+    на рівні оголошень (id квартир між перебудовами можуть мінятись, id
+    оголошень — ні). `different`: оголошення `left` і `right` — різні квартири;
+    `same`: усі з `left` і `right` — одна. Нове рішення, що суперечить
+    старому, вимикає старе (`active=False`), — діє останнє слово власника.
+    """
+
+    __tablename__ = "dedup_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    left: Mapped[list] = mapped_column(JSON)
+    right: Mapped[list] = mapped_column(JSON, default=list)
+    property_id: Mapped[int | None] = mapped_column(Integer)     # звідки ухвалено
+    other_property_id: Mapped[int | None] = mapped_column(Integer)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
