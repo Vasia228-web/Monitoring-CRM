@@ -32,6 +32,12 @@ def env(tmp_path, monkeypatch):
     Session = sessionmaker(bind=engine, future=True)
     clock, calls = Clock(), []
 
+    def fake_sleep(sec):
+        clock.t += sec                                 # чекання теж витрачає час вікна
+        sleeps.append(sec)
+
+    sleeps = []
+
     class FakeFetcher:
         def __init__(self, *a, **kw):
             pass
@@ -53,6 +59,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(bf, "Fetcher", FakeFetcher)
     monkeypatch.setattr(bf.time, "monotonic", clock)
     monkeypatch.setattr(bf.ops, "beat", lambda *a, **kw: None)
+    monkeypatch.setattr(bf.time, "sleep", fake_sleep)
     with Session() as s:
         for ext, ident in [("1", None), ("2", None), ("3", {"flat": "ria:21"}),
                            ("404", None), ("5", None)]:
@@ -61,7 +68,7 @@ def env(tmp_path, monkeypatch):
                           first_seen=SEEN, last_seen=SEEN))
         s.commit()
     kw = dict(lock_path=tmp_path / "cycle.lock", disabled_flag=tmp_path / "OFF")
-    return Session, calls, kw
+    return Session, calls, kw, sleeps
 
 
 def _idents(Session):
@@ -69,26 +76,42 @@ def _idents(Session):
         return {l.external_id: l.identity for l in s.scalars(select(Listing))}
 
 
-def test_skips_the_window_while_a_cycle_holds_the_lock(env):
-    Session, calls, kw = env
+def test_waits_for_the_cycle_to_release_the_lock(env, monkeypatch):
+    """Цикл триває ~55 хв і може накластись на початок вікна — чекаємо, не тікаємо."""
+    Session, calls, kw, sleeps = env
+    lock = CycleLock(kw["lock_path"])
+    assert lock.acquire()
+    real_acquire = CycleLock.acquire
+
+    def acquire(self):                       # цикл відпускає замок на третій хвилині
+        return real_acquire(self) if len(sleeps) >= 3 or lock.release() else False
+
+    monkeypatch.setattr(CycleLock, "acquire", acquire)
+    rep = bf.run(["domria"], budget_s=3600, **kw)
+    assert sleeps == [60, 60, 60] and rep["status"] == "ok" and rep["waited_min"] == 3
+    assert calls                                          # дочекались і попрацювали
+
+
+def test_gives_up_the_window_if_the_cycle_holds_the_lock_too_long(env, monkeypatch):
+    Session, calls, kw, sleeps = env
     lock = CycleLock(kw["lock_path"])
     assert lock.acquire()
     try:
-        rep = bf.run(["domria"], budget_s=3600, **kw)
+        rep = bf.run(["domria"], budget_s=20 * 60, **kw)   # 20 хв: чекати нікуди
     finally:
         lock.release()
     assert rep["status"].startswith("skipped") and calls == []
 
 
 def test_disabled_collector_disables_backfill_too(env):
-    Session, calls, kw = env
+    Session, calls, kw, sleeps = env
     kw["disabled_flag"].write_text("")
     assert bf.run(["domria"], budget_s=3600, **kw)["status"] == "disabled"
     assert calls == []
 
 
 def test_fetches_only_listings_without_identity_and_keeps_last_seen(env):
-    Session, calls, kw = env
+    Session, calls, kw, sleeps = env
     rep = bf.run(["domria"], budget_s=3600, **kw)
     assert sorted(calls) == ["1", "2", "404", "5"]            # «3» уже мав ознаки
     got = _idents(Session)
@@ -104,7 +127,7 @@ def test_fetches_only_listings_without_identity_and_keeps_last_seen(env):
 
 
 def test_budget_stops_the_window_and_the_next_one_resumes(env):
-    Session, calls, kw = env
+    Session, calls, kw, sleeps = env
     rep = bf.run(["domria"], budget_s=25, **kw)              # влізає 3 картки по 10 с
     assert calls == ["404", "2", "1"] and rep["left"]["domria"] == 1   # спершу активні
     calls.clear()
@@ -114,7 +137,7 @@ def test_budget_stops_the_window_and_the_next_one_resumes(env):
 
 
 def test_full_pass_runs_first_and_is_capped_by_the_remaining_budget(env, monkeypatch):
-    Session, calls, kw = env
+    Session, calls, kw, sleeps = env
     with Session() as s:
         for i in range(60):
             s.add(Listing(source="lun", external_id=f"l{i}", original_url=f"https://l/{i}",

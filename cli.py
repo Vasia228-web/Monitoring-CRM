@@ -542,7 +542,7 @@ def main() -> int:
     idn = sub.add_parser("identity", help="нічний дозбір сильних ознак квартири й будинку")
     idn.add_argument("action", choices=("backfill",))
     idn.add_argument("--sources", default="domria,lun,flombu")
-    idn.add_argument("--budget-min", type=float, default=110,
+    idn.add_argument("--budget-min", type=float, default=105,
                      help="стеля часу; має закінчитись до наступного циклу")
     idn.set_defaults(func=cmd_identity)
 

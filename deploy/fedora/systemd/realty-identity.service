@@ -6,9 +6,9 @@ Type=oneshot
 WorkingDirectory=%h/realty
 EnvironmentFile=-%h/realty/.env
 Environment=PYTHONUNBUFFERED=1
-# Той самий замок, що й у циклу: якщо цикл ще йде — вікно пропускається.
-# 110 хв: старт о 01:00 і 04:00 → кінець до циклів о 03:05 і 06:05.
-ExecStart=%h/realty/.venv/bin/python cli.py identity backfill --budget-min 110
+# Той самий замок, що й у циклу: якщо цикл ще йде, дозбір його дочекається.
+# 105 хв від старту о 01:10 і 04:10 → кінець до циклів о 03:05 і 06:05.
+ExecStart=%h/realty/.venv/bin/python cli.py identity backfill --budget-min 105
 TimeoutStartSec=2h
 Nice=10
 MemoryHigh=1800M

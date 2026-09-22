@@ -9,9 +9,11 @@
     накопичується, коли збір відкриває сторінки деталей.
 
 Ніколи не паралельно зі звичайним збором: дозбір тримає ТОЙ САМИЙ замок, що й
-цикл (`runner.CycleLock`). Якщо цикл ще йде — вікно пропускається. Бюджет часу
-обмежений, щоб закінчитись до наступного циклу; між вікнами — продовжує з того
-місця, де зупинився (бере лише записи без identity).
+цикл (`runner.CycleLock`). Якщо цикл ще йде — чекає, поки той закінчиться
+(цикл триває близько 55 хв і може накластись на початок вікна), але не довше,
+ніж лишає собі час на роботу. Бюджет часу рахується від початку вікна, щоб
+воно в будь-якому разі закінчилось до наступного циклу; між вікнами — продовжує
+з того місця, де зупинився (бере лише записи без identity).
 """
 from __future__ import annotations
 
@@ -33,6 +35,8 @@ log = logging.getLogger(__name__)
 RIA_CARD = "https://dom.ria.com/realty/data/{}"
 RIA_DELAY = 1.2          # як у звичайному зборі DIM.RIA
 BATCH = 25
+LOCK_POLL = 60           # як часто перевіряти, чи звільнився замок
+MIN_WORK = 10 * 60       # менше десяти хвилин роботи — вікно не варте заходу
 
 
 # Повний прохід списком LUN/flombu має сенс, лише коли в АКТИВНИХ оголошень
@@ -65,12 +69,18 @@ def run(sources: list[str], budget_s: float, lock_path: Path = LOCK_PATH,
     if disabled_flag.exists():
         report["status"] = "disabled"
         return report
-    lock = CycleLock(lock_path)
-    if not lock.acquire():
-        report["status"] = "skipped: іде цикл збору"
-        log.info("дозбір identity: цикл ще йде — вікно пропускаю")
-        return report
     deadline = time.monotonic() + budget_s
+    lock = CycleLock(lock_path)
+    waited = 0
+    while not lock.acquire():
+        if time.monotonic() + LOCK_POLL > deadline - MIN_WORK:
+            report["status"] = f"skipped: цикл збору не звільнив замок ({waited // 60} хв)"
+            log.info("дозбір identity: %s", report["status"])
+            return report
+        time.sleep(LOCK_POLL)
+        waited += LOCK_POLL
+    if waited:
+        report["waited_min"] = waited // 60
     try:
         # Короткі повні проходи — першими, DIM.RIA — на решту бюджету.
         for source in sorted(sources, key=lambda x: x == "domria"):
