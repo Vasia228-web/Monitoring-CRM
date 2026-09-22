@@ -205,6 +205,10 @@ button.mark:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .nav a .count{font-variant-numeric:tabular-nums;color:var(--muted);margin-left:5px}
 .nav .right{margin-left:auto}
 .topbar .spacer{flex:1}
+.logout{margin:0;display:inline}
+.logout button{font:inherit;font-size:13.5px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  background:none;border:1px solid transparent;color:var(--muted)}
+.logout button:hover{background:var(--line-2);color:var(--ink)}
 
 /* ---------- попередження фільтра ---------- */
 .warn{background:var(--warn-soft,#f8eee1);color:var(--warn);border-radius:8px;
@@ -268,7 +272,12 @@ tr.taken td{background:var(--accent-soft)}
       <a href="{{ carry('/analytics', f) }}" class="{{ 'on' if page == 'analytics' }}">Аналітика</a>
     </span>
     <span class="spacer"></span>
-    <span class="nav"><a href="/status" class="{{ 'on' if page == 'status' }}">Стан системи</a></span>
+    {% set role = current_role(request) %}
+    <span class="nav">
+      {# «Стан системи» — лише власнику: там запуск збору й блокування входів. #}
+      {% if role in (None, 'owner') %}<a href="/status" class="{{ 'on' if page == 'status' }}">Стан системи</a>{% endif %}
+      {% if role %}<form method="post" action="/logout" class="logout"><button type="submit">Вийти</button></form>{% endif %}
+    </span>
   </nav>
 
   {% block content %}{% endblock %}

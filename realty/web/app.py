@@ -98,9 +98,13 @@ app.include_router(analytics_router)
 
 # Захист усього інтерфейсу. Вмикається наявністю AUTH_USER/AUTH_PASSWORD,
 # тож локальна розробка не потребує пароля, а публічний хостинг — потребує.
-from .auth import BasicAuthMiddleware, robots_txt, warn_if_open  # noqa: E402
+from .auth import (  # noqa: E402
+    AuthMiddleware, current_role, robots_txt, router as auth_router, warn_if_open,
+)
 
-app.add_middleware(BasicAuthMiddleware)
+app.add_middleware(AuthMiddleware)
+app.include_router(auth_router)
+templates.env.globals["current_role"] = current_role
 
 
 @app.get("/robots.txt", include_in_schema=False)

@@ -47,6 +47,9 @@ header .sub{color:var(--muted);font-size:13px}
 .nav a.on{background:var(--card);border-color:var(--line);color:var(--ink);
   font-weight:540;box-shadow:var(--shadow)}
 .topbar .spacer{flex:1}
+.logout{margin:0;display:inline}
+.logout button{font:inherit;font-size:13.5px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  background:none;border:1px solid transparent;color:var(--muted)}
 
 h2{font-size:11px;font-weight:520;letter-spacing:.06em;text-transform:uppercase;
   color:var(--muted);margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
@@ -144,7 +147,9 @@ th.r,td.r{text-align:right}
       <a href="/analytics">Аналітика</a>
     </span>
     <span class="spacer"></span>
-    <span class="nav"><a href="/status" class="on">Стан системи</a></span>
+    <span class="nav"><a href="/status" class="on">Стан системи</a>
+      {% if current_role(request) %}<form method="post" action="/logout" class="logout"><button type="submit">Вийти</button></form>{% endif %}
+    </span>
   </nav>
 
   <header>
@@ -249,6 +254,23 @@ th.r,td.r{text-align:right}
           які правила ламаються найчастіше — це найдешевше джерело для
           наступних виправлень.</p>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Заблоковані входи</h2>
+    <p class="hint" id="b-hint">Після 10 невдалих спроб входу з однієї адреси вхід з неї
+      блокується на 15 хвилин і розблоковується сам. Адреса — справжня адреса відвідувача,
+      а не тунелю, тож один бот не заблокує вхід іншим.</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Адреса</th><th>Країна</th><th>Пристрій</th><th>Браузер</th>
+            <th>Логін, яким пробували</th><th>Заблоковано</th><th class="r">Спроб</th>
+            <th>Розблокується само</th><th></th></tr>
+        </thead>
+        <tbody id="blocks"><tr><td colspan="9" style="color:var(--muted)">зараз ніхто не заблокований</td></tr></tbody>
+      </table>
     </div>
   </section>
 
@@ -427,8 +449,41 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
+async function refreshBlocks(){
+  try{
+    const r = await fetch("/api/auth/blocks", {headers: {"Accept": "application/json"}});
+    if (!r.ok) return;
+    const d = await r.json();
+    const esc = (v) => String(v ?? "—").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    $("blocks").innerHTML = d.blocks.length ? d.blocks.map(b => `<tr>
+      <td class="src">${esc(b.ip)}</td><td>${esc(b.country)}</td><td>${esc(b.device)}</td>
+      <td>${esc(b.browser)}</td><td>${esc(b.last_user)}</td><td>${time(b.blocked_at)}</td>
+      <td class="r num">${fmt(b.failures)}</td><td>${time(b.blocked_until)}</td>
+      <td class="r"><button class="small" data-unblock="${esc(b.ip)}">Розблокувати</button></td>
+    </tr>`).join("") : `<tr><td colspan="9" style="color:var(--muted)">зараз ніхто не заблокований</td></tr>`;
+  }catch(e){ /* панель просто не оновиться */ }
+}
+
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-unblock]");
+  if (!btn) return;
+  btn.disabled = true;
+  const ip = btn.dataset.unblock;
+  try{
+    const r = await fetch("/api/auth/blocks/" + encodeURIComponent(ip) + "/unblock", {method: "POST"});
+    const d = await r.json();
+    toast(d.ok ? "Розблоковано: " + ip : (d.error || "не вдалося розблокувати"), d.ok ? "ok" : "err");
+  }catch(e){
+    toast("не вдалося розблокувати: " + e.message, "err");
+  }finally{
+    refreshBlocks();
+  }
+});
+
 refresh();
+refreshBlocks();
 setInterval(refresh, 5000);
+setInterval(refreshBlocks, 15000);
 </script>
 </body>
 </html>
