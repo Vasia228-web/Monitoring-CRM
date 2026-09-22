@@ -13,7 +13,7 @@ import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, replace
 
-from sqlalchemy import select
+from sqlalchemy import text, select
 
 from .models import Condition, Listing, MarketType, Property
 
@@ -471,6 +471,13 @@ def rebuild(session, dry_run: bool = False) -> dict:
                 stats["cross_source"] += 1
         return stats
 
+    # Перевірку зовнішніх ключів відкладаємо до фіксації транзакції. Між
+    # «видалити квартири» і «перепризначити оголошення» посилання тимчасово
+    # висять — з негайною перевіркою (foreign_keys = ON з 21.09.2026) це
+    # падало на `DELETE FROM properties`. При фіксації SQLite перевіряє все
+    # разом: якщо хоч одне посилання лишилось битим — фіксація відхиляється
+    # і перебудова відкочується цілком.
+    session.execute(text("PRAGMA defer_foreign_keys = ON"))
     session.query(Property).delete()
     session.flush()
 
