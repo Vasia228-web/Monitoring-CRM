@@ -111,6 +111,17 @@ def _wants_html(request: Request) -> bool:
         not request.url.path.startswith("/api/")
 
 
+def from_browser(request: Request) -> bool:
+    """Запит від браузера, а не від скрипта.
+
+    Усі сучасні браузери додають до КОЖНОГО запиту заголовки `Sec-Fetch-*`
+    (і до сторінок, і до фонових fetch); curl і скрипти — ні. Для старих
+    браузерів — запасна ознака: вони просять HTML.
+    """
+    return any(h in request.headers for h in ("sec-fetch-mode", "sec-fetch-site",
+                                              "sec-fetch-dest")) or _wants_html(request)
+
+
 def same_origin(request: Request) -> bool:
     """Запит, що змінює дані, прийшов із самого сайту, а не з чужої сторінки."""
     source = request.headers.get("origin") or request.headers.get("referer") or ""
@@ -196,7 +207,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             user, role, via = row.user, row.role, "cookie"
         else:
             header = request.headers.get("authorization", "")
-            if header.startswith("Basic "):
+            # Заголовок входу — лише для скриптів. Браузер, що пам'ятає пароль
+            # від старого віконця, сам підставляє його до кожного запиту: Firefox
+            # показував «Невірний логін або пароль» замість форми й рахував
+            # кожне відкриття як невдалу спробу — так можна було заблокувати себе.
+            if header.startswith("Basic ") and not from_browser(request):
                 # Вхід для скриптів — під тим самим лімітом, що й форма.
                 ip = client_ip(request)
                 if (b := sessions.blocked(ip)) is not None:

@@ -202,3 +202,36 @@ def test_return_address_cannot_lead_to_another_site(env):
                                "next": "//evil.example/steal"},
                headers={"CF-Connecting-IP": "203.0.113.30"})
     assert r.headers["location"] == "/"
+
+
+FIREFOX = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 "
+           "Firefox/153.0")
+
+
+def test_browser_with_stale_saved_header_gets_the_form_and_no_penalty(env):
+    """Регресія: Firefox пам'ятав пароль від старого віконця й сам надсилав
+    заголовок — сайт показував «Невірний логін або пароль» замість форми, а
+    кожне відкриття рахувалось як невдала спроба."""
+    import base64
+    c = client()
+    stale = "Basic " + base64.b64encode(f"{OWNER}:старий-пароль".encode()).decode()
+    page = {"Authorization": stale, "CF-Connecting-IP": "203.0.113.99",
+            "User-Agent": FIREFOX, "Accept": "text/html,application/xhtml+xml",
+            "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+    for _ in range(12):                                   # більше за ліміт
+        r = c.get("/", headers=page)
+        assert r.status_code == 303 and r.headers["location"].startswith("/login")
+    assert "Невірний" not in c.get("/login", headers=page).text   # форма, не помилка
+    # Фонові запити сторінки (опитування /status тощо) — теж без штрафу.
+    poll = {**page, "Accept": "application/json", "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty"}
+    for _ in range(12):
+        assert c.get("/api/stats", headers=poll).status_code == 401
+    assert sessions_rows() == []                          # жодної зарахованої спроби
+    assert login(c, OWNER, OWNER_PW, ip="203.0.113.99").status_code == 303
+
+
+def test_scripts_still_log_in_with_the_header(env):
+    ok = client().get("/api/stats", auth=(OWNER, OWNER_PW),
+                      headers={"CF-Connecting-IP": "203.0.113.98"})
+    assert ok.status_code == 200
