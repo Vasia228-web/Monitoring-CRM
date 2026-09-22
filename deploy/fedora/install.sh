@@ -77,7 +77,7 @@ if [ "${1:-}" = "--enable" ]; then
     exit 1
   fi
   systemctl --user enable --now realty-web.service realty-tunnel.service \
-    realty-cycle.timer realty-backup.timer realty-watchdog.timer realty-identity.timer
+    realty-cycle.timer realty-backup.timer realty-watchdog.timer realty-identity.timer realty-dedup-sample.timer
   systemctl --user list-timers 'realty-*' --no-pager
 fi
 echo "Готово."

@@ -97,6 +97,11 @@ from .analytics_routes import router as analytics_router  # noqa: E402
 
 app.include_router(analytics_router)
 
+# Ручне виправлення зведення квартир (лише власник).
+from .dedup_routes import router as dedup_router  # noqa: E402
+
+app.include_router(dedup_router)
+
 # Захист усього інтерфейсу. Вмикається наявністю AUTH_USER/AUTH_PASSWORD,
 # тож локальна розробка не потребує пароля, а публічний хостинг — потребує.
 from .auth import (  # noqa: E402

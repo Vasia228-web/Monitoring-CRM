@@ -881,6 +881,96 @@ def _attrs(members: list[Listing]) -> dict:
     )
 
 
+# --- Рішення власника: застосувати одразу, не чекаючи перебудови -------------------------
+
+
+def _high_id(session) -> int:
+    """Найбільший id квартири, що будь-коли існував (id зниклої не видаємо знову)."""
+    return max([0, *session.scalars(select(Property.id)),
+                *session.scalars(select(PropertyRedirect.old_id)),
+                *session.scalars(select(PropertyRedirect.new_id))])
+
+
+def decide(session, kind: str, left: list[int], right: list[int],
+           property_id: int | None = None, other_property_id: int | None = None) -> DedupDecision:
+    """Записує рішення власника. Старе рішення, що йому суперечить, вимикається —
+    діє останнє слово власника."""
+    new_l, new_r = set(left), set(right)
+    for d in session.scalars(select(DedupDecision).where(DedupDecision.active.is_(True))):
+        old_l, old_r = set(d.left or []), set(d.right or [])
+        if kind == "different" and d.kind == "same":
+            both = old_l | old_r
+            if both & new_l and both & new_r:
+                d.active = False
+        elif kind == "same" and d.kind == "different":
+            both = new_l | new_r
+            if old_l & both and old_r & both:
+                d.active = False
+    dec = DedupDecision(kind=kind, left=sorted(new_l), right=sorted(new_r),
+                        property_id=property_id, other_property_id=other_property_id)
+    session.add(dec)
+    session.flush()
+    return dec
+
+
+def _move(session, listing_ids, pid: int) -> None:
+    ids = list(listing_ids)
+    for start in range(0, len(ids), 500):
+        session.execute(update(Listing).where(Listing.id.in_(ids[start:start + 500]))
+                        .values(property_id=pid, last_seen=Listing.last_seen)
+                        .execution_options(synchronize_session=False))
+
+
+def split_off(session, property_id: int, listing_ids: list[int]) -> int:
+    """«Це різні квартири»: вибрані оголошення стають окремою квартирою.
+
+    Повертає її id. Решта лишається під старим id (там більшість або те, що
+    власник не позначив)."""
+    rows = list(session.scalars(select(Listing).where(Listing.property_id == property_id)))
+    chosen = {r.id for r in rows} & set(listing_ids)
+    rest = [r for r in rows if r.id not in chosen]
+    if not chosen or not rest:
+        raise ValueError("треба позначити частину оголошень, але не всі")
+    decide(session, "different", sorted(chosen), sorted(r.id for r in rest), property_id)
+    new_pid = _high_id(session) + 1
+    session.add(Property(id=new_pid, **_attrs([r for r in rows if r.id in chosen])))
+    session.flush()
+    _move(session, chosen, new_pid)
+    prop = session.get(Property, property_id)
+    for k, v in _attrs(rest).items():
+        setattr(prop, k, v)
+    session.flush()
+    return new_pid
+
+
+def merge_into(session, property_id: int, other_id: int) -> int:
+    """«Це одна квартира»: оголошення іншої квартири переходять сюди, старе
+    посилання на неї веде сюди ж."""
+    pid, other = resolve_property_id(session, property_id), resolve_property_id(session, other_id)
+    if pid is None or other is None:
+        raise ValueError("такої квартири немає")
+    if pid == other:
+        raise ValueError("це вже одна квартира")
+    mine = list(session.scalars(select(Listing).where(Listing.property_id == pid)))
+    theirs = list(session.scalars(select(Listing).where(Listing.property_id == other)))
+    decide(session, "same", [r.id for r in mine], [r.id for r in theirs], pid, other)
+    _move(session, [r.id for r in theirs], pid)
+    session.execute(delete(Property).where(Property.id == other))
+    red = session.get(PropertyRedirect, other)
+    if red is None:
+        session.add(PropertyRedirect(old_id=other, new_id=pid))
+    else:
+        red.new_id = pid
+    for chained in session.scalars(select(PropertyRedirect).where(PropertyRedirect.new_id == other)):
+        chained.new_id = pid
+    session.flush()
+    prop = session.get(Property, pid)
+    for k, v in _attrs(mine + theirs).items():
+        setattr(prop, k, v)
+    session.flush()
+    return pid
+
+
 def rebuild(session, dry_run: bool = False, rules=None) -> dict:
     """Перебудовує майстер-записи з поточних оголошень, ЗБЕРІГАЮЧИ їхні id.
 

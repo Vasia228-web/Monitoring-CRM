@@ -143,6 +143,38 @@ class CycleRecord(OpsBase):
     steps: Mapped[str | None] = mapped_column(Text)        # JSON: кроки з тривалістю
 
 
+class DedupAudit(OpsBase):
+    """Самоперевірка зведення після кроку «дублі» (D41): протиріччя всередині
+    квартир і пропущені дублі. Списки — JSON, щоб /status показав чергу."""
+
+    __tablename__ = "dedup_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    rules: Mapped[str | None] = mapped_column(String(200))
+    properties: Mapped[int] = mapped_column(Integer, default=0)     # квартир з 2+ оголошень
+    suspicious: Mapped[int] = mapped_column(Integer, default=0)
+    missed: Mapped[int] = mapped_column(Integer, default=0)
+    by_kind: Mapped[str | None] = mapped_column(Text)               # JSON {вид: квартир}
+    queue: Mapped[str | None] = mapped_column(Text)                 # JSON [{property_id, kinds, n}]
+    missed_list: Mapped[str | None] = mapped_column(Text)           # JSON [{kind, key, properties}]
+
+
+class DedupSample(OpsBase):
+    """Щотижнева перевірка 20 випадкових квартир (D41) — частка помилок зведення."""
+
+    __tablename__ = "dedup_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    one: Mapped[int] = mapped_column(Integer, default=0)
+    several: Mapped[int] = mapped_column(Integer, default=0)
+    unclear: Mapped[int] = mapped_column(Integer, default=0)
+    error_share: Mapped[float | None] = mapped_column(Float)
+    details: Mapped[str | None] = mapped_column(Text)               # JSON по кожній квартирі
+
+
 SUCCESS_STATUSES = ("ok", "partial")
 
 

@@ -117,6 +117,21 @@ button.flag{font:inherit;font-size:12.5px;padding:5px 11px;border-radius:999px;
   color:var(--ink-2)}
 button.flag:hover{border-color:var(--warn);color:var(--warn)}
 button.flag:disabled{opacity:.55;cursor:default}
+.dedupfix{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+.dedupfix summary{cursor:pointer;font-size:13.5px;color:var(--muted)}
+.dedupfix .fixscroll{overflow-x:auto;margin:6px 0}
+.fixtbl{border-collapse:collapse;font-size:13px;width:100%;min-width:640px}
+.fixtbl th,.fixtbl td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+.fixtbl .r{text-align:right}
+.fixtbl .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.fixrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13.5px}
+.fixrow input{font:inherit;font-size:13px;padding:5px 9px;border:1px solid var(--line);
+  border-radius:8px;background:var(--card);color:inherit;min-width:0;width:180px}
+button.fixbtn{font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--line);background:var(--card);color:inherit}
+button.fixbtn:hover{border-color:var(--accent);color:var(--accent)}
+button.fixbtn:disabled{opacity:.55;cursor:default}
+.decisions{margin:0 0 8px;padding-left:18px;font-size:13px}
 button.flag.sent{border-color:var(--ok);color:var(--ok);background:var(--card)}
 
 .back{font-size:13.5px;color:var(--muted);text-decoration:none}

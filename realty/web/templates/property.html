@@ -222,6 +222,56 @@
       </span>
     </p>
   {% endif %}
+
+  {% if can_fix_dedup and rows %}
+    {# Лише власник. Рішення сильніше за правила зведення, і наступна
+       перебудова його не скасовує. #}
+    <details class="dedupfix" {{ 'open' if decisions }}>
+      <summary>Виправити зведення</summary>
+      {% if rows | length > 1 %}
+        <p class="legend">Позначте оголошення, які — <b>інша</b> квартира, і натисніть
+          «Це різні квартири»: вони стануть окремою квартирою.</p>
+        <div class="fixscroll"><table class="fixtbl">
+          <thead><tr><th></th><th>Сайт</th><th>Кімн.</th><th class="r">м²</th><th class="r">Пов.</th>
+            <th>Адреса</th><th>Корпус · id DIM.RIA</th><th class="r">Ціна</th><th></th></tr></thead>
+          <tbody>
+          {% for r in rows %}
+            {% set idn = r.identity or {} %}
+            <tr>
+              <td><input type="checkbox" class="ddpick" value="{{ r.id }}" aria-label="позначити оголошення {{ r.id }}"></td>
+              <td>{{ r.source }}</td>
+              <td>{{ r.rooms or '—' }}</td>
+              <td class="r num">{{ r.area_total or '—' }}</td>
+              <td class="r num">{{ r.floor or '—' }}</td>
+              <td>{{ (r.location or '—')[:60] }}</td>
+              <td class="mono">{{ idn.korpus or '—' }}{% if idn.flat and not idn.flat.endswith('?') %} · {{ idn.flat[-6:] }}{% endif %}</td>
+              <td class="r num">${{ (r.price_usd or 0) | round | int | money }}</td>
+              <td><a href="{{ r.original_url }}" target="_blank" rel="noopener noreferrer">відкрити →</a></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+        <p><button class="fixbtn" id="dd-split" data-property="{{ property.id }}">Це різні квартири</button></p>
+      {% endif %}
+      <p class="fixrow">Це та сама квартира, що й
+        <input id="dd-other" inputmode="numeric" placeholder="номер або посилання" autocomplete="off">
+        <button class="fixbtn" id="dd-merge" data-property="{{ property.id }}">Це одна квартира</button>
+      </p>
+      {% if decisions %}
+        <p class="legend" style="margin-bottom:4px">Ваші рішення, що стосуються цієї квартири:</p>
+        <ul class="decisions">
+          {% for d in decisions %}
+            <li>{{ d.at.strftime('%d.%m.%Y') }} ·
+              {% if d.kind == 'same' %}«це одна квартира»{% if d.other_property_id %} (разом з №{{ d.other_property_id }}){% endif %}
+              {% else %}«це різні квартири»{% endif %}
+              · оголошень тут: {{ d.listings }}
+              <button class="flag" data-undo="{{ d.id }}">скасувати</button></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <p class="legend" id="dd-msg" role="status"></p>
+    </details>
+  {% endif %}
 </section>
 
 {# --- скільки займає продаж --- #}
@@ -263,4 +313,49 @@
 </section>
 {% endblock %}
 
-{% block scripts %}{% include "_scripts.html" %}{% endblock %}
+{% block scripts %}{% include "_scripts.html" %}
+{% if can_fix_dedup %}
+<script>
+(function(){
+  var msg = document.getElementById('dd-msg');
+  function say(t){ if (msg) msg.textContent = t; }
+  async function post(url, body){
+    var r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify(body || {})});
+    var d = {};
+    try { d = await r.json(); } catch (e) {}
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    return d;
+  }
+  document.addEventListener('click', async function(ev){
+    var split = ev.target.closest('#dd-split'), merge = ev.target.closest('#dd-merge'),
+        undo = ev.target.closest('[data-undo]');
+    if (!split && !merge && !undo) return;
+    var btn = split || merge || undo;
+    btn.disabled = true;
+    try {
+      if (split) {
+        var ids = Array.from(document.querySelectorAll('.ddpick:checked')).map(function(x){ return +x.value; });
+        if (!ids.length) throw new Error('позначте оголошення іншої квартири');
+        var d = await post('/api/dedup/split', {property_id: +split.dataset.property, listing_ids: ids});
+        say('Готово: позначені оголошення тепер — квартира №' + d.new_property_id + '.');
+        setTimeout(function(){ location.reload(); }, 900);
+      } else if (merge) {
+        var other = document.getElementById('dd-other').value.trim();
+        var d2 = await post('/api/dedup/merge', {property_id: +merge.dataset.property, other: other});
+        say('Готово: зведено в одну квартиру.');
+        setTimeout(function(){ location.href = '/property/' + d2.property_id; }, 900);
+      } else {
+        var d3 = await post('/api/dedup/decisions/' + undo.dataset.undo + '/undo');
+        say('Рішення скасовано: ' + d3.note + '.');
+        undo.closest('li').remove();
+      }
+    } catch (e) {
+      say('Не вдалося: ' + e.message);
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

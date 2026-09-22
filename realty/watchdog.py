@@ -49,6 +49,11 @@ BLOCK_MIN_REQUESTS = 10
 WRITE_FAIL_MIN = 3
 WRITE_FAIL_SHARE = 0.02
 BACKUP_MAX_AGE_HOURS = 30
+# Самоперевірка зведення: «різко більше» — понад звичайне (медіана останніх
+# перевірок) на 30% і ще щонайменше на 20 квартир; одиничні коливання — ні.
+DEDUP_RISE = 1.3
+DEDUP_RISE_MIN = 20
+DEDUP_HISTORY = 8
 STATE_PATH = DATA_DIR / "alerts.json"
 PUBLIC_URL_PATH = DATA_DIR / "public_url"
 
@@ -230,6 +235,32 @@ def check_backup(now: datetime) -> Alert | None:
     return None
 
 
+def check_dedup(now: datetime) -> list[Alert]:
+    """Підозрілих квартир чи пропущених дублів різко більше, ніж звичайно."""
+    from statistics import median
+
+    from . import dedup_audit
+
+    rows = dedup_audit.recent(DEDUP_HISTORY + 1)
+    if len(rows) < 4:
+        return []
+    last, before = rows[0], rows[1:]
+    alerts = []
+    for field, key, what in (("suspicious", "dedup-suspicious", "підозрілих квартир"),
+                             ("missed", "dedup-missed", "пропущених дублів")):
+        usual = median(getattr(r, field) for r in before)
+        now_n = getattr(last, field)
+        if now_n > usual * DEDUP_RISE + DEDUP_RISE_MIN:
+            kinds = json.loads(last.by_kind or "{}") if field == "suspicious" else {}
+            top = ", ".join(f"{dedup_audit.KINDS.get(k, k)} — {n}"
+                            for k, n in sorted(kinds.items(), key=lambda kv: -kv[1])[:3])
+            alerts.append(Alert(key, (
+                f"🧩 Зведення квартир: {what} {now_n}, звичайно ~{usual:.0f} "
+                f"(перевірка {_ago(last.at, now)}).{' Найчастіше: ' + top + '.' if top else ''}\n"
+                f"Черга на перегляд — на /status.")))
+    return alerts
+
+
 # --- Стан і розсилка -----------------------------------------------------------------
 
 
@@ -267,7 +298,7 @@ def collect(now: datetime, state: dict) -> list[Alert]:
         except Exception as e:           # сторож не має падати через одну перевірку
             log.exception("перевірка впала")
             alerts.append(Alert("watchdog", f"⚠️ Сторож не зміг виконати перевірку: {e}"))
-    for check in (check_sources, check_verify_blocks):
+    for check in (check_sources, check_verify_blocks, check_dedup):
         try:
             alerts += check(now)
         except Exception as e:

@@ -193,6 +193,42 @@ def api_reports(limit: int = 50):
         })
 
 
+@router.get("/api/status/dedup")
+def api_dedup():
+    """Зведення квартир: самоперевірка, черга на перегляд, щотижнева вибірка (D41)."""
+    import json
+
+    from .. import dedup, dedup_audit, dedup_sample
+    from ..models import DedupDecision
+
+    audits = dedup_audit.recent(9)
+    last = audits[0] if audits else None
+    with SessionLocal() as s:
+        decisions = s.scalar(select(func.count()).select_from(DedupDecision)
+                             .where(DedupDecision.active.is_(True))) or 0
+    return JSONResponse({
+        "rules": sorted(dedup.active_rules()),
+        "rule_labels": dedup.RULE_LABELS,
+        "kinds": dedup_audit.KINDS,
+        "missed_kinds": dedup_audit.MISSED,
+        "decisions": decisions,
+        "last": None if last is None else {
+            "at": as_utc_iso(last.at), "properties": last.properties,
+            "suspicious": last.suspicious, "missed": last.missed,
+            "previous": audits[1].suspicious if len(audits) > 1 else None,
+            "by_kind": json.loads(last.by_kind or "{}"),
+            "queue": json.loads(last.queue or "[]")[:40],
+            "missed_list": json.loads(last.missed_list or "[]")[:20],
+        },
+        "history": [{"at": as_utc_iso(a.at), "suspicious": a.suspicious, "missed": a.missed}
+                    for a in audits],
+        "samples": [{"at": as_utc_iso(x.at), "n": x.n, "one": x.one, "several": x.several,
+                     "unclear": x.unclear, "error_share": x.error_share,
+                     "details": json.loads(x.details or "[]")}
+                    for x in dedup_sample.recent(6)],
+    })
+
+
 @router.get("/api/status/runs")
 def api_runs(limit: int = 20):
     return JSONResponse(ops.recent_runs(min(limit, 100)))

@@ -1,0 +1,9 @@
+[Unit]
+Description=Realty: перевірка зведення раз на тиждень
+
+[Timer]
+OnCalendar=Mon *-*-* 09:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

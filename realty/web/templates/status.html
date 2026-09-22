@@ -258,6 +258,54 @@ th.r,td.r{text-align:right}
   </section>
 
   <section>
+    <h2>Зведення квартир</h2>
+    <div class="panels">
+      <div class="panel">
+        <h3>Самоперевірка після «дублів»</h3>
+        <div class="rows">
+          <div class="row"><span>Остання перевірка</span><b id="d-at">—</b></div>
+          <div class="row"><span>Підозрілих квартир</span><b id="d-susp">—</b></div>
+          <div class="row"><span>Пропущених дублів</span><b id="d-missed">—</b></div>
+          <div class="row"><span>Ваших рішень діє</span><b id="d-decisions">—</b></div>
+          <div class="row"><span>Правила зведення</span><b id="d-rules">—</b></div>
+        </div>
+        <div class="rows" id="d-kinds" style="margin-top:10px"></div>
+        <p class="hint">Підозріла — квартира, всередині якої є ознаки різних квартир
+          (корпус, id DIM.RIA, поверх, розкид одночасних цін…). Якщо таких різко більше,
+          ніж звичайно, приходить повідомлення в Telegram.</p>
+      </div>
+      <div class="panel">
+        <h3>Щотижнева вибірка 20 квартир</h3>
+        <div class="rows">
+          <div class="row"><span>Остання</span><b id="s-at">ще не було</b></div>
+          <div class="row"><span>Одна квартира</span><b id="s-one">—</b></div>
+          <div class="row"><span>Злито кілька різних</span><b id="s-several">—</b></div>
+          <div class="row"><span>Неясно</span><b id="s-unclear">—</b></div>
+          <div class="row"><span>Частка помилок</span><b id="s-share">—</b></div>
+          <div class="row"><span>Попередні тижні</span><b id="s-hist">—</b></div>
+        </div>
+        <p class="hint">«Злито кілька» — лише там, де є доказ: різні id квартири DIM.RIA,
+          корпуси, поверхи чи будинки. У новобудовах однаковий опис доказом не є — це
+          часто шаблон забудовника.</p>
+      </div>
+    </div>
+    <h3 style="margin:20px 0 8px;font-size:14px">Черга на перегляд</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Квартира</th><th class="r">Оголошень</th><th>Що суперечить</th></tr></thead>
+        <tbody id="d-queue"><tr><td colspan="3" style="color:var(--muted)">перевірки ще не було</td></tr></tbody>
+      </table>
+    </div>
+    <h3 style="margin:20px 0 8px;font-size:14px">Пропущені дублі</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Що збігається</th><th>Квартири</th></tr></thead>
+        <tbody id="d-missed-list"><tr><td colspan="2" style="color:var(--muted)">немає</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
     <h2>Заблоковані входи</h2>
     <p class="hint" id="b-hint">Після 10 невдалих спроб входу з однієї адреси вхід з неї
       блокується на 15 хвилин і розблоковується сам. Адреса — справжня адреса відвідувача,
@@ -480,10 +528,52 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
+async function refreshDedup(){
+  try{
+    const r = await fetch("/api/status/dedup", {cache: "no-store"});
+    if (!r.ok) return;
+    const d = await r.json();
+    const esc = (v) => String(v ?? "—").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const link = (id) => `<a href="/property/${+id}?verify=0">№${+id}</a>`;
+    $("d-rules").textContent = d.rules.length ? d.rules.join(", ") : "як до D41 (нові вимкнені)";
+    $("d-decisions").textContent = fmt(d.decisions);
+    const L = d.last;
+    if (L){
+      $("d-at").textContent = time(L.at);
+      const delta = L.previous === null ? "" : ` (було ${fmt(L.previous)})`;
+      $("d-susp").textContent = `${fmt(L.suspicious)} з ${fmt(L.properties)}${delta}`;
+      $("d-missed").textContent = fmt(L.missed);
+      $("d-kinds").innerHTML = Object.entries(L.by_kind).sort((a, b) => b[1] - a[1]).map(([k, n]) =>
+        `<div class="row"><span>${esc(d.kinds[k] || k)}</span><b>${fmt(n)}</b></div>`).join("");
+      $("d-queue").innerHTML = L.queue.length ? L.queue.map(q => `<tr>
+        <td>${link(q.property_id)}</td><td class="r num">${fmt(q.n)}</td>
+        <td>${q.kinds.map(k => `<span class="pill warn">${esc(d.kinds[k] || k)}</span>`).join(" ")}</td>
+      </tr>`).join("") : `<tr><td colspan="3" style="color:var(--muted)">протиріч немає</td></tr>`;
+      $("d-missed-list").innerHTML = L.missed_list.length ? L.missed_list.map(m => `<tr>
+        <td>${esc(d.missed_kinds[m.kind] || m.kind)}</td>
+        <td>${m.properties.map(link).join(", ")}</td></tr>`).join("")
+        : `<tr><td colspan="2" style="color:var(--muted)">немає</td></tr>`;
+    }
+    const S = d.samples[0];
+    if (S){
+      $("s-at").textContent = time(S.at);
+      $("s-one").textContent = fmt(S.one);
+      $("s-several").innerHTML = fmt(S.several) + (S.several ? " — " + S.details
+        .filter(x => x.verdict === "several").map(x => link(x.property_id)).join(", ") : "");
+      $("s-unclear").textContent = fmt(S.unclear);
+      $("s-share").textContent = S.error_share === null ? "—" : Math.round(S.error_share * 100) + "%";
+      $("s-hist").textContent = d.samples.slice(1).map(x =>
+        x.error_share === null ? "—" : Math.round(x.error_share * 100) + "%").join(" · ") || "—";
+    }
+  }catch(e){ /* панель просто не оновиться */ }
+}
+
 refresh();
 refreshBlocks();
+refreshDedup();
 setInterval(refresh, 5000);
 setInterval(refreshBlocks, 15000);
+setInterval(refreshDedup, 60000);
 </script>
 </body>
 </html>

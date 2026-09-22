@@ -220,6 +220,11 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
         # Об'єкт вважаємо взятим в обробку, якщо позначене хоч одне з оголошень:
         # інакше статус, поставлений зі списку, не було б видно на цій сторінці.
         data["in_progress"] = any(r.in_progress for r in data["rows"])
+        # Ручне виправлення зведення — лише власникові (друг цих кнопок не бачить).
+        if getattr(request.state, "role", None) in ("owner", None):
+            from .dedup_routes import decisions_for
+            data["can_fix_dedup"] = True
+            data["decisions"] = decisions_for(s, {r.id for r in data["rows"]})
     data.update({"page": "list", "in_work": in_work, "forecast": forecast_state,
                  "path": "/", "f": {},
                  "cfg": cfg, "rooms_label": rooms_label(data["item"].band),

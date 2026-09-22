@@ -334,21 +334,52 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 
 
 def cmd_dedup(args: argparse.Namespace) -> int:
+    from realty import dedup
     from realty.db import init_db, session_scope
     from realty.dedup import rebuild
 
     init_db()
+    if args.action == "sample":
+        from realty import dedup_sample
+        res = dedup_sample.run()
+        print(dedup_sample.render(res))
+        try:
+            dedup_sample.notify_owner(res)
+        except Exception as e:                  # звіт уже записаний на /status
+            print(f"  Telegram: не надіслано ({type(e).__name__}: {e})")
+        return 0
+    rules = None if args.rules is None else (
+        dedup.RULES if args.rules == "all" else [r for r in args.rules.split(",") if r])
     with session_scope() as s:
-        st = rebuild(s, dry_run=args.dry_run)
+        st = rebuild(s, dry_run=args.dry_run, rules=rules)
     print("\n" + "=" * 58)
     print("МІЖПЛАТФОРМНА ДЕДУПЛІКАЦІЯ" + ("  (пробний прогін)" if args.dry_run else ""))
     print("=" * 58)
+    print(f"  правила D41:          {', '.join(st['rules']) or 'вимкнені (як до D41)'}")
     print(f"  оголошень:            {st['listings']}")
     print(f"  унікальних об'єктів:  {st['properties']}")
     print(f"  об'єднано груп:       {st['merged_groups']} "
           f"({st['merged_listings']} оголошень)")
     print(f"  з них між джерелами:  {st['cross_source']}")
+    if st.get("ambiguous"):
+        print(f"  лишено окремо як неоднозначні: {st['ambiguous']}")
     print("=" * 58)
+    if args.dry_run:
+        return 0
+    # Самоперевірка після кожного зведення: протиріччя всередині квартир і
+    # пропущені дублі — у чергу на перегляд і на /status.
+    from realty import dedup_audit
+    try:
+        with session_scope() as s:
+            res = dedup_audit.audit(s)
+        dedup_audit.record(res, st["rules"])
+    except Exception as e:                      # зведення вже записане — лише сигналимо
+        print(f"  самоперевірка не вдалась: {type(e).__name__}: {e}")
+        return 1
+    print(f"  самоперевірка: підозрілих квартир {res['suspicious']} з {res['properties']}, "
+          f"пропущених дублів {res['missed']}")
+    for kind, n in sorted(res["by_kind"].items(), key=lambda kv: -kv[1]):
+        print(f"    {dedup_audit.KINDS[kind]}: {n}")
     return 0
 
 
@@ -546,7 +577,10 @@ def main() -> int:
     sn.set_defaults(func=cmd_snapshot)
 
     dd = sub.add_parser("dedup", help="звести однакові квартири в майстер-записи")
+    dd.add_argument("action", nargs="?", default="rebuild", choices=("rebuild", "sample"),
+                    help="sample — щотижнева перевірка 20 випадкових квартир")
     dd.add_argument("--dry-run", action="store_true", help="лише порахувати, без запису")
+    dd.add_argument("--rules", help="правила D41 через кому або all; без — з DEDUP_RULES")
     dd.set_defaults(func=cmd_dedup)
 
     sh = sub.add_parser("schedule", help="фоновий розклад збору")

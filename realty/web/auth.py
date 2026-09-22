@@ -43,7 +43,7 @@ COOKIE = "realty_session"
 # пароля), сама сторінка входу.
 OPEN_PATHS = {"/healthz", "/robots.txt", "/favicon.ico", "/login"}
 # Лише для власника: стан системи, запуск збору, керування блокуваннями.
-OWNER_ONLY = ("/status", "/api/status", "/api/auth")
+OWNER_ONLY = ("/status", "/api/status", "/api/auth", "/api/dedup")
 # Звідки дозволено вірити заголовку CF-Connecting-IP: лише локальний тунель.
 TRUSTED_PROXIES = {"127.0.0.1", "::1"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}

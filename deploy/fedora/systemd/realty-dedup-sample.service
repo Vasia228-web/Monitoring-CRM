@@ -1,0 +1,13 @@
+[Unit]
+Description=Realty: щотижнева перевірка зведення на 20 випадкових квартирах
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+# Лише читає основну базу (жодних запитів до сайтів), пише звіт в ops.db,
+# на /status і в Telegram.
+ExecStart=%h/realty/.venv/bin/python cli.py dedup sample
+TimeoutStartSec=15min
+Nice=10
