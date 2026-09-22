@@ -3,7 +3,8 @@
 Нові оголошення отримують identity під час звичайного збору. Для старих:
   * DIM.RIA — картка кожного оголошення (той самий запит, що й у зборі);
   * LUN і flombu — повний прохід списком (там identity є прямо в стрічці:
-    ~240 і ~40 сторінок замість тисяч карток);
+    ~240 і ~40 сторінок замість тисяч карток). Вони короткі (~15 хв), тому
+    йдуть першими, а DIM.RIA забирає решту бюджету;
   * OLX — лише зі сторінки оголошення, тож дозбору немає: identity
     накопичується, коли збір відкриває сторінки деталей.
 
@@ -25,7 +26,7 @@ from . import identity, ops
 from .db import SessionLocal, init_db
 from .fetcher import FetchError, Fetcher
 from .models import Listing
-from .runner import DISABLED_FLAG, LOCK_PATH, CycleLock
+from .runner import DISABLED_FLAG, LOCK_PATH, CycleLock, Step, _cli, run_step
 
 log = logging.getLogger(__name__)
 
@@ -71,13 +72,14 @@ def run(sources: list[str], budget_s: float, lock_path: Path = LOCK_PATH,
         return report
     deadline = time.monotonic() + budget_s
     try:
-        for source in sources:
+        # Короткі повні проходи — першими, DIM.RIA — на решту бюджету.
+        for source in sorted(sources, key=lambda x: x == "domria"):
             if time.monotonic() >= deadline:
                 break
             if source == "domria":
                 _domria(deadline, report)
             elif source in ("lun", "flombu"):
-                _full_pass(source, report)
+                _full_pass(source, deadline, report)
         with SessionLocal() as s:
             for source in sources:
                 report["left"][source] = _count(s, missing(s, source))
@@ -121,13 +123,19 @@ def _domria(deadline: float, report: dict) -> None:
         report["done"]["domria"] = done
 
 
-def _full_pass(source: str, report: dict) -> None:
+def _full_pass(source: str, deadline: float, report: dict) -> None:
+    """Повний прохід окремим процесом зі стелею часу, як крок циклу: інакше
+    прохід, що затягнувся, тримав би замок і з'їв би наступний цикл збору."""
     with SessionLocal() as s:
         need = _count(s, missing(s, source, active_only=True))
     if need < FULL_PASS_MIN:
         report["done"][source] = f"не потрібно ({need} активних без ознак)"
         return
-    from .pipeline import Pipeline
     # Без LLM: дозбір лише освіжає ознаки, платні виклики тут ні до чого.
-    rep = Pipeline(sources=[source], use_llm=False, mode="full", trigger="manual").run()
-    report["done"][source] = rep.updated + rep.inserted
+    step = Step(f"дозбір {source}", _cli("scrape", "--sources", source, "--mode", "full",
+                                         "--no-llm", "--trigger", "manual"),
+                timeout=deadline - time.monotonic())
+    res, _ = run_step(step, budget=deadline - time.monotonic())
+    with SessionLocal() as s:
+        left = _count(s, missing(s, source, active_only=True))
+    report["done"][source] = f"{res.status}: активних без ознак {need} → {left}"

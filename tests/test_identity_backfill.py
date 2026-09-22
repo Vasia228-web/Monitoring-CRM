@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 import realty.identity_backfill as bf
 from realty.fetcher import FetchError
 from realty.models import Base, Listing
-from realty.runner import CycleLock
+from realty.runner import CycleLock, StepResult
 
 SEEN = datetime(2026, 9, 1, 12, 0)
 
@@ -111,3 +111,23 @@ def test_budget_stops_the_window_and_the_next_one_resumes(env):
     bf.run(["domria"], budget_s=3600, **kw)
     assert calls == ["5"]                                    # з місця зупинки
     assert all(v.get("flat") for v in _idents(Session).values())
+
+
+def test_full_pass_runs_first_and_is_capped_by_the_remaining_budget(env, monkeypatch):
+    Session, calls, kw = env
+    with Session() as s:
+        for i in range(60):
+            s.add(Listing(source="lun", external_id=f"l{i}", original_url=f"https://l/{i}",
+                          first_seen=SEEN, last_seen=SEEN))
+        s.commit()
+    steps = []
+
+    def fake_step(step, budget):
+        steps.append((step.argv[-8:], round(step.timeout), round(budget)))
+        return StepResult(step.name, "ok", 1.0, 0), None
+
+    monkeypatch.setattr(bf, "run_step", fake_step)
+    bf.run(["domria", "lun"], budget_s=600, **kw)
+    assert steps and "lun" in steps[0][0] and "--no-llm" in steps[0][0]
+    assert steps[0][1] <= 600 and steps[0][2] <= 600       # не довше за бюджет вікна
+    assert calls                                           # DIM.RIA — після, на решту
