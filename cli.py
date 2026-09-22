@@ -177,6 +177,20 @@ def cmd_schema(args: argparse.Namespace) -> int:
     return 0 if rep.ok else 1
 
 
+def cmd_identity(args: argparse.Namespace) -> int:
+    """Нічний дозбір сильних ознак квартири й будинку (не паралельно зі збором)."""
+    from realty import identity_backfill
+
+    sources = [x.strip() for x in args.sources.split(",")]
+    rep = identity_backfill.run(sources, budget_s=args.budget_min * 60)
+    print(f"дозбір identity: {rep['status']}")
+    for src, n in rep["done"].items():
+        print(f"  {src}: оброблено {n}; лишилось без ознак {rep['left'].get(src, '—')}")
+    if rep["errors"]:
+        print(f"  карток, що не відкрились: {rep['errors']}")
+    return 0
+
+
 def cmd_quality(args: argparse.Namespace) -> int:
     import json
 
@@ -493,6 +507,13 @@ def main() -> int:
     sm.add_argument("--dry-run", action="store_true", help="усе порахувати й відкотити")
     sm.add_argument("--db", help="шлях до файлу бази (типово — робоча)")
     sm.set_defaults(func=cmd_schema)
+
+    idn = sub.add_parser("identity", help="нічний дозбір сильних ознак квартири й будинку")
+    idn.add_argument("action", choices=("backfill",))
+    idn.add_argument("--sources", default="domria,lun,flombu")
+    idn.add_argument("--budget-min", type=float, default=110,
+                     help="стеля часу; має закінчитись до наступного циклу")
+    idn.set_defaults(func=cmd_identity)
 
     bf = sub.add_parser("backfill", help="дозібрати наявні записи з прогалинами")
     bf.add_argument("--sources", help="через кому: domria,lun,olx,flombu,blago")

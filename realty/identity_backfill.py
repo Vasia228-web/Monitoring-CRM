@@ -1,0 +1,133 @@
+"""Нічний дозбір сильних ознак (identity) для вже зібраних оголошень.
+
+Нові оголошення отримують identity під час звичайного збору. Для старих:
+  * DIM.RIA — картка кожного оголошення (той самий запит, що й у зборі);
+  * LUN і flombu — повний прохід списком (там identity є прямо в стрічці:
+    ~240 і ~40 сторінок замість тисяч карток);
+  * OLX — лише зі сторінки оголошення, тож дозбору немає: identity
+    накопичується, коли збір відкриває сторінки деталей.
+
+Ніколи не паралельно зі звичайним збором: дозбір тримає ТОЙ САМИЙ замок, що й
+цикл (`runner.CycleLock`). Якщо цикл ще йде — вікно пропускається. Бюджет часу
+обмежений, щоб закінчитись до наступного циклу; між вікнами — продовжує з того
+місця, де зупинився (бере лише записи без identity).
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+from pathlib import Path
+
+from sqlalchemy import func, or_, select, update
+
+from . import identity, ops
+from .db import SessionLocal, init_db
+from .fetcher import FetchError, Fetcher
+from .models import Listing
+from .runner import DISABLED_FLAG, LOCK_PATH, CycleLock
+
+log = logging.getLogger(__name__)
+
+RIA_CARD = "https://dom.ria.com/realty/data/{}"
+RIA_DELAY = 1.2          # як у звичайному зборі DIM.RIA
+BATCH = 25
+
+
+# Повний прохід списком LUN/flombu має сенс, лише коли в АКТИВНИХ оголошень
+# справді бракує ознак: зняті повним проходом уже не знайти, і без цього
+# порогу LUN щоночі проходився б весь заради записів, яких на сайті немає.
+FULL_PASS_MIN = 50
+
+
+def missing(session, source: str, active_only: bool = False):
+    """Оголошення джерела, у яких ще немає сильних ознак (і які ще не пробували)."""
+    key = {"domria": "$.flat"}.get(source, "$.lat")
+    stmt = (select(Listing.id, Listing.external_id)
+            .where(Listing.source == source,
+                   or_(Listing.identity.is_(None),
+                       func.json_extract(Listing.identity, key).is_(None)))
+            .order_by(Listing.is_active.desc(), Listing.id.desc()))
+    if active_only:
+        stmt = stmt.where(Listing.is_active.is_(True))
+    return stmt
+
+
+def _count(session, stmt) -> int:
+    return session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+
+
+def run(sources: list[str], budget_s: float, lock_path: Path = LOCK_PATH,
+        disabled_flag: Path = DISABLED_FLAG) -> dict:
+    init_db()
+    report = {"status": "ok", "done": {}, "left": {}, "errors": 0}
+    if disabled_flag.exists():
+        report["status"] = "disabled"
+        return report
+    lock = CycleLock(lock_path)
+    if not lock.acquire():
+        report["status"] = "skipped: іде цикл збору"
+        log.info("дозбір identity: цикл ще йде — вікно пропускаю")
+        return report
+    deadline = time.monotonic() + budget_s
+    try:
+        for source in sources:
+            if time.monotonic() >= deadline:
+                break
+            if source == "domria":
+                _domria(deadline, report)
+            elif source in ("lun", "flombu"):
+                _full_pass(source, report)
+        with SessionLocal() as s:
+            for source in sources:
+                report["left"][source] = _count(s, missing(s, source))
+    finally:
+        lock.release()
+    ops.beat(f"дозбір identity: {report['done']}", busy=False)
+    return report
+
+
+def _domria(deadline: float, report: dict) -> None:
+    fetcher = Fetcher(delay=RIA_DELAY, label="domria")
+    done = 0
+    try:
+        while time.monotonic() < deadline:
+            with SessionLocal() as s:
+                rows = s.execute(missing(s, "domria").limit(BATCH)).all()
+                if not rows:
+                    break
+                for lid, ext in rows:
+                    if time.monotonic() >= deadline:
+                        break
+                    try:
+                        ident = identity.from_domria(
+                            fetcher.get_json(RIA_CARD.format(ext), {"lang_id": 4}))
+                    except FetchError as e:
+                        # Картки немає (знято) чи сайт не відповів — нічого не
+                        # вигадуємо, лише позначаємо «пробували», щоб не смикати
+                        # цей запис щоночі.
+                        report["errors"] += 1
+                        ident = {"unavailable": str(e)[:80]}
+                    ident.setdefault("flat", "ria:?")      # пробували; id немає
+                    old = s.scalar(select(Listing.identity).where(Listing.id == lid))
+                    # Пряме UPDATE із last_seen = last_seen: інакше onupdate
+                    # «освіжив» би і зняті оголошення — дозбір їх не бачив у стрічці.
+                    s.execute(update(Listing).where(Listing.id == lid).values(
+                        identity={**(old or {}), **ident}, last_seen=Listing.last_seen))
+                    done += 1
+                s.commit()
+    finally:
+        fetcher.close()
+        report["done"]["domria"] = done
+
+
+def _full_pass(source: str, report: dict) -> None:
+    with SessionLocal() as s:
+        need = _count(s, missing(s, source, active_only=True))
+    if need < FULL_PASS_MIN:
+        report["done"][source] = f"не потрібно ({need} активних без ознак)"
+        return
+    from .pipeline import Pipeline
+    # Без LLM: дозбір лише освіжає ознаки, платні виклики тут ні до чого.
+    rep = Pipeline(sources=[source], use_llm=False, mode="full", trigger="manual").run()
+    report["done"][source] = rep.updated + rep.inserted
