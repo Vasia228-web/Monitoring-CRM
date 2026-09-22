@@ -66,8 +66,10 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
 
             _explain_mismatch(user, password, creds)
 
-        return Response(status_code=401, content="Потрібна авторизація",
-                        headers={"WWW-Authenticate": f'Basic realm="{REALM}"'})
+        # Явне кодування: без Content-Type браузер угадував його сам і показував
+        # кирилицю кракозябрами.
+        return PlainTextResponse("Потрібна авторизація", status_code=401,
+                                 headers={"WWW-Authenticate": f'Basic realm="{REALM}"'})
 
 
 def _explain_mismatch(user: str, password: str, creds: tuple[str, str]) -> None:

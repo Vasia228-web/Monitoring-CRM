@@ -150,3 +150,14 @@ def test_cycle_unit_start_limit_leaves_room_for_manual_runs():
              / "realty-cycle.timer").read_text()
     assert "00/3" in timer                 # кожні 3 год → 2 старти за 6 год
     assert burst >= 2 + 6                  # і щонайменше 6 ручних / перезапусків зверху
+
+
+def test_401_page_declares_utf8(monkeypatch):
+    """Регресія: сторінка 401 без Content-Type показувалась кракозябрами."""
+    monkeypatch.setenv("AUTH_USER", "vasia")
+    monkeypatch.setenv("AUTH_PASSWORD", "секрет")
+    from realty.web.app import app
+    r = TestClient(app).get("/")
+    assert r.status_code == 401
+    assert r.headers["content-type"] == "text/plain; charset=utf-8"
+    assert r.content.decode("utf-8") == "Потрібна авторизація"
