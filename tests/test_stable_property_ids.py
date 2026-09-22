@@ -199,3 +199,18 @@ def test_rebuild_does_not_pretend_listings_were_seen(Session):
         s.commit()
         after = {l.id: l.last_seen for l in s.scalars(select(Listing))}
     assert after == touched                                # перебудова — нуль змін last_seen
+
+
+def test_report_points_to_the_flat_of_its_listing(monkeypatch, Session):
+    """Скарга, записана до стабільних id, зберігає застарілий номер квартири —
+    показуємо квартиру за оголошенням, а старий номер лишаємо як історію."""
+    _seed(Session)
+    with Session() as s:
+        current = s.get(Listing, 3).property_id
+        s.add(DataReport(listing_id=3, property_id=999, field="price", snapshot={}))
+        s.commit()
+    import realty.web.status as status
+    monkeypatch.setattr(status, "SessionLocal", Session)
+    from realty.web.app import app
+    item = TestClient(app).get("/api/status/reports").json()["items"][0]
+    assert item["property_id"] == current and item["property_id_at_report"] == 999

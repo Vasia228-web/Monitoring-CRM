@@ -181,7 +181,12 @@ def api_reports(limit: int = 50):
             "by_field": sorted(by_field.items(), key=lambda kv: -kv[1]),
             "items": [{
                 "id": r.id, "listing_id": r.listing_id,
-                "property_id": r.property_id, "field": r.field,
+                # Квартиру визначаємо за оголошенням, а не за номером, записаним у
+                # момент скарги: до 22.09.2026 номери квартир зсувались при кожній
+                # перебудові, і збережений номер міг уже належати чужій квартирі.
+                "property_id": (s.get(Listing, r.listing_id).property_id
+                                if s.get(Listing, r.listing_id) else r.property_id),
+                "property_id_at_report": r.property_id, "field": r.field,
                 "created_at": r.created_at.isoformat(),
                 "snapshot": r.snapshot or {},
             } for r in rows],
