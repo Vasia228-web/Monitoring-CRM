@@ -290,3 +290,18 @@ class PriceEvent(Base):
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     price_usd: Mapped[float | None] = mapped_column(Float)
     observed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class PropertyRedirect(Base):
+    """Куди тепер веде id квартири, що злилась з іншою.
+
+    id квартир стабільні між перебудовами (див. `dedup.assign_ids`), але коли
+    дві квартири виявляються однією, одна з них зникає. Старе посилання на неї
+    має вести на ту, що лишилась, а не на порожню сторінку.
+    """
+
+    __tablename__ = "property_redirects"
+
+    old_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    new_id: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

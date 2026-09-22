@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from sqlalchemy import func, select
 
 from ..analytics import cache, forecast
@@ -23,6 +23,7 @@ from ..analytics.segments import (
 )
 from ..analytics.settings import load
 from ..analytics.survival import Observation, estimate
+from ..dedup import resolve_property_id
 from ..db import SessionLocal
 from ..models import DataReport, Listing
 
@@ -194,6 +195,11 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
 
     cfg = load()
     with SessionLocal() as s:
+        # Квартира злилась з іншою — старе посилання веде на ту, що лишилась.
+        current = resolve_property_id(s, property_id)
+        if current is not None and current != property_id:
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"/property/{current}{query}", status_code=302)
         _count_view(s, property_id)
         if verify != "0":
             _refresh_liveness(s, property_id)
@@ -253,6 +259,7 @@ def api_segments(rooms: str = Query(""), condition: str = Query(""),
 def api_property(property_id: int):
     cfg = load()
     with SessionLocal() as s:
+        property_id = resolve_property_id(s, property_id) or property_id
         data = analyse(s, cache.get(s).universe, property_id, cfg)
     if data is None:
         return {"error": "not_found", "property_id": property_id}

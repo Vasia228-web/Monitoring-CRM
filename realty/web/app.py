@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
+from ..dedup import resolve_property_id
 from ..db import SessionLocal, init_db
 from ..ops import init_ops
 from ..models import (
@@ -375,6 +376,8 @@ def api_set_property_processing(property_id: int, payload: dict = Body(default={
         return JSONResponse({"ok": False, "error": "in_progress має бути true або false"},
                             status_code=400)
     with SessionLocal() as s:
+        # Старий id злитої квартири — ставимо статус тій, що лишилась.
+        property_id = resolve_property_id(s, property_id) or property_id
         rows = s.scalars(select(Listing)
                          .where(Listing.property_id == property_id)).all()
         if not rows:
@@ -460,6 +463,7 @@ def api_properties(
 def api_property_prices(property_id: int):
     """Єдина історія зміни ціни об'єкта — злита з усіх його оголошень."""
     with SessionLocal() as s:
+        property_id = resolve_property_id(s, property_id) or property_id
         prop = s.get(Property, property_id)
         if prop is None:
             return JSONResponse({"detail": "не знайдено"}, status_code=404)

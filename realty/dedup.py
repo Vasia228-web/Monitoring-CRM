@@ -10,12 +10,12 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 
-from sqlalchemy import text, select
+from sqlalchemy import delete, select, text, update
 
-from .models import Condition, Listing, MarketType, Property
+from .models import Condition, Listing, MarketType, Property, PropertyRedirect
 
 log = logging.getLogger(__name__)
 
@@ -452,65 +452,174 @@ def _pick(values: list, default=None):
     return max(counts, key=counts.get) if counts else default
 
 
+def assign_ids(groups: list[list[int]], old_pid: dict[int, int | None]) -> list[int | None]:
+    """Кожній новій групі — id квартири, у якій була більшість її оголошень.
+
+    Жадібно за розміром перетину: пара (група, старий id) з найбільшою кількістю
+    спільних оголошень отримує цей id першою. Старий id дістається лише одній
+    групі (тій, куди перейшла більшість його оголошень); група, якій жоден
+    старий id не дістався, отримує новий (None). Порядок детермінований —
+    дві перебудови поспіль на тих самих даних дають ті самі id.
+    """
+    pairs = []
+    for gi, group in enumerate(groups):
+        for pid, n in Counter(old_pid.get(i) for i in group).items():
+            if pid is not None:
+                pairs.append((-n, pid, gi))
+    pairs.sort()
+    out: list[int | None] = [None] * len(groups)
+    taken: set[int] = set()
+    for _, pid, gi in pairs:
+        if out[gi] is None and pid not in taken:
+            out[gi] = pid
+            taken.add(pid)
+    return out
+
+
+def resolve_property_id(session, pid: int, hops: int = 10) -> int | None:
+    """Чинний id квартири: сам, якщо є; інакше — куди вона злилась."""
+    for _ in range(hops):
+        if session.get(Property, pid) is not None:
+            return pid
+        red = session.get(PropertyRedirect, pid)
+        if red is None:
+            return None
+        pid = red.new_id
+    return None
+
+
+def _attrs(members: list[Listing]) -> dict:
+    prices = [m.price_usd for m in members if m.price_usd]
+    street, houses = next(
+        ((s, h) for s, h in (normalize_address(m.location) for m in members) if s),
+        (None, frozenset()),
+    )
+    return dict(
+        fingerprint="|".join(sorted(f"{m.source}:{m.external_id}" for m in members))[:128],
+        rooms=_pick([m.rooms for m in members]),
+        area_total=_pick([m.area_total for m in members]),
+        floor=_pick([m.floor for m in members]),
+        floors_total=_pick([m.floors_total for m in members]),
+        street=street, house=(sorted(houses)[0] if houses else None),
+        district=_pick([m.district for m in members]),
+        location=_pick([m.location for m in members]),
+        price_usd_min=min(prices) if prices else None,
+        price_usd_max=max(prices) if prices else None,
+        price_per_sqm=_pick([m.price_per_sqm for m in members]),
+        market_type=_pick([m.market_type for m in members], MarketType.UNKNOWN),
+        condition=_pick([m.condition for m in members], Condition.UNKNOWN),
+        sources_count=len({m.source for m in members}),
+        first_seen=min(m.first_seen for m in members),
+        last_seen=max(m.last_seen for m in members),
+    )
+
+
 def rebuild(session, dry_run: bool = False) -> dict:
-    """Перебудовує майстер-записи з поточних оголошень."""
+    """Перебудовує майстер-записи з поточних оголошень, ЗБЕРІГАЮЧИ їхні id.
+
+    Раніше квартири видалялись усі й створювались заново, і SQLite нумерував їх
+    з 1: за півтори доби в 89% оголошень змінився id квартири, збережені
+    посилання показували чужі квартири, скарги вказували не туди. Тепер:
+      * група отримує id квартири, де була більшість її оголошень (`assign_ids`);
+      * нова група — новий id, вищий за всі, що будь-коли існували (id
+        зниклої квартири ніколи не дістається іншій);
+      * квартира, що злилась з іншою, зникає, а її старий id переадресовується
+        на ту, куди перейшла більшість її оголошень (`property_redirects`).
+    Позначка «в обробці» живе на оголошеннях і перебудови не торкається.
+    """
     listings = list(session.scalars(select(Listing)))
     shapes = [shape_of(r) for r in listings]
     by_id = {r.id: r for r in listings}
+    old_pid = {r.id: r.property_id for r in listings}
 
     groups = cluster(shapes)
     multi = [g for g in groups if len(g) > 1]
     stats = {"listings": len(listings), "properties": len(groups),
              "merged_groups": len(multi),
              "merged_listings": sum(len(g) for g in multi),
-             "cross_source": 0}
-
+             "cross_source": sum(1 for g in multi if len({by_id[i].source for i in g}) > 1),
+             "kept_ids": 0, "new_ids": 0, "redirected": 0, "removed": 0}
     if dry_run:
-        for g in multi:
-            if len({by_id[i].source for i in g}) > 1:
-                stats["cross_source"] += 1
         return stats
 
-    # Перевірку зовнішніх ключів відкладаємо до фіксації транзакції. Між
-    # «видалити квартири» і «перепризначити оголошення» посилання тимчасово
-    # висять — з негайною перевіркою (foreign_keys = ON з 21.09.2026) це
-    # падало на `DELETE FROM properties`. При фіксації SQLite перевіряє все
-    # разом: якщо хоч одне посилання лишилось битим — фіксація відхиляється
-    # і перебудова відкочується цілком.
-    session.execute(text("PRAGMA defer_foreign_keys = ON"))
-    session.query(Property).delete()
+    # Порядок кроків такий, що посилання оголошень на квартири цілі в КОЖНУ мить
+    # (перевірка зовнішніх ключів увімкнена): нові й оновлені квартири → нові
+    # номери оголошенням → лише потім видалення квартир, на які вже ніщо не
+    # посилається. Відкладена перевірка ключів (D36) тут не потрібна: драйвер
+    # відкриває транзакцію лише перед першою зміною даних, і PRAGMA до того
+    # моменту встигала скинутись — покладатись на таке не можна.
+    ids = assign_ids(groups, old_pid)
+    existing = {p.id: p for p in session.scalars(select(Property))}
+    high = max([0, *existing, *session.scalars(select(PropertyRedirect.old_id)),
+                *session.scalars(select(PropertyRedirect.new_id))])
+    retired = [pid for pid in existing if pid not in set(ids)]
+
+    # Відбиток квартири унікальний: щоб нові й оновлені не зіткнулись зі
+    # старими значеннями, спершу всім наявним — тимчасові.
+    for pid, prop in existing.items():
+        prop.fingerprint = f"tmp:{pid}"
     session.flush()
 
-    for group in groups:
+    final: list[int] = []
+    for gi, group in enumerate(groups):
         members = [by_id[i] for i in group]
-        sources = {m.source for m in members}
-        if len(sources) > 1:
-            stats["cross_source"] += 1
-        prices = [m.price_usd for m in members if m.price_usd]
-        street, houses = next(
-            ((s, h) for s, h in (normalize_address(m.location) for m in members) if s),
-            (None, frozenset()),
-        )
-        prop = Property(
-            fingerprint="|".join(sorted(f"{m.source}:{m.external_id}" for m in members))[:128],
-            rooms=_pick([m.rooms for m in members]),
-            area_total=_pick([m.area_total for m in members]),
-            floor=_pick([m.floor for m in members]),
-            floors_total=_pick([m.floors_total for m in members]),
-            street=street, house=(sorted(houses)[0] if houses else None),
-            district=_pick([m.district for m in members]),
-            location=_pick([m.location for m in members]),
-            price_usd_min=min(prices) if prices else None,
-            price_usd_max=max(prices) if prices else None,
-            price_per_sqm=_pick([m.price_per_sqm for m in members]),
-            market_type=_pick([m.market_type for m in members], MarketType.UNKNOWN),
-            condition=_pick([m.condition for m in members], Condition.UNKNOWN),
-            sources_count=len(sources),
-            first_seen=min(m.first_seen for m in members),
-            last_seen=max(m.last_seen for m in members),
-        )
-        session.add(prop)
-        session.flush()
-        for m in members:
-            m.property_id = prop.id
+        attrs = _attrs(members)
+        pid = ids[gi]
+        if pid is None:
+            high += 1
+            pid = high
+            session.add(Property(id=pid, **attrs))
+            stats["new_ids"] += 1
+        else:
+            for k, v in attrs.items():
+                setattr(existing[pid], k, v)
+            stats["kept_ids"] += 1
+        final.append(pid)
+    session.flush()
+
+    # Номер квартири пишемо лише тим оголошенням, у кого він справді змінився,
+    # і ПРЯМИМ оновленням зі збереженням last_seen: у моделі last_seen має
+    # onupdate — будь-який UPDATE рядка оголошення ставив би «бачили щойно»,
+    # хоча оголошення ніхто не бачив. Стара перебудова так «освіжала» всі
+    # оголошення, яким перенумерувала квартиру.
+    moves: dict[int, list[int]] = defaultdict(list)
+    for gi, group in enumerate(groups):
+        for i in group:
+            if old_pid.get(i) != final[gi]:
+                moves[final[gi]].append(i)
+    for pid, lids in moves.items():
+        for start in range(0, len(lids), 500):
+            session.execute(update(Listing)
+                            .where(Listing.id.in_(lids[start:start + 500]))
+                            .values(property_id=pid, last_seen=Listing.last_seen)
+                            .execution_options(synchronize_session=False))
+    stats["listings_moved"] = sum(len(v) for v in moves.values())
+    for m in listings:                          # у пам'яті — теж актуальні значення
+        session.expire(m, ["property_id"])
+
+    # Тепер на зниклі квартири ніщо не посилається — видаляємо масово (ORM-
+    # каскад обнулив би property_id оголошень окремими UPDATE).
+    if retired:
+        for pid in retired:
+            session.expunge(existing.pop(pid))
+        session.execute(delete(Property).where(Property.id.in_(retired)))
+
+    # Зниклі квартири: їхні оголошення перейшли в інші — переадресовуємо туди,
+    # куди перейшла більшість.
+    new_pid = {i: final[gi] for gi, g in enumerate(groups) for i in g}
+    for pid in retired:
+        moved = Counter(new_pid[i] for i, old in old_pid.items() if old == pid and i in new_pid)
+        if moved:
+            target = sorted(moved.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+            red = session.get(PropertyRedirect, pid)
+            if red is None:
+                session.add(PropertyRedirect(old_id=pid, new_id=target))
+            else:
+                red.new_id = target
+            # Старі переадресації, що вели сюди, — одразу на кінцеву квартиру.
+            for chained in session.scalars(select(PropertyRedirect)
+                                           .where(PropertyRedirect.new_id == pid)):
+                chained.new_id = target
+            stats["redirected"] += 1
+        stats["removed"] += 1
     return stats
