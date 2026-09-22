@@ -13,6 +13,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
+from .. import identity
 from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import (
@@ -142,6 +143,10 @@ def parse_detail(html: str) -> dict:
     )
     if condition is not Condition.UNKNOWN:
         out["condition"] = condition
+
+    ident = identity.from_olx_page(html)
+    if ident:
+        out["identity"] = ident
 
     return {k: v for k, v in out.items() if v is not None}
 

@@ -13,6 +13,7 @@ from typing import Iterator
 from bs4 import BeautifulSoup
 
 from ..config import BBOX, CITY_UK
+from .. import identity
 from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import (
@@ -149,6 +150,7 @@ class FlombuSource(BaseSource):
             "market_type": classify_market(title, accents),
             "condition": classify_condition(title, accents),
             "description": None,
+            "identity": identity.from_flombu(a, g),
             "raw": {"id": item.get("id"), "ownerType": a.get("ownerType"),
                     "accents": a.get("tileEstateAccentAttrs")},
         }

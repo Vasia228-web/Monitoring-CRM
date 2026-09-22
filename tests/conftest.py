@@ -57,3 +57,10 @@ def _repair(path: Path) -> Path:
 # DB_URL читається один раз, а load_dotenv наявних змінних не перекриває.
 os.environ["DB_URL"] = f"sqlite:///{_repair(_copy('realty.db'))}"
 os.environ["OPS_DB_URL"] = f"sqlite:///{_copy('ops.db')}"
+
+# Як сайт на старті (lifespan → init_db): доливаємо в копію нові колонки схеми.
+# Інакше тести з копією робочої бази падали б на кожному новому полі моделі.
+import sys as _sys  # noqa: E402
+_sys.path.insert(0, str(ROOT))
+from realty.db import init_db as _init_db  # noqa: E402
+_init_db()

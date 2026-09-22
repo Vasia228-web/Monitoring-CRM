@@ -12,6 +12,7 @@ import re
 from typing import Iterator
 
 from ..config import DOMRIA_CITY_ID, DOMRIA_STATE_ID
+from .. import identity
 from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import classify_condition, classify_market, parse_date
@@ -275,6 +276,7 @@ class DomRiaSource(BaseSource):
             "condition": classify_condition(tags, desc, utp, market=market),
             "description": desc[:2000] or None,
             "complex_name": complex_name,
+            "identity": identity.from_domria(d),
             "raw": {k: d.get(k) for k in (
                 "realty_id", "price", "currency_type", "rooms_count", "total_square_meters",
                 "realty_sale_type", "type", "latitude", "longitude", "publishing_date",

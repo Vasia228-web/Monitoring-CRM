@@ -12,6 +12,7 @@ import re
 from typing import Iterator
 
 from ..config import LUN_CITY_CODE
+from .. import identity
 from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import classify_condition, classify_market, in_ivano_frankivsk, parse_date
@@ -193,6 +194,7 @@ class LunSource(BaseSource):
             "market_type": market,
             "condition": condition,
             "description": text[:2000] or None,
+            "identity": identity.from_lun(d),
             # Телефони й контакти навмисно не зберігаємо.
             "raw": {
                 "id": d.get("id"), "price": d.get("price"), "priceSqm": d.get("priceSqm"),

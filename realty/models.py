@@ -166,6 +166,12 @@ class Listing(Base):
     )
 
     raw: Mapped[dict | None] = mapped_column(JSON)
+
+    # Сильні ознаки квартири й будинку від джерела (див. realty/identity.py):
+
+    # id квартири/групи дублів, id будинку, ЖК, корпус, координати, продавець.
+
+    identity: Mapped[dict | None] = mapped_column(JSON)
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
