@@ -192,6 +192,15 @@ def test_owner_merges_two_flats_and_the_old_link_redirects(web):
         assert dec.kind == "same" and set(dec.left) | set(dec.right) == {4, 5, 6}
 
 
+def test_merge_keeps_the_id_of_the_bigger_flat(web):
+    c = _as(OWNER, OWNER_PW)
+    # Зводимо зі сторінки меншої (3: одне оголошення) — лишається 2 (два оголошення).
+    r = c.post("/api/dedup/merge", json={"property_id": 3, "other": "2"}, headers={"Origin": SITE})
+    assert r.json() == {"ok": True, "property_id": 2}
+    with web() as s:
+        assert s.get(Property, 3) is None and s.get(PropertyRedirect, 3).new_id == 2
+
+
 def test_owner_can_undo_a_decision(web):
     c = _as(OWNER, OWNER_PW)
     c.post("/api/dedup/split", json={"property_id": 1, "listing_ids": [2]}, headers={"Origin": SITE})

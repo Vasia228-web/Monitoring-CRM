@@ -944,8 +944,8 @@ def split_off(session, property_id: int, listing_ids: list[int]) -> int:
 
 
 def merge_into(session, property_id: int, other_id: int) -> int:
-    """«Це одна квартира»: оголошення іншої квартири переходять сюди, старе
-    посилання на неї веде сюди ж."""
+    """«Це одна квартира»: дві квартири стають однією; посилання на ту, що
+    зникла, веде на ту, що лишилась. Повертає id тієї, що лишилась."""
     pid, other = resolve_property_id(session, property_id), resolve_property_id(session, other_id)
     if pid is None or other is None:
         raise ValueError("такої квартири немає")
@@ -954,6 +954,10 @@ def merge_into(session, property_id: int, other_id: int) -> int:
     mine = list(session.scalars(select(Listing).where(Listing.property_id == pid)))
     theirs = list(session.scalars(select(Listing).where(Listing.property_id == other)))
     decide(session, "same", [r.id for r in mine], [r.id for r in theirs], pid, other)
+    # Лишається id квартири з більшістю оголошень (як у перебудові, `assign_ids`),
+    # за рівності — старший: так живуть збережені посилання.
+    if (len(theirs), -other) > (len(mine), -pid):
+        pid, other, mine, theirs = other, pid, theirs, mine
     _move(session, [r.id for r in theirs], pid)
     session.execute(delete(Property).where(Property.id == other))
     red = session.get(PropertyRedirect, other)
