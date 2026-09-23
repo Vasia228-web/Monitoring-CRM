@@ -215,3 +215,12 @@ def test_owner_decision_survives_rebuilds(Session):
         pid = {l.id: l.property_id for l in s.scalars(select(Listing))}
         assert pid[1] == pid[2] != pid[3]
         assert s.scalar(select(Property).where(Property.id == pid[3])) is not None
+
+
+def test_newbuild_does_not_split_on_a_rival_without_any_id():
+    """Група, у якої немає жодного id квартири, — не доказ «це інша квартира»."""
+    known = [_sh(i, flat="ria:aaa", primary=True) for i in (1, 2)]
+    nameless = [_sh(i, source="lun", primary=True) for i in (5, 6)]
+    olx = _sh(9, source="olx", street=None, house=(), primary=True)
+    groups = cluster([*known, *nameless, olx], {"ria_flat", "newbuild"})
+    assert _together(groups, 1, 2, 9)                      # приєдналось до відомої квартири

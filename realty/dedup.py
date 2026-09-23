@@ -290,12 +290,16 @@ RULE_LABELS = {
     "geo": "точні координати далеко одна від одної",
     "price": "ціна різниться >10% в одночасних оголошень",
     "condition": "«з ремонтом» проти «без ремонту»",
-    "newbuild": "новобудова: без id — лише якщо пасує до однієї квартири",
+    "newbuild": "новобудова: без id — лише якщо не пасує до іншої відомої квартири",
     "no_chain": "без ланцюжків і без нічиїх",
     "manual": "рішення власника",
 }
 # Далі — за вимірюванням на парах з однаковим id квартири DIM.RIA (D41).
-GEO_VETO_M = float(os.environ.get("DEDUP_GEO_VETO_M", 250))
+GEO_VETO_M = float(os.environ.get("DEDUP_GEO_VETO_M", 300))
+# Новобудови: відокремлювати оголошення без id квартири лише тоді, коли воно
+# пасує до ВІДОМОЇ іншої квартири (з id DIM.RIA). Інакше доказу, що то інша
+# квартира, немає взагалі — і ми плодили б рядки без підстав.
+NEWBUILD_RIVAL_KNOWN = os.environ.get("DEDUP_NEWBUILD_ANY") != "1"
 PRICE_CONCURRENT = 0.10
 CONCURRENT_MIN = timedelta(days=1)
 
@@ -674,8 +678,11 @@ def _detach_ambiguous(g: _Groups, judge: Judge, by_id: dict, buckets, nearby) ->
     лишається окремо.
 
     * новобудова (newbuild): оголошення без id квартири DIM.RIA, яке без жодного
-      вето пасує ще до ІНШОЇ квартири, — адже в новобудовах бувають однакові
-      квартири на тому самому поверсі в різних секціях;
+      вето пасує ще до іншої ВІДОМОЇ квартири (з id DIM.RIA), — адже в
+      новобудовах бувають однакові квартири на тому самому поверсі в різних
+      секціях. Група без жодного id доказом «це інша квартира» не є:
+      інакше ми плодили б рядки без підстав (на копії 23.09 — 4 884 проти
+      2 670 відокремлених);
     * без нічиїх (no_chain): безадресне оголошення, яке до іншої квартири пасує
       не гірше, ніж до своєї, — вибір між ними був би навмання.
     Рішення власника «це одна квартира» такі оголошення не відокремлює.
@@ -707,6 +714,9 @@ def _detach_ambiguous(g: _Groups, judge: Judge, by_id: dict, buckets, nearby) ->
             for r, sc in sorted(rivals.items(), key=lambda kv: -kv[1]):
                 if not (newbuild or sc >= own):
                     break
+                if (newbuild and NEWBUILD_RIVAL_KNOWN
+                        and not any(by_id[m].flat for m in g.members[r])):
+                    continue                    # невідома група — не доказ іншої квартири
                 if judge.can_merge([x], g.members[r], count=False):
                     out.append(x)
                     break
