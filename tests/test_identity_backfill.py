@@ -136,6 +136,33 @@ def test_budget_stops_the_window_and_the_next_one_resumes(env):
     assert all(v.get("flat") for v in _idents(Session).values())
 
 
+def test_full_pass_does_not_repeat_the_same_night(env, monkeypatch):
+    """У ніч на 23.09 прохід LUN відпрацював двічі: 3 783 записи й потім 80,
+    і друга година пішла намарно."""
+    Session, calls, kw, sleeps = env
+    with Session() as s:
+        for i in range(60):
+            s.add(Listing(source="lun", external_id=f"l{i}", original_url=f"https://l/{i}",
+                          first_seen=SEEN, last_seen=SEEN))
+        s.commit()
+    monkeypatch.setattr(bf, "STATE_PATH", kw["lock_path"].parent / "state.json")
+    runs = []
+
+    def fake_step(step, budget):
+        runs.append(step.argv[-6])
+        with Session() as s:                     # прохід дозібрав половину
+            for row in list(s.scalars(select(Listing).where(Listing.source == "lun")))[:30]:
+                row.identity = {"building": "lun:1"}
+            s.commit()
+        return StepResult(step.name, "ok", 1.0, 0), None
+
+    monkeypatch.setattr(bf, "run_step", fake_step)
+    first = bf.run(["lun"], budget_s=3600, **kw)
+    second = bf.run(["lun"], budget_s=3600, **kw)
+    assert len(runs) == 1                                   # другого проходу тієї ж ночі немає
+    assert "ok" in first["done"]["lun"] and "пропущено" in second["done"]["lun"]
+
+
 def test_full_pass_runs_first_and_is_capped_by_the_remaining_budget(env, monkeypatch):
     Session, calls, kw, sleeps = env
     with Session() as s:
@@ -149,6 +176,7 @@ def test_full_pass_runs_first_and_is_capped_by_the_remaining_budget(env, monkeyp
         steps.append((step.argv[-8:], round(step.timeout), round(budget)))
         return StepResult(step.name, "ok", 1.0, 0), None
 
+    monkeypatch.setattr(bf, "STATE_PATH", kw["lock_path"].parent / "state2.json")
     monkeypatch.setattr(bf, "run_step", fake_step)
     bf.run(["domria", "lun"], budget_s=600, **kw)
     assert steps and "lun" in steps[0][0] and "--no-llm" in steps[0][0]

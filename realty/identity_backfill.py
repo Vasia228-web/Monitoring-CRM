@@ -17,14 +17,17 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from pathlib import Path
 
 from sqlalchemy import func, or_, select, update
 
 from . import identity, ops
+from .config import DATA_DIR
 from .db import SessionLocal, init_db
 from .fetcher import FetchError, Fetcher
 from .models import Listing
@@ -43,16 +46,45 @@ MIN_WORK = 10 * 60       # менше десяти хвилин роботи —
 # справді бракує ознак: зняті повним проходом уже не знайти, і без цього
 # порогу LUN щоночі проходився б весь заради записів, яких на сайті немає.
 FULL_PASS_MIN = 50
+# Прохід LUN займає близько години — майже все вікно. У ніч на 23.09 він
+# відпрацював двічі: перший раз дав 3 783 записи, другий — 80, і година пішла
+# намарно. Тому не частіше ніж раз на добу, а якщо попередній прохід дав мало —
+# раз на тиждень.
+PASS_COOLDOWN = timedelta(hours=24)
+PASS_COOLDOWN_LOW = timedelta(days=7)
+PASS_MIN_GAIN = 200
+STATE_PATH = DATA_DIR / "identity_backfill.json"
+
+
+def _state() -> dict:
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    tmp = STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1))
+    tmp.replace(STATE_PATH)
 
 
 def missing(session, source: str, active_only: bool = False):
-    """Оголошення джерела, у яких ще немає сильних ознак (і які ще не пробували)."""
-    key = {"domria": "$.flat"}.get(source, "$.lat")
+    """Оголошення джерела, у яких ще немає сильних ознак (і які ще не пробували).
+
+    Для LUN і flombu ознакою «дозібрано» є сам факт identity: координати там
+    дає не кожне оголошення, і вимога координат робила такі записи вічно
+    недозібраними — через це прохід LUN просився щоночі.
+    """
     stmt = (select(Listing.id, Listing.external_id)
-            .where(Listing.source == source,
-                   or_(Listing.identity.is_(None),
-                       func.json_extract(Listing.identity, key).is_(None)))
+            .where(Listing.source == source, Listing.identity.is_(None))
             .order_by(Listing.is_active.desc(), Listing.id.desc()))
+    if source == "domria":                    # там ознака — саме id квартири
+        stmt = (select(Listing.id, Listing.external_id)
+                .where(Listing.source == source,
+                       or_(Listing.identity.is_(None),
+                           func.json_extract(Listing.identity, "$.flat").is_(None)))
+                .order_by(Listing.is_active.desc(), Listing.id.desc()))
     if active_only:
         stmt = stmt.where(Listing.is_active.is_(True))
     return stmt
@@ -136,6 +168,16 @@ def _domria(deadline: float, report: dict) -> None:
 def _full_pass(source: str, deadline: float, report: dict) -> None:
     """Повний прохід окремим процесом зі стелею часу, як крок циклу: інакше
     прохід, що затягнувся, тримав би замок і з'їв би наступний цикл збору."""
+    state = _state()
+    st = state.get(source, {})
+    now = datetime.now(timezone.utc)
+    if st.get("at"):
+        since = now - datetime.fromisoformat(st["at"])
+        cooldown = PASS_COOLDOWN_LOW if st.get("gain", 0) < PASS_MIN_GAIN else PASS_COOLDOWN
+        if since < cooldown:
+            report["done"][source] = (f"пропущено: попередній прохід {since.days} д "
+                                      f"{since.seconds // 3600} год тому дав {st.get('gain')}")
+            return
     with SessionLocal() as s:
         need = _count(s, missing(s, source, active_only=True))
     if need < FULL_PASS_MIN:
@@ -148,4 +190,7 @@ def _full_pass(source: str, deadline: float, report: dict) -> None:
     res, _ = run_step(step, budget=deadline - time.monotonic())
     with SessionLocal() as s:
         left = _count(s, missing(s, source, active_only=True))
+    state[source] = {"at": now.isoformat(), "gain": need - left, "left": left,
+                     "status": res.status}
+    _save_state(state)
     report["done"][source] = f"{res.status}: активних без ознак {need} → {left}"
