@@ -70,12 +70,21 @@ def test_same_ria_flat_id_merges_despite_noisy_area_and_different_ids_split():
 
 def test_price_gap_counts_only_for_listings_that_hung_at_the_same_time():
     early = _sh(1, price=70000.0, start=NOW - timedelta(days=60), end=NOW - timedelta(days=30))
-    later_cheaper = _sh(2, price=62000.0, start=NOW - timedelta(days=20))
-    concurrent = _sh(3, price=62000.0, start=NOW - timedelta(days=50))
+    later_cheaper = _sh(2, price=52000.0, start=NOW - timedelta(days=20))
+    concurrent = _sh(3, price=52000.0, start=NOW - timedelta(days=50))
     assert concurrent_gap(early, later_cheaper) is None           # зняли → з'явилось дешевше
-    assert concurrent_gap(early, concurrent) > 0.10
+    assert concurrent_gap(early, concurrent) > 0.20
     assert _together(cluster([early, later_cheaper], {"price"}), 1, 2)
     assert _apart(cluster([early, concurrent], {"price"}), 1, 3)
+
+
+def test_price_threshold_is_the_calibrated_one():
+    """20%: на парах з однаковим id квартири DIM.RIA поріг 10% помилявся б
+    на 6,8% пар, 20% — на 2,2%."""
+    from realty.dedup import PRICE_CONCURRENT
+    assert PRICE_CONCURRENT == 0.20
+    mild = (_sh(1, price=70000.0), _sh(2, price=61000.0))         # 13% — не привід
+    assert _together(cluster(list(mild), {"price"}), 1, 2)
 
 
 def test_price_is_compared_at_the_moment_both_were_up_not_today():
