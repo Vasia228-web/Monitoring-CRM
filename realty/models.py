@@ -173,7 +173,13 @@ class Listing(Base):
 
     identity: Mapped[dict | None] = mapped_column(JSON)
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    # «Коли востаннє бачили оголошення У СТРІЧЦІ ДЖЕРЕЛА». Ставить лише збір
+    # (`pipeline._upsert`). Раніше тут стояв `onupdate`, і дату ставив будь-який
+    # запис у рядок: контроль якості, перевірка актуальності, перебудова
+    # квартир. Через це всі 2 681 зняті оголошення мали «бачили» ПІСЛЯ дати
+    # зняття, а діагностика «давно не бачили» не знаходила жодного (D43).
+    # Чи існує оголошення — окреме поле `last_alive_at` (пряма перевірка).
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Listing {self.source}:{self.external_id} {self.price_usd}$ {self.rooms}к>"
@@ -214,7 +220,8 @@ class Property(Base):
     )
     sources_count: Mapped[int] = mapped_column(Integer, default=1)
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    # Найсвіжіше «бачили» серед оголошень квартири — ставить перебудова.
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     listings: Mapped[list["Listing"]] = relationship(
         "Listing", backref="property", lazy="selectin"

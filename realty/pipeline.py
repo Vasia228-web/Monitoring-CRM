@@ -11,7 +11,7 @@ from .config import SOURCES, enabled_sources
 from .db import init_db, session_scope
 from .fetcher import BrowserFetcher, FetchError, Fetcher
 from .llm import LLMExtractor
-from .models import Condition, Listing, MarketType, PriceEvent
+from .models import Condition, Listing, MarketType, PriceEvent, _utcnow
 from .normalize import compute_price_per_sqm, to_uah, to_usd
 from .sources import REGISTRY
 from .quality import llm_check
@@ -255,6 +255,9 @@ class Pipeline:
             # Не затираємо вже відомі значення порожніми.
             if v is not None or getattr(existing, k) is None:
                 setattr(existing, k, v)
+        # Оголошення щойно бачили у стрічці — це єдине місце, де ставиться
+        # `last_seen` (D43): решта кроків лише читає дані й міняти дату не має.
+        existing.last_seen = _utcnow()
         new_usd = existing.price_usd
         if old_usd is not None and new_usd is not None and abs(old_usd - new_usd) > 1:
             session.add(PriceEvent(

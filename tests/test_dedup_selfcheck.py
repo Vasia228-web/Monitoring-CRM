@@ -98,13 +98,55 @@ def test_watchdog_alerts_only_on_a_sharp_rise(db):
 
 def test_weekly_sample_verdicts(db):
     with db() as s:
-        res = dedup_sample.run(seed=1, record=True, session=s)
+        res = dedup_sample.run(seed=1, record=True, session=s, photos=False)
     by = {d["property_id"]: d for d in res["details"]}
     assert by[1]["verdict"] == "several" and "корпуси" in by[1]["why"]
     # Квартира 2: DIM.RIA з id і LUN без прямого доказу — неясно, а не «одна».
     assert by[2]["verdict"] == "unclear"
     assert res["n"] == 2 and res["error_share"] == 0.5
     assert dedup_sample.recent(1)[0].several == 1
+
+
+def test_same_photo_proves_one_flat_on_the_secondary_market_only():
+    """У новобудовах рендер і план однакові для всіх квартир того самого типу."""
+    a = dedup.Shape(1, "domria", "u1", 1, 40.0, 3, "x", frozenset(), None, 1.0, primary=False)
+    b = dedup.Shape(2, "olx", "u2", 1, 40.0, 3, None, frozenset(), None, 1.0, primary=False)
+    photos = {1: "f0e0c0a080604020", 2: "f0e0c0a080604021"}      # один біт різниці
+    assert dedup_sample.judge([a, b], {}, photos)[0] == "one"
+    prim = (dedup.replace(a, primary=True), dedup.replace(b, primary=True))
+    assert dedup_sample.judge(list(prim), {}, photos)[0] == "unclear"
+    far = {1: "f0e0c0a080604020", 2: "0f1f3f5f7f9fbfdf"}
+    assert dedup_sample.judge([a, b], {}, far)[0] == "unclear"
+
+
+def test_photo_hash_survives_resizing_and_recompression():
+    pytest.importorskip("PIL")
+    import io as _io
+
+    from PIL import Image
+    im = Image.new("RGB", (600, 400))
+    for x in range(600):
+        for y in range(400):
+            im.putpixel((x, y), (x % 256, (x + y) % 256, y % 256))
+    big, small = _io.BytesIO(), _io.BytesIO()
+    im.save(big, "JPEG", quality=92)
+    im.resize((300, 200)).save(small, "JPEG", quality=60)
+    h1 = dedup_sample.photo_hash(big.getvalue())
+    h2 = dedup_sample.photo_hash(small.getvalue())
+    assert h1 and h2 and dedup_sample.photo_distance(h1, h2) <= dedup_sample.PHOTO_DISTANCE
+    assert dedup_sample.photo_hash("не зображення".encode()) is None
+
+
+def test_missing_photos_never_break_the_check(monkeypatch):
+    """Фото не завантажилось — перевірка просто йде без нього."""
+    class Boom:
+        def get(self, url):
+            raise RuntimeError("мережа впала")
+
+    monkeypatch.setattr(dedup_sample.time, "sleep", lambda s: None)
+    shapes = [dedup.Shape(1, "domria", "u", 1, 40.0, 3, "x", frozenset(), None, 1.0,
+                          photo="https://cdn/х.jpg")]
+    assert dedup_sample.fetch_photos(shapes, client=Boom()) == {}
 
 
 def test_description_is_no_proof_in_new_builds():

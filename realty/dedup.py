@@ -120,6 +120,7 @@ class Shape:
     lat: float | None = None
     lon: float | None = None
     geo: str | None = None
+    photo: str | None = None             # головне фото — для щотижневої перевірки
     primary: bool = False
     condition: Condition | None = None
     start: datetime | None = None        # коли оголошення з'явилось
@@ -148,6 +149,7 @@ def shape_of(r: Listing, prices: tuple = (), now: datetime | None = None) -> Sha
                  building=ident.get("building"), osm=ident.get("osm"),
                  korpus=korpus_code(ident.get("korpus")) or korpus_code(r.location),
                  lat=ident.get("lat"), lon=ident.get("lon"), geo=ident.get("geo"),
+                 photo=ident.get("photo"),
                  primary=r.market_type == MarketType.PRIMARY, condition=r.condition,
                  start=start, end=end, prices=prices)
 
