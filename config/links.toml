@@ -1,0 +1,207 @@
+# Формати посилань джерел: розбір посилання, ключ «сайт:id», канонічна адреса
+# й адреса перевірки (крок E6, D51).
+#
+# Схема — realty/configfiles.py (LinksConfig), код — realty/links.py. Значень за
+# замовчуванням у коді немає (`cli.py config check`).
+#
+# Один файл для Блоків 1, 3 і 5 (інтеграція, конфлікт «один ключ сайт:id»,
+# D47): ключ `listings.site_key` = «сімейство:id» (domria:34616500, olx:10BkYC —
+# з урахуванням регістру, rieltor:13017427, lun:4720682454, flombu:116037,
+# blago:41685). Ключ обчислюється з `original_url` тим самим розбором, яким
+# Блок 5 розбиратиме вставлене людиною посилання.
+#
+# Походження: прототип Етапу 0 (scratchpad/stage0/urls/resolver_proto.py,
+# 154 кейси, 154 пройдено; на копії бази 29 050 із 29 050 збережених адрес
+# знаходять свій рядок) і план Блоку 5 (b5-link, «config»), записані в D51.
+# Статус варіантів: «бачили в базі» (seen_in_db), «бачили в зразках сторінок»
+# (seen_in_probe) або «треба перевірити наживо» (needs_live_verification) —
+# у коментарях біля виразів.
+#
+# Вирази застосовуються до ШЛЯХУ після %-декодування; регістр шляху НЕ
+# змінюється (id OLX чутливий до регістру: 20 пар id OLX на копії бази
+# збігаються без урахування регістру, D51). Query й #фрагмент відкидаються
+# повністю, крім параметрів із `query_id` сімейства.
+
+# Сімейства, чий ключ іде в listings.site_key (назви — як listings.source).
+listing_families = ["domria", "olx", "rieltor", "lun", "flombu", "blago"]
+
+[reindex]
+# Рядків на транзакцію `cli.py links reindex` (і --fix-mismatched): ≤200 —
+# інтеграційний план, «зміни даних» (пакети ≤200 рядків, ≤1 с на транзакцію), D51.
+batch_rows = 200
+
+[hosts]
+# Мобільні та www-префікси, які відкидаються перед зіставленням хоста
+# (m.olx.ua — seen_in_probe; www.dom.ria.com, m.dom.ria.com, www.rieltor.ua,
+# www.blagodeveloper.com — needs_live_verification; www.flombu.com — канонічний
+# хост flombu, seen_in_probe).
+strip_prefixes = ["www.", "m."]
+# Хост після нормалізації → сімейство. Наш сайт («own») — ще й домен із
+# PUBLIC_DOMAIN у .env (домен — лише там, D27); тимчасові адреси тунелю — нижче.
+family = { "dom.ria.com" = "domria", "olx.ua" = "olx", "rieltor.ua" = "rieltor", "lun.ua" = "lun", "flombu.com" = "flombu", "blagodeveloper.com" = "blago", "localhost" = "own", "127.0.0.1" = "own", "mojkvartiry.test" = "own" }
+# Будь-який піддомен → сімейство: агенції rieltor.ua мають власні піддомени
+# (часом це номер телефону — його ніде не зберігаємо й не друкуємо).
+subdomain_family = { "rieltor.ua" = "rieltor" }
+# Тимчасові адреси нашого сайту (quick tunnel, D11).
+own_suffixes = [".trycloudflare.com"]
+# Хости з окремою відмовою: посилання на чат DIM.RIA несе секретний токен.
+reject = { "chat.ria.com" = "chat_link" }
+# Короткі посилання: розгорнути можна лише мережею, а розбір — без мережі.
+short_links = ["olx.page.link", "bit.ly", "goo.gl", "t.co"]
+
+[unwrap]
+# Обгортки застосунків і переадресацій (google /url?q=, l.facebook.com,
+# facebook sharer, t.me/share): щонайбільше 3 рівні вкладеності й 2 %-декодування
+# значення — прототип Етапу 0 (D51).
+max_depth = 3
+max_decode = 2
+scheme = '(?i)^(?:https?|ios-app|android-app)://'
+# ios-app://<id>/<назва>/<url> і android-app://<пакет>/<url> — seen_in_probe (OLX).
+app_link = '^(?:ios-app://\d+/[^/]+|android-app://[^/]+)/(?P<inner>https?://.+)$'
+# android-app://<пакет>/<схема>/<хост>/<шлях> — стандартна форма, needs_live_verification.
+android_app_split = '^android-app://[^/]+/(?P<scheme>https?)/(?P<rest>.+)$'
+# Перший схожий на адресу фрагмент тексту «Поділитися» (назва + посилання).
+# Без урахування регістру (рев'ю E6, D51): телефон пише «Olx.ua/…», «HTTPS://…»
+# з великої; вираз лише знаходить фрагмент — хост потім у нижній регістр, шлях
+# (і id OLX у ньому) — як був. Наш домен без схеми — з PUBLIC_DOMAIN (код).
+first_url_in_text = '(?i)(?:https?://|ios-app://|android-app://|(?:www\.|m\.)?(?:dom\.ria\.com|olx\.ua|lun\.ua|rieltor\.ua|flombu\.com|blagodeveloper\.com)/)\S+'
+# Розділові знаки, що прилипають до адреси в кінці речення.
+trailing_punct = ".,;!?)»\"'"
+
+[olx]
+# Токен id OLX — base62 з ПЕРЕСТАВЛЕНИМИ v/w і V/W відносно звичайного алфавіту
+# 0-9a-zA-Z. Перевірено: 191 зі 191 живої сторінки OLX Етапу 0 (числовий id із
+# підвалу сторінки), 8 001 id OLX бази — туди й назад; звичайний алфавіт дає
+# правильне число лише для 143 із 191 (D51).
+alphabet = "0123456789abcdefghijklmnopqrstuwvxyzABCDEFGHIJKLMNOPQRSTUWVXYZ"
+# Числовий id у підвалі сторінки («ID: 931767753») — 9 цифр на всіх 8 001 id бази.
+numeric_digits = 9
+# Адреса, яку хтось перевів у нижній регістр («…-id10lnlw.html»): регістр id
+# втрачено, ключ однозначно відновити не можна (case_lost) — needs_live_verification.
+case_lost_regex = '(?i)^/(?:d/)?(?:(?:uk|ru)/)?(?:d/)?obyavlenie/(?:[^/]*?-)?id(?P<id>[0-9a-z]{3,10})\.html$'
+
+[bare]
+# Голі id (вставлене число чи токен без адреси) — для Блоку 5. listings.id
+# ніколи не публічні й не шукаються.
+# «№123», «#123», «кв 123» — лише номер квартири на нашому сайті.
+property_prefixed = '^(?:№|#|кв\.?)\s*(?P<num>\d{1,9})$'
+# «ID: 931767753» з підвалу сторінки OLX — seen_in_probe.
+olx_numeric_prefixed = '^(?:ID|id)\s*[:№#]?\s*(?P<num>\d{9})$'
+# Голе число: шукається в усіх публічних просторах id (сімейства нижче).
+numeric = '^(?P<num>\d{1,12})$'
+# Голий токен OLX: 3–10 літер і цифр, хоча б одна літера (перевіряє код).
+olx_token = '^[0-9A-Za-z]{3,10}$'
+# Токен, що починається з «ID», читається двояко: 2 справжні id OLX самі
+# починаються з «ID» (IDs3H, IDPMF — Етап 0).
+olx_id_prefix = "ID"
+number_families = ["own", "domria", "rieltor", "lun", "flombu", "blago", "olx"]
+# Явний ключ «сімейство:id» — план Блоку 5 (b5-link, голі id: «olx:…», «ria:…» —
+# окрема явна форма; рев'ю E6, D51) і той самий вигляд, що ?hl=<ключ> пошуку.
+# Сімейство — малими літерами з [families] або псевдонім нижче; id OLX — токен
+# (регістр важливий), інших — цифри. Ключ — лише для пошуку, у site_key не йде.
+family_key = '^(?P<fam>[a-z]+):(?P<id>[0-9A-Za-z]{1,12})$'
+family_alias = { ria = "domria" }
+
+# --- Сімейства ------------------------------------------------------------------------------
+
+[families.domria]
+# id == останнє число адреси в 10 183 із 10 183 рядків domria (Етап 0).
+# Префікси slug у базі: realty-prodaja-kvartira-ivano-frankovsk (10 145),
+# -ivanofrankovsk, -krihovtsy, -volchinets, -nikitintsy, -ugorniki, -kluzov,
+# -kropivnitskiy — slug ніколи не розбираємо, лише id в кінці.
+# /uk/ — seen_in_db (10 895), /ru/ — seen_in_probe, без мовного префікса —
+# needs_live_verification.
+id_regex.detail = '^/(?:(?:uk|ru)/)?(?P<slug>realty-[0-9A-Za-z-]*?)-(?P<id>\d{5,10})\.html$'
+# Картка API, з якої збирає наш збирач (realty/sources/domria.py) — seen_in_code.
+id_regex.api_card = '^/(?:(?:uk|ru)/)?realty/data/(?P<id>\d{5,10})/?$'
+# Службові сторінки з id лише в query: /uk/verified/?realtyId=… — seen_in_probe.
+query_id.realtyId = '^\d{5,10}$'
+# Сторінка ЖК (не квартира) і сторінки пошуку.
+non_listing_regex.newbuild_complex_page = '^/(?:(?:uk|ru)/)?novostroyka-[0-9a-z-]+-\d+/?$'
+non_listing_regex.search_page = '^/(?:(?:uk|ru)/)?(?:prodazha|arenda)-[a-z-]+/'
+require = {}
+# /ru/ дає 302 на /uk/ (план Блоку 5); www і m. відкидаються.
+canonical_url = ["https://dom.ria.com/uk/{slug}-{id}.html", "https://dom.ria.com/realty/data/{id}?lang_id=4"]
+# Картка API: сторінка без мовного префікса дає 404 навіть живому оголошенню,
+# m.dom.ria.com не існує (сертифікат недійсний), www дає 301 — план Блоку 5.
+fetch_url = ["https://dom.ria.com/realty/data/{id}?lang_id=4"]
+
+[families.olx]
+# Ідентичність визначає лише -ID<токен>.html: /d/uk/ — seen_in_db (13 406),
+# /d/obyavlenie (ru), /uk/obyavlenie (у посиланнях застосунку) — seen_in_probe,
+# /obyavlenie без /d/ — needs_live_verification. Slug після правки назви
+# змінюється, id — ні (137 ключів OLX мають >1 різної адреси в базі).
+id_regex.ad_page = '^/(?:d/)?(?:(?:uk|ru)/)?(?:d/)?obyavlenie/(?:(?P<slug>[^/]*?)-)?ID(?P<id>[0-9A-Za-z]{3,10})\.html$'
+query_id = {}
+non_listing_regex.search_page = '^/(?:d/)?(?:(?:uk|ru)/)?(?:d/)?nedvizhimost/'
+require = {}
+canonical_url = ["https://www.olx.ua/d/uk/obyavlenie/{slug}-ID{id}.html", "https://www.olx.ua/d/uk/obyavlenie/ID{id}.html"]
+# Форма без slug — needs_live_verification.
+fetch_url = ["https://www.olx.ua/d/uk/obyavlenie/{slug}-ID{id}.html", "https://www.olx.ua/d/uk/obyavlenie/ID{id}.html"]
+
+[families.rieltor]
+# Ми бачимо rieltor лише через LUN (4 307 рядків, 4 252 різні id перегляду).
+# Сегмент місця (12 значень у базі: ivano-frankovsk 3 884, volchinets 171,
+# krihovtsy 153, nikitintsy-637 55, …) — НЕ ідентичність: той самий id 12923301
+# у базі під двома сегментами.
+id_regex.view = '^/(?:(?:ru|uk)/)?(?:(?P<loc>[a-z0-9-]+)/)?(?P<cat>[a-z]+-(?:sale|rent))/view/(?P<id>\d{5,10})/?$'
+query_id = {}
+non_listing_regex.search_page = '^/(?:(?:ru|uk)/)?(?:[a-z0-9-]+/)?[a-z]+-(?:sale|rent)/?$'
+# Інші категорії (houses-sale, rooms-sale, оренда) — не квартира на продаж.
+require.cat = ["flats-sale"]
+# Завжди без www: www.rieltor.ua дає 404 навіть живим оголошенням (план Блоку 5).
+# Форма без сегмента місця — needs_live_verification.
+canonical_url = ["https://rieltor.ua/{loc}/flats-sale/view/{id}/", "https://rieltor.ua/flats-sale/view/{id}/"]
+fetch_url = ["https://rieltor.ua/{loc}/flats-sale/view/{id}/", "https://rieltor.ua/flats-sale/view/{id}/"]
+
+[families.lun]
+# Власні id LUN (10 438 з 10 цифр, 22 з 9). groupId — не квартира, не беремо.
+# /uk/realty — seen_in_db (36), /realty і /ru/realty — needs_live_verification.
+id_regex.realty = '^/(?:(?:uk|ru)/)?realty/(?P<id>\d{6,12})/?$'
+query_id = {}
+non_listing_regex.catalog = '^/(?:(?:uk|ru)/)?(?:sale|rent)/'
+require = {}
+canonical_url = ["https://lun.ua/uk/realty/{id}"]
+fetch_url = ["https://lun.ua/uk/realty/{id}"]
+
+[families.flombu]
+# Збережена форма — наша власна конструкція (realty/sources/flombu.py), 27 рядків;
+# публічна /uk/prodazh/kvartyra-<id> — seen_in_probe (canonical, og:url). Обидві —
+# той самий ключ. ru і без мови — needs_live_verification.
+id_regex.stored = '^/(?:(?:uk|ru|en)/)?estate_deal_sales/(?P<id>\d{1,9})(?:\.json)?/?$'
+id_regex.public = '^/(?:(?:uk|ru|en)/)?(?P<section>[a-z_-]+)/(?P<kind>[a-z_]+)-(?P<id>\d{1,9})/?$'
+query_id = {}
+non_listing_regex = {}
+# budynok, komertsiya, … — не квартира. Розділ — лише продаж (рев'ю E6, D51):
+# /uk/orenda/kvartyra-<id> могла б мати id з іншого простору й відкрити чужу
+# квартиру на продаж. Англійська форма розділу — needs_live_verification.
+require.kind = ["kvartyra", "kvartira"]
+require.section = ["prodazh", "prodazha"]
+# Канонічна — та, яку зберігає наш збирач; запит — одразу на www (без www — 301).
+canonical_url = ["https://flombu.com/uk/estate_deal_sales/{id}"]
+fetch_url = ["https://www.flombu.com/uk/estate_deal_sales/{id}"]
+
+[families.blago]
+# id планування == id з адреси в 379 із 379 рядків. Планування — це макет, а
+# не унікальна квартира. /plannings/<id>/ дає 301 на /plannings/?planning_id=<id>
+# (план Блоку 5), тож людина може вставити й форму з query.
+id_regex.planning = '^/(?:(?:uk|ru|en)/)?plannings/(?P<id>\d{1,9})/?$'
+query_id.planning_id = '^\d{1,9}$'
+non_listing_regex = {}
+require = {}
+canonical_url = ["https://blagodeveloper.com/plannings/{id}/"]
+# Не перевіряється: будь-яка адреса планування, навіть вигадана, веде на
+# каталог (Етап 0, D45; рішення власника 3, D46).
+fetch_url = []
+
+[families.own]
+# Наші посилання на квартиру (не оголошення: ключа в site_key немає).
+# Злиті id квартир проходять через property_redirects.
+id_regex.property_page = '^/property/(?P<id>\d{1,9})/?$'
+id_regex.api_property = '^/api/analytics/property/(?P<id>\d{1,9})/?$'
+id_regex.api_prices = '^/api/properties/(?P<id>\d{1,9})/prices/?$'
+query_id = {}
+non_listing_regex = {}
+require = {}
+canonical_url = ["/property/{id}"]
+fetch_url = []

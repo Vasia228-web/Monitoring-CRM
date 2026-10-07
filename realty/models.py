@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import enum
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON, Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text,
-    UniqueConstraint, Index, case,
+    UniqueConstraint, Index, case, event,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -77,6 +78,13 @@ class Listing(Base):
     # посилання приходить і від LUN, і від OLX. Ключ ідентичності —
     # (source, external_id); однакові URL зводить дедуплікація.
     original_url: Mapped[str] = mapped_column(String(1024), index=True)
+    # Ключ «сайт:id» сайту, на який веде original_url (крок E6, D51): domria:…,
+    # olx:… (з урахуванням регістру), rieltor:…, lun:…, flombu:…, blago:….
+    # Рядки LUN несуть адреси OLX/rieltor/DIM.RIA — їхній ключ той самий, що й у
+    # рядка першоджерела. ПОХІДНЕ поле: ставлять лише слухачі ORM нижче з
+    # original_url (realty/links.py); записи джерел його не задають. NULL — ще
+    # не заповнено (`cli.py links reindex`) або адреса не є оголошенням.
+    site_key: Mapped[str | None] = mapped_column(String(64), index=True)
     price: Mapped[float | None] = mapped_column(Float)            # у валюті оголошення
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     rooms: Mapped[int | None] = mapped_column(Integer)
@@ -217,6 +225,247 @@ Index("ix_listings_visible", effective_active(), Listing.quality_status,
       Listing.condition, Listing.market_type, Listing.price_usd, Listing.price_per_sqm,
       Listing.published_at)
 Index("ix_listings_keeper", Listing.property_id, Listing.quality_status, effective_active())
+
+
+# --- Слухачі ORM: ключ site_key і телефони (крок E6, D51) --------------------------------------
+# Одне місце для ВСІХ шляхів запису через ORM (інтеграція, конфлікт
+# «pipeline._upsert»): збір (`Pipeline._upsert` — нові й наявні рядки), дозбір
+# (`backfill`), LLM-фолбек, перевірка за посиланням Блоку 5 (той самий
+# `Pipeline._write`), дії сайту. DML через сесію (`update(Listing)` тощо) об'єктів
+# не має — для нього запаска do_orm_execute нижче; Core-записи повз сесію
+# (Connection.execute, bulk_*) — перелік і колонки стереже
+# tests/test_listing_write_paths.py.
+#
+# Телефони (рішення власника 5, D46): подія «set» на description і title — номер
+# замінюється в значенні, ЯКЕ ЗАПИСУЄТЬСЯ (і в конструкторі Listing(...), і в
+# setattr). Старі рядки, яких ніхто не переписує, не змінюються: разова заміна —
+# окремий крок зі свіжим бекапом (`cli.py privacy apply`, E7). Зламаний
+# config/privacy.toml зупиняє запис тексту (ConfigError), а не пропускає номер.
+#
+# site_key: before_insert — завжди з original_url; before_update — якщо змінився
+# original_url чи сам ключ або ключа ще немає (поле похідне: ключ завжди
+# відповідає адресі). Зламаний config/links.toml ключа не ставить (журнал), але
+# й запису не зупиняє: ключ — довідкове поле, а дії власника не мають падати.
+
+_key_log = logging.getLogger("realty.links")
+_key_error_logged: set[str] = set()
+
+
+def _key_for(url: str | None) -> tuple[bool, str | None]:
+    """(чи вдалося обчислити, ключ)."""
+    from . import links
+    from .configfiles import ConfigError
+
+    try:
+        return True, links.site_key(url)
+    except ConfigError as e:
+        text = str(e)
+        if text not in _key_error_logged:
+            _key_error_logged.add(text)
+            _key_log.error("site_key не обчислено — config/links.toml не проходить "
+                           "перевірку:\n%s", text)
+        return False, None
+    except Exception as e:                           # noqa: BLE001 — ключ довідковий
+        # Розбір обіцяє Link або NotALink; якщо ні — помилка в розборі, а не в записі.
+        # У журнал — лише тип: у тексті винятку буває адреса (піддомен агенції
+        # rieltor буває номером телефону, D51).
+        name = type(e).__name__
+        if name not in _key_error_logged:
+            _key_error_logged.add(name)
+            _key_log.error("site_key не обчислено: %s у links.site_key (адресу не друкуємо)",
+                           name)
+        return False, None
+
+
+def _redact_on_set(target, value, oldvalue, initiator):
+    from . import privacy
+
+    return privacy.redact_field(initiator.key, value)
+
+
+def _redact_dirty(target, *, only_changed: bool) -> None:
+    from sqlalchemy import inspect as sa_inspect
+
+    from . import privacy
+
+    state = sa_inspect(target)
+    for name in ("description", "title"):
+        if only_changed and not state.attrs[name].history.has_changes():
+            continue
+        value = state.dict.get(name)
+        cleaned = privacy.redact_field(name, value)
+        if cleaned != value:
+            setattr(target, name, cleaned)
+
+
+def _listing_before_insert(_mapper, _connection, target) -> None:
+    _redact_dirty(target, only_changed=False)
+    ok, key = _key_for(target.original_url)
+    if ok:
+        target.site_key = key
+
+
+def _listing_before_update(_mapper, _connection, target) -> None:
+    from sqlalchemy import inspect as sa_inspect
+
+    _redact_dirty(target, only_changed=True)
+    attrs = sa_inspect(target).attrs
+    if (target.site_key is None or attrs.original_url.history.has_changes()
+            or attrs.site_key.history.has_changes()):
+        ok, key = _key_for(target.original_url)
+        if ok and key != target.site_key:
+            target.site_key = key
+
+
+event.listen(Listing.description, "set", _redact_on_set, retval=True)
+event.listen(Listing.title, "set", _redact_on_set, retval=True)
+event.listen(Listing, "before_insert", _listing_before_insert)
+event.listen(Listing, "before_update", _listing_before_update)
+
+
+# --- Запаска: DML через сесію (рев'ю E6, D51) -------------------------------------------------
+# Слухачі вище бачать лише об'єкти Listing. Оператори через сесію —
+# `session.execute(update(Listing).values(...))`, `session.execute(insert(Listing),
+# [...])`, оновлення за первинним ключем `session.execute(update(Listing), [...])`,
+# `session.query(Listing).update({...})`, `Listing.__table__.update()` — їх обходять.
+# Подія сесії do_orm_execute ловить їх усі: значення description/title проходять ту
+# саму заміну телефонів, а для original_url ставиться site_key. Значення, яке не
+# можна перевірити (вираз SQL, INSERT … SELECT, ON CONFLICT, кілька рядків VALUES),
+# і сирий SQL через сесію, що пише ці колонки, — помилка ListingWriteError, а не
+# тихий пропуск номера. Повз сесію (Connection.execute, bulk_*_mappings) подія не
+# проходить — ці шляхи перелічує й стереже tests/test_listing_write_paths.py.
+
+_GUARDED = ("description", "title", "original_url")
+_SITE_KEY_PARAM = "realty_guard_site_key"
+
+
+class ListingWriteError(RuntimeError):
+    """Запис у listings, який не можна перевірити на телефони й site_key."""
+
+
+def _bound_value(value, param_keys: set[str]):
+    """('param', ключ) | ('value', значення) | ('unknown', None) для значення з .values()."""
+    from sqlalchemy.sql.elements import BindParameter, Null
+
+    if isinstance(value, BindParameter):
+        if value.key in param_keys:
+            return "param", value.key
+        if value.callable is not None:
+            return "unknown", None
+        return "value", value.value
+    if value is None or isinstance(value, Null):
+        return "value", None
+    if isinstance(value, (str, int, float)):
+        return "value", value
+    return "unknown", None
+
+
+def _guard_listing_dml(state):
+    """do_orm_execute: UPDATE/INSERT у listings через сесію → та сама заміна й ключ."""
+    import re
+
+    from sqlalchemy import bindparam
+    from sqlalchemy.sql.elements import TextClause
+
+    stmt = state.statement
+    if isinstance(stmt, TextClause):
+        sql = stmt.text
+        if re.search(r"(?is)\b(?:update|insert|replace)\b(?:\s+or\s+\w+)?(?:\s+into)?\s+"
+                     r"[\"'`\[]?listings\b", sql) and \
+                re.search(r"(?i)\b(?:description|title|original_url)\b", sql):
+            raise ListingWriteError(
+                "сирий SQL через сесію пише description/title/original_url у listings — "
+                "в обхід заміни телефонів і site_key; пишіть через об'єкт Listing")
+        return None
+    if not (state.is_update or state.is_insert):
+        return None
+    table = getattr(stmt, "table", None)
+    if getattr(table, "name", None) != Listing.__tablename__:
+        return None
+    from . import privacy
+
+    params = state.parameters
+    many = isinstance(params, (list, tuple))
+    rows = list(params) if many else ([params] if params else [])
+    param_keys = {k for r in rows for k in r}
+
+    def refuse(what: str):
+        raise ListingWriteError(f"listings: {what} — значення не перевірити на телефони "
+                                f"й site_key; пишіть через об'єкт Listing")
+
+    if getattr(stmt, "select", None) is not None and \
+            set(getattr(stmt, "_select_names", None) or ()) & set(_GUARDED):
+        refuse("INSERT … SELECT у description/title/original_url")
+    post = getattr(stmt, "_post_values_clause", None)
+    if post is not None and {getattr(k, "key", k) for k in
+                             (getattr(post, "update_values_to_set", None) or ())} & set(_GUARDED):
+        refuse("ON CONFLICT DO UPDATE у description/title/original_url")
+    for multi in getattr(stmt, "_multi_values", None) or ():
+        for row in multi:
+            names = {getattr(k, "key", k) for k in (row if isinstance(row, dict) else ())}
+            if not isinstance(row, dict) or names & set(_GUARDED):
+                refuse("VALUES на кілька рядків")
+
+    # Значення в .values(...): літерал — перевіряємо тут; bindparam — у параметрах.
+    new_values: dict = {}
+    key_col = None
+    via_params: dict[str, str] = {}          # ключ параметра → поле
+    for key, value in (getattr(stmt, "_values", None) or {}).items():
+        name = key if isinstance(key, str) else getattr(key, "key", None)
+        if name == "site_key":
+            key_col = key
+        if name not in _GUARDED:
+            continue
+        kind, raw = _bound_value(value, param_keys)
+        if kind == "unknown":
+            refuse(f"{name} = вираз SQL")
+        if kind == "param":
+            via_params[raw] = name
+            continue
+        if name == "original_url":
+            ok, site = _key_for(raw)
+            if ok:
+                new_values["site_key"] = site
+        else:
+            cleaned = privacy.redact_field(name, raw)
+            if cleaned != raw:
+                new_values[key] = cleaned
+    if "site_key" in new_values and key_col is not None and key_col != "site_key":
+        new_values[key_col] = new_values.pop("site_key")
+
+    # Параметри (executemany й оновлення за первинним ключем): імена — атрибути
+    # або ключі bindparam із .values(); original_url через bindparam → site_key
+    # теж через bindparam (свій для кожного рядка).
+    url_param = next((k for k, n in via_params.items() if n == "original_url"), None)
+    if url_param is not None:
+        new_values[key_col if key_col is not None else "site_key"] = bindparam(_SITE_KEY_PARAM)
+    new_rows, changed = [], False
+    for r in rows:
+        upd = {}
+        for pkey, value in r.items():
+            name = via_params.get(pkey, pkey)
+            if name in ("description", "title"):
+                cleaned = privacy.redact_field(name, value)
+                if cleaned != value:
+                    upd[pkey] = cleaned
+            elif name == "original_url" and pkey == url_param:
+                upd[_SITE_KEY_PARAM] = _key_for(value)[1]
+            elif name == "original_url":
+                ok, site = _key_for(value)
+                if ok and r.get("site_key") != site:
+                    upd["site_key"] = site
+        new_rows.append(upd)
+        changed = changed or bool(upd)
+    if not new_values and not changed:
+        return None
+    new_stmt = stmt.values(new_values) if new_values else stmt
+    new_params = None
+    if changed:
+        new_params = new_rows if many else new_rows[0]
+    return state.invoke_statement(statement=new_stmt, params=new_params)
+
+
+event.listen(Session, "do_orm_execute", _guard_listing_dml)
 
 
 class Property(Base):

@@ -1,0 +1,325 @@
+{
+ "_about": "Кожне сімейство адрес, що є в копії бази Етапу 0 (джерело|хост, для rieltor — кожен із 12 сегментів місця, для DOM.RIA — кожен префікс slug), по одному рядку — крок E6, D51. id справжні, slug-и синтетичні.",
+ "cases": [
+  {
+   "input": "https://blagodeveloper.com/plannings/41685/",
+   "origin": "db:blago|blagodeveloper.com",
+   "note": "сімейство адрес із копії бази (рядок 316)",
+   "expect": {
+    "key": "blago:41685",
+    "canonical_url": "https://blagodeveloper.com/plannings/41685/",
+    "fetch_url": null
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-2-34616500.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-ivano-frankovsk",
+   "note": "сімейство адрес із копії бази (рядок 1)",
+   "expect": {
+    "key": "domria:34616500",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-2-34616500.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34616500?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivanofrankovsk-test-ulitsa-3-34174490.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-ivanofrankovsk",
+   "note": "сімейство адрес із копії бази (рядок 4121)",
+   "expect": {
+    "key": "domria:34174490",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivanofrankovsk-test-ulitsa-3-34174490.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34174490?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-kluzov-test-ulitsa-4-34575314.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-kluzov",
+   "note": "сімейство адрес із копії бази (рядок 2900)",
+   "expect": {
+    "key": "domria:34575314",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-kluzov-test-ulitsa-4-34575314.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34575314?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-krihovtsy-test-ulitsa-5-34737143.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-krihovtsy",
+   "note": "сімейство адрес із копії бази (рядок 1866)",
+   "expect": {
+    "key": "domria:34737143",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-krihovtsy-test-ulitsa-5-34737143.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34737143?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-kropivnitskiy-test-ulitsa-6-34069723.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-kropivnitskiy",
+   "note": "сімейство адрес із копії бази (рядок 7522)",
+   "expect": {
+    "key": "domria:34069723",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-kropivnitskiy-test-ulitsa-6-34069723.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34069723?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ugorniki-test-ulitsa-7-34557024.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-ugorniki",
+   "note": "сімейство адрес із копії бази (рядок 3360)",
+   "expect": {
+    "key": "domria:34557024",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ugorniki-test-ulitsa-7-34557024.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34557024?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-volchinets-test-ulitsa-8-34698385.html",
+   "origin": "db:domria|dom.ria.com|realty-prodaja-kvartira-volchinets",
+   "note": "сімейство адрес із копії бази (рядок 2254)",
+   "expect": {
+    "key": "domria:34698385",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-volchinets-test-ulitsa-8-34698385.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34698385?lang_id=4"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/116037",
+   "origin": "db:flombu|flombu.com",
+   "note": "сімейство адрес із копії бази (рядок 265)",
+   "expect": {
+    "key": "flombu:116037",
+    "canonical_url": "https://flombu.com/uk/estate_deal_sales/116037",
+    "fetch_url": "https://www.flombu.com/uk/estate_deal_sales/116037"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-chukalovka-test-ulitsa-10-33393284.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-chukalovka",
+   "note": "сімейство адрес із копії бази (рядок 18088)",
+   "expect": {
+    "key": "domria:33393284",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-chukalovka-test-ulitsa-10-33393284.html",
+    "fetch_url": "https://dom.ria.com/realty/data/33393284?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-11-34730045.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-ivano-frankovsk",
+   "note": "сімейство адрес із копії бази (рядок 18023)",
+   "expect": {
+    "key": "domria:34730045",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-11-34730045.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34730045?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivanofrankovsk-test-ulitsa-12-25189912.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-ivanofrankovsk",
+   "note": "сімейство адрес із копії бази (рядок 18031)",
+   "expect": {
+    "key": "domria:25189912",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivanofrankovsk-test-ulitsa-12-25189912.html",
+    "fetch_url": "https://dom.ria.com/realty/data/25189912?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-krihovtsy-test-ulitsa-13-34265879.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-krihovtsy",
+   "note": "сімейство адрес із копії бази (рядок 18029)",
+   "expect": {
+    "key": "domria:34265879",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-krihovtsy-test-ulitsa-13-34265879.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34265879?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-nikitintsy-test-ulitsa-14-34019001.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-nikitintsy",
+   "note": "сімейство адрес із копії бази (рядок 18056)",
+   "expect": {
+    "key": "domria:34019001",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-nikitintsy-test-ulitsa-14-34019001.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34019001?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ugorniki-test-ulitsa-15-34521932.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-ugorniki",
+   "note": "сімейство адрес із копії бази (рядок 18053)",
+   "expect": {
+    "key": "domria:34521932",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ugorniki-test-ulitsa-15-34521932.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34521932?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ugrinov-test-ulitsa-16-33901699.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-ugrinov",
+   "note": "сімейство адрес із копії бази (рядок 18047)",
+   "expect": {
+    "key": "domria:33901699",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-ugrinov-test-ulitsa-16-33901699.html",
+    "fetch_url": "https://dom.ria.com/realty/data/33901699?lang_id=4"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-volchinets-test-ulitsa-17-34605014.html",
+   "origin": "db:lun|dom.ria.com|realty-prodaja-kvartira-volchinets",
+   "note": "сімейство адрес із копії бази (рядок 18110)",
+   "expect": {
+    "key": "domria:34605014",
+    "canonical_url": "https://dom.ria.com/uk/realty-prodaja-kvartira-volchinets-test-ulitsa-17-34605014.html",
+    "fetch_url": "https://dom.ria.com/realty/data/34605014?lang_id=4"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4720682454",
+   "origin": "db:lun|lun.ua",
+   "note": "сімейство адрес із копії бази (рядок 168)",
+   "expect": {
+    "key": "lun:4720682454",
+    "canonical_url": "https://lun.ua/uk/realty/4720682454",
+    "fetch_url": "https://lun.ua/uk/realty/4720682454"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/cherneev/flats-sale/view/13077615/",
+   "origin": "db:lun|rieltor.ua|cherneev",
+   "note": "сімейство адрес із копії бази (рядок 26674)",
+   "expect": {
+    "key": "rieltor:13077615",
+    "canonical_url": "https://rieltor.ua/cherneev/flats-sale/view/13077615/",
+    "fetch_url": "https://rieltor.ua/cherneev/flats-sale/view/13077615/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/chukalovka/flats-sale/view/12681087/",
+   "origin": "db:lun|rieltor.ua|chukalovka",
+   "note": "сімейство адрес із копії бази (рядок 9958)",
+   "expect": {
+    "key": "rieltor:12681087",
+    "canonical_url": "https://rieltor.ua/chukalovka/flats-sale/view/12681087/",
+    "fetch_url": "https://rieltor.ua/chukalovka/flats-sale/view/12681087/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/hriplin/flats-sale/view/12996255/",
+   "origin": "db:lun|rieltor.ua|hriplin",
+   "note": "сімейство адрес із копії бази (рядок 10602)",
+   "expect": {
+    "key": "rieltor:12996255",
+    "canonical_url": "https://rieltor.ua/hriplin/flats-sale/view/12996255/",
+    "fetch_url": "https://rieltor.ua/hriplin/flats-sale/view/12996255/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017427/",
+   "origin": "db:lun|rieltor.ua|ivano-frankovsk",
+   "note": "сімейство адрес із копії бази (рядок 121)",
+   "expect": {
+    "key": "rieltor:13017427",
+    "canonical_url": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017427/",
+    "fetch_url": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017427/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/krihovtsy/flats-sale/view/12881502/",
+   "origin": "db:lun|rieltor.ua|krihovtsy",
+   "note": "сімейство адрес із копії бази (рядок 638)",
+   "expect": {
+    "key": "rieltor:12881502",
+    "canonical_url": "https://rieltor.ua/krihovtsy/flats-sale/view/12881502/",
+    "fetch_url": "https://rieltor.ua/krihovtsy/flats-sale/view/12881502/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/lisets/flats-sale/view/12241742/",
+   "origin": "db:lun|rieltor.ua|lisets",
+   "note": "сімейство адрес із копії бази (рядок 11084)",
+   "expect": {
+    "key": "rieltor:12241742",
+    "canonical_url": "https://rieltor.ua/lisets/flats-sale/view/12241742/",
+    "fetch_url": "https://rieltor.ua/lisets/flats-sale/view/12241742/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/nikitintsy-637/flats-sale/view/12979049/",
+   "origin": "db:lun|rieltor.ua|nikitintsy-637",
+   "note": "сімейство адрес із копії бази (рядок 581)",
+   "expect": {
+    "key": "rieltor:12979049",
+    "canonical_url": "https://rieltor.ua/nikitintsy-637/flats-sale/view/12979049/",
+    "fetch_url": "https://rieltor.ua/nikitintsy-637/flats-sale/view/12979049/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/podpeschery/flats-sale/view/12787875/",
+   "origin": "db:lun|rieltor.ua|podpeschery",
+   "note": "сімейство адрес із копії бази (рядок 10176)",
+   "expect": {
+    "key": "rieltor:12787875",
+    "canonical_url": "https://rieltor.ua/podpeschery/flats-sale/view/12787875/",
+    "fetch_url": "https://rieltor.ua/podpeschery/flats-sale/view/12787875/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ugorniki-874/flats-sale/view/12890156/",
+   "origin": "db:lun|rieltor.ua|ugorniki-874",
+   "note": "сімейство адрес із копії бази (рядок 10081)",
+   "expect": {
+    "key": "rieltor:12890156",
+    "canonical_url": "https://rieltor.ua/ugorniki-874/flats-sale/view/12890156/",
+    "fetch_url": "https://rieltor.ua/ugorniki-874/flats-sale/view/12890156/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ugrinov-2171/flats-sale/view/12937100/",
+   "origin": "db:lun|rieltor.ua|ugrinov-2171",
+   "note": "сімейство адрес із копії бази (рядок 9929)",
+   "expect": {
+    "key": "rieltor:12937100",
+    "canonical_url": "https://rieltor.ua/ugrinov-2171/flats-sale/view/12937100/",
+    "fetch_url": "https://rieltor.ua/ugrinov-2171/flats-sale/view/12937100/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/volchinets/flats-sale/view/12747244/",
+   "origin": "db:lun|rieltor.ua|volchinets",
+   "note": "сімейство адрес із копії бази (рядок 604)",
+   "expect": {
+    "key": "rieltor:12747244",
+    "canonical_url": "https://rieltor.ua/volchinets/flats-sale/view/12747244/",
+    "fetch_url": "https://rieltor.ua/volchinets/flats-sale/view/12747244/"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/zagvozdje/flats-sale/view/12924312/",
+   "origin": "db:lun|rieltor.ua|zagvozdje",
+   "note": "сімейство адрес із копії бази (рядок 10769)",
+   "expect": {
+    "key": "rieltor:12924312",
+    "canonical_url": "https://rieltor.ua/zagvozdje/flats-sale/view/12924312/",
+    "fetch_url": "https://rieltor.ua/zagvozdje/flats-sale/view/12924312/"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-db-31-ID10BkYC.html",
+   "origin": "db:lun|www.olx.ua",
+   "note": "сімейство адрес із копії бази (рядок 12205)",
+   "expect": {
+    "key": "olx:10BkYC",
+    "canonical_url": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-db-31-ID10BkYC.html",
+    "fetch_url": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-db-31-ID10BkYC.html"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-db-32-IDNiPo4.html",
+   "origin": "db:olx|www.olx.ua",
+   "note": "сімейство адрес із копії бази (рядок 266)",
+   "expect": {
+    "key": "olx:NiPo4",
+    "canonical_url": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-db-32-IDNiPo4.html",
+    "fetch_url": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-db-32-IDNiPo4.html"
+   }
+  }
+ ]
+}

@@ -1,0 +1,1273 @@
+{
+ "_about": "Порт 154 кейсів прототипу Етапу 0 (scratchpad/stage0/urls, resolver_proto.py) — крок E6, D51. Справжні id оголошень лишаються, slug-и назв — синтетичні. Очікування на рівні розбору (без бази): key — ключ «сайт:id»; candidates_include — голий id, серед варіантів має бути цей ключ; reason — код відмови; case_lost_id — адреса OLX у нижньому регістрі.",
+ "cases": [
+  {
+   "input": "https://blagodeveloper.com/plannings/41685/",
+   "origin": "stage0:real:blago|blagodeveloper.com",
+   "note": "listing 316",
+   "expect": {
+    "key": "blago:41685"
+   }
+  },
+  {
+   "input": "https://blagodeveloper.com/plannings/38905/",
+   "origin": "stage0:real:blago|blagodeveloper.com",
+   "note": "listing 317",
+   "expect": {
+    "key": "blago:38905"
+   }
+  },
+  {
+   "input": "https://blagodeveloper.com/plannings/37328/",
+   "origin": "stage0:real:blago|blagodeveloper.com",
+   "note": "listing 318",
+   "expect": {
+    "key": "blago:37328"
+   }
+  },
+  {
+   "input": "https://blagodeveloper.com/plannings/42578/",
+   "origin": "stage0:real:blago|blagodeveloper.com",
+   "note": "listing 14867",
+   "expect": {
+    "key": "blago:42578"
+   }
+  },
+  {
+   "input": "https://blagodeveloper.com/plannings/41748/",
+   "origin": "stage0:real:blago|blagodeveloper.com",
+   "note": "listing 15502",
+   "expect": {
+    "key": "blago:41748"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:real:domria|dom.ria.com",
+   "note": "listing 1",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616501.html",
+   "origin": "stage0:real:domria|dom.ria.com",
+   "note": "listing 2",
+   "expect": {
+    "key": "domria:34616501"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-2-34787195.html",
+   "origin": "stage0:real:domria|dom.ria.com",
+   "note": "listing 3",
+   "expect": {
+    "key": "domria:34787195"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-3-33546062.html",
+   "origin": "stage0:real:domria|dom.ria.com",
+   "note": "listing 2026",
+   "expect": {
+    "key": "domria:33546062"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-4-34290525.html",
+   "origin": "stage0:real:domria|dom.ria.com",
+   "note": "listing 5549",
+   "expect": {
+    "key": "domria:34290525"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/116037",
+   "origin": "stage0:real:flombu|flombu.com",
+   "note": "listing 265",
+   "expect": {
+    "key": "flombu:116037"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/127521",
+   "origin": "stage0:real:flombu|flombu.com",
+   "note": "listing 505",
+   "expect": {
+    "key": "flombu:127521"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/121514",
+   "origin": "stage0:real:flombu|flombu.com",
+   "note": "listing 506",
+   "expect": {
+    "key": "flombu:121514"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/126849",
+   "origin": "stage0:real:flombu|flombu.com",
+   "note": "listing 688",
+   "expect": {
+    "key": "flombu:126849"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/120933",
+   "origin": "stage0:real:flombu|flombu.com",
+   "note": "listing 691",
+   "expect": {
+    "key": "flombu:120933"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:real:lun|dom.ria.com",
+   "note": "listing 18023",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-6-34862591.html",
+   "origin": "stage0:real:lun|dom.ria.com",
+   "note": "listing 18024",
+   "expect": {
+    "key": "domria:34862591"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-7-34156932.html",
+   "origin": "stage0:real:lun|dom.ria.com",
+   "note": "listing 18025",
+   "expect": {
+    "key": "domria:34156932"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-8-34210237.html",
+   "origin": "stage0:real:lun|dom.ria.com",
+   "note": "listing 24125",
+   "expect": {
+    "key": "domria:34210237"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-9-33848260.html",
+   "origin": "stage0:real:lun|dom.ria.com",
+   "note": "listing 18129",
+   "expect": {
+    "key": "domria:33848260"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4720682454",
+   "origin": "stage0:real:lun|lun.ua",
+   "note": "listing 168",
+   "expect": {
+    "key": "lun:4720682454"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4715107839",
+   "origin": "stage0:real:lun|lun.ua",
+   "note": "listing 10377",
+   "expect": {
+    "key": "lun:4715107839"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4721660297",
+   "origin": "stage0:real:lun|lun.ua",
+   "note": "listing 10378",
+   "expect": {
+    "key": "lun:4721660297"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4723109911",
+   "origin": "stage0:real:lun|lun.ua",
+   "note": "listing 19168",
+   "expect": {
+    "key": "lun:4723109911"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4705223019",
+   "origin": "stage0:real:lun|lun.ua",
+   "note": "listing 16776",
+   "expect": {
+    "key": "lun:4705223019"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017427/",
+   "origin": "stage0:real:lun|rieltor.ua",
+   "note": "listing 121",
+   "expect": {
+    "key": "rieltor:13017427"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017108/",
+   "origin": "stage0:real:lun|rieltor.ua",
+   "note": "listing 122",
+   "expect": {
+    "key": "rieltor:13017108"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/12614451/",
+   "origin": "stage0:real:lun|rieltor.ua",
+   "note": "listing 123",
+   "expect": {
+    "key": "rieltor:12614451"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/12990969/",
+   "origin": "stage0:real:lun|rieltor.ua",
+   "note": "listing 26657",
+   "expect": {
+    "key": "rieltor:12990969"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/12873763/",
+   "origin": "stage0:real:lun|rieltor.ua",
+   "note": "listing 10499",
+   "expect": {
+    "key": "rieltor:12873763"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:real:lun|www.olx.ua",
+   "note": "listing 12205",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-11-IDWoJfI.html",
+   "origin": "stage0:real:lun|www.olx.ua",
+   "note": "listing 12206",
+   "expect": {
+    "key": "olx:WoJfI"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-12-IDKJ2xK.html",
+   "origin": "stage0:real:lun|www.olx.ua",
+   "note": "listing 12207",
+   "expect": {
+    "key": "olx:KJ2xK"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-13-ID113cfv.html",
+   "origin": "stage0:real:lun|www.olx.ua",
+   "note": "listing 13053",
+   "expect": {
+    "key": "olx:113cfv"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-14-ID10RBfR.html",
+   "origin": "stage0:real:lun|www.olx.ua",
+   "note": "listing 21962",
+   "expect": {
+    "key": "olx:10RBfR"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:real:olx|www.olx.ua",
+   "note": "listing 266",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-16-ID11clrO.html",
+   "origin": "stage0:real:olx|www.olx.ua",
+   "note": "listing 267",
+   "expect": {
+    "key": "olx:11clrO"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-17-ID10bTcS.html",
+   "origin": "stage0:real:olx|www.olx.ua",
+   "note": "listing 268",
+   "expect": {
+    "key": "olx:10bTcS"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-18-ID11nQpT.html",
+   "origin": "stage0:real:olx|www.olx.ua",
+   "note": "listing 27992",
+   "expect": {
+    "key": "olx:11nQpT"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-19-IDKQFgi.html",
+   "origin": "stage0:real:olx|www.olx.ua",
+   "note": "listing 315",
+   "expect": {
+    "key": "olx:KQFgi"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/krihovtsy/flats-sale/view/12923301/",
+   "origin": "stage0:real:special",
+   "note": "rieltor view id under 2 location segments",
+   "expect": {
+    "key": "rieltor:12923301"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/12923301/",
+   "origin": "stage0:real:special",
+   "note": "rieltor view id under 2 location segments",
+   "expect": {
+    "key": "rieltor:12923301"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-20-ID10HBS0.html",
+   "origin": "stage0:real:special",
+   "note": "OLX slug differs between rows, same ID",
+   "expect": {
+    "key": "olx:10HBS0"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-21-ID10HBS0.html",
+   "origin": "stage0:real:special",
+   "note": "OLX slug differs between rows, same ID",
+   "expect": {
+    "key": "olx:10HBS0"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-20-ID10HBS0.html",
+   "origin": "stage0:real:special",
+   "note": "OLX slug differs between rows, same ID",
+   "expect": {
+    "key": "olx:10HBS0"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-20-ID10HBS0.html",
+   "origin": "stage0:real:special",
+   "note": "OLX slug differs between rows, same ID",
+   "expect": {
+    "key": "olx:10HBS0"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-22-ID10LNlw.html",
+   "origin": "stage0:real:special",
+   "note": "OLX lowercase-collision pair A",
+   "expect": {
+    "key": "olx:10LNlw"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-23-ID10LNLW.html",
+   "origin": "stage0:real:special",
+   "note": "OLX lowercase-collision pair B",
+   "expect": {
+    "key": "olx:10LNLW"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-24-IDIDs3H.html",
+   "origin": "stage0:real:special",
+   "note": "OLX id that starts with 'ID'",
+   "expect": {
+    "key": "olx:IDs3H"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-24-IDIDs3H.html",
+   "origin": "stage0:real:special",
+   "note": "OLX id that starts with 'ID'",
+   "expect": {
+    "key": "olx:IDs3H"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-25-ID105037.html",
+   "origin": "stage0:real:special",
+   "note": "OLX all-digit id",
+   "expect": {
+    "key": "olx:105037"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-26-34341431.html",
+   "origin": "stage0:real:special",
+   "note": "RIA ad: domria row and LUN row in different properties",
+   "expect": {
+    "key": "domria:34341431"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-26-34341431.html",
+   "origin": "stage0:real:special",
+   "note": "RIA ad: domria row and LUN row in different properties",
+   "expect": {
+    "key": "domria:34341431"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-27-ID100DVq.html",
+   "origin": "stage0:real:special",
+   "note": "OLX ad present only via LUN rows",
+   "expect": {
+    "key": "olx:100DVq"
+   }
+  },
+  {
+   "input": "https://blagodeveloper.com/plannings/41685",
+   "origin": "stage0:synthetic:blago|blagodeveloper.com",
+   "note": "no trailing slash",
+   "expect": {
+    "key": "blago:41685"
+   }
+  },
+  {
+   "input": "https://www.blagodeveloper.com/plannings/41685/",
+   "origin": "stage0:synthetic:blago|blagodeveloper.com",
+   "note": "www",
+   "expect": {
+    "key": "blago:41685"
+   }
+  },
+  {
+   "input": "https://blagodeveloper.com/plannings/41685/?utm_source=facebook&fbclid=IwAR0",
+   "origin": "stage0:synthetic:blago|blagodeveloper.com",
+   "note": "tracking",
+   "expect": {
+    "key": "blago:41685"
+   }
+  },
+  {
+   "input": "https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fblagodeveloper.com%2Fplannings%2F41685%2F",
+   "origin": "stage0:synthetic:blago|blagodeveloper.com",
+   "note": "facebook share wrapper (plannings%2F{id})",
+   "expect": {
+    "key": "blago:41685"
+   }
+  },
+  {
+   "input": "https://t.me/share/url?url=https%3A%2F%2Fblagodeveloper.com%2Fplannings%2F41685%2F",
+   "origin": "stage0:synthetic:blago|blagodeveloper.com",
+   "note": "telegram share wrapper",
+   "expect": {
+    "key": "blago:41685"
+   }
+  },
+  {
+   "input": "41685",
+   "origin": "stage0:synthetic:blago|blagodeveloper.com",
+   "note": "bare 5-digit (collides with our ids)",
+   "expect": {
+    "candidates_include": [
+     "blago:41685"
+    ]
+   }
+  },
+  {
+   "input": "https://dom.ria.com/ru/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "ru hreflang",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "no lang prefix",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://m.dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "mobile host",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://www.dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "www host",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "http://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "http",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "no scheme",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html?utm_source=share&utm_medium=app&fbclid=IwAR0abc",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "tracking params",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html#photo-3",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "anchor",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "  Дивись квартиру: https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html \n",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "pasted with text",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-tsentr-nova-ulitsa-34616500.html",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "slug renamed, same id",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/realty/data/34616500?lang_id=4",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "our API card",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "https://www.google.com/url?q=https%3A%2F%2Fdom.ria.com%2Fuk%2Frealty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-1-34616500.html&sa=D",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "google redirect wrapper",
+   "expect": {
+    "key": "domria:34616500"
+   }
+  },
+  {
+   "input": "34616500",
+   "origin": "stage0:synthetic:domria|dom.ria.com",
+   "note": "bare 8-digit id",
+   "expect": {
+    "candidates_include": [
+     "domria:34616500"
+    ]
+   }
+  },
+  {
+   "input": "https://www.flombu.com/uk/prodazh/kvartyra-116037",
+   "origin": "stage0:synthetic:flombu|flombu.com",
+   "note": "public canonical",
+   "expect": {
+    "key": "flombu:116037"
+   }
+  },
+  {
+   "input": "https://www.flombu.com/ru/prodazha/kvartira-116037",
+   "origin": "stage0:synthetic:flombu|flombu.com",
+   "note": "ru (slug guessed)",
+   "expect": {
+    "key": "flombu:116037"
+   }
+  },
+  {
+   "input": "https://www.flombu.com/prodazh/kvartyra-116037?utm_source=fb",
+   "origin": "stage0:synthetic:flombu|flombu.com",
+   "note": "no lang + tracking",
+   "expect": {
+    "key": "flombu:116037"
+   }
+  },
+  {
+   "input": "https://flombu.com/uk/estate_deal_sales/116037.json",
+   "origin": "stage0:synthetic:flombu|flombu.com",
+   "note": "JSON api form",
+   "expect": {
+    "key": "flombu:116037"
+   }
+  },
+  {
+   "input": "116037",
+   "origin": "stage0:synthetic:flombu|flombu.com",
+   "note": "bare 6-digit",
+   "expect": {
+    "candidates_include": [
+     "flombu:116037"
+    ]
+   }
+  },
+  {
+   "input": "https://dom.ria.com/ru/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "ru hreflang",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "no lang prefix",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://m.dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "mobile host",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://www.dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "www host",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "http://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "http",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "no scheme",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html?utm_source=share&utm_medium=app&fbclid=IwAR0abc",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "tracking params",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html#photo-3",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "anchor",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "  Дивись квартиру: https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html \n",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "pasted with text",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-tsentr-nova-ulitsa-34730045.html",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "slug renamed, same id",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/realty/data/34730045?lang_id=4",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "our API card",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "https://www.google.com/url?q=https%3A%2F%2Fdom.ria.com%2Fuk%2Frealty-prodaja-kvartira-ivano-frankovsk-test-ulitsa-5-34730045.html&sa=D",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "google redirect wrapper",
+   "expect": {
+    "key": "domria:34730045"
+   }
+  },
+  {
+   "input": "34730045",
+   "origin": "stage0:synthetic:lun|dom.ria.com",
+   "note": "bare 8-digit id",
+   "expect": {
+    "candidates_include": [
+     "domria:34730045"
+    ]
+   }
+  },
+  {
+   "input": "https://lun.ua/realty/4720682454",
+   "origin": "stage0:synthetic:lun|lun.ua",
+   "note": "no lang",
+   "expect": {
+    "key": "lun:4720682454"
+   }
+  },
+  {
+   "input": "https://lun.ua/ru/realty/4720682454",
+   "origin": "stage0:synthetic:lun|lun.ua",
+   "note": "ru",
+   "expect": {
+    "key": "lun:4720682454"
+   }
+  },
+  {
+   "input": "https://lun.ua/uk/realty/4720682454?utm_source=telegram",
+   "origin": "stage0:synthetic:lun|lun.ua",
+   "note": "tracking",
+   "expect": {
+    "key": "lun:4720682454"
+   }
+  },
+  {
+   "input": "4720682454",
+   "origin": "stage0:synthetic:lun|lun.ua",
+   "note": "bare 10-digit LUN id",
+   "expect": {
+    "candidates_include": [
+     "lun:4720682454"
+    ]
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ru/ivano-frankovsk/flats-sale/view/13017427/",
+   "origin": "stage0:synthetic:lun|rieltor.ua",
+   "note": "ru hreflang",
+   "expect": {
+    "key": "rieltor:13017427"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017427",
+   "origin": "stage0:synthetic:lun|rieltor.ua",
+   "note": "no trailing slash",
+   "expect": {
+    "key": "rieltor:13017427"
+   }
+  },
+  {
+   "input": "https://www.rieltor.ua/ivano-frankovsk/flats-sale/view/13017427/",
+   "origin": "stage0:synthetic:lun|rieltor.ua",
+   "note": "www",
+   "expect": {
+    "key": "rieltor:13017427"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/krihovtsy/flats-sale/view/13017427/",
+   "origin": "stage0:synthetic:lun|rieltor.ua",
+   "note": "other location segment",
+   "expect": {
+    "key": "rieltor:13017427"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/view/13017427/?utm_source=lun.ua&utm_medium=referral#gallery",
+   "origin": "stage0:synthetic:lun|rieltor.ua",
+   "note": "tracking + anchor",
+   "expect": {
+    "key": "rieltor:13017427"
+   }
+  },
+  {
+   "input": "13017427",
+   "origin": "stage0:synthetic:lun|rieltor.ua",
+   "note": "bare 8-digit view id",
+   "expect": {
+    "candidates_include": [
+     "rieltor:13017427"
+    ]
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "ru (hreflang ru-UA)",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://m.olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "mobile alternate",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "no www",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "ios-app://663217552/app-olxua/https://www.olx.ua/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "iOS app link",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "android-app://ua.slando/https://www.olx.ua/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "Android app link",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "android-app://ua.slando/https/www.olx.ua/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "Android app link, standard split form",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/obyavlenie/kvartyra-test-10-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "legacy /obyavlenie/ without /d/",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html?search_reason=search%7Corganic",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "search_reason",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html?reason=observed_ad&utm_source=olx&utm_medium=share&srsltid=AfmBOoq",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "tracking",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html#a1b2c3d4;promoted",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "legacy anchor",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/zovsim-inshyi-zagolovok-ID10BkYC.html",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "slug changed (title edited)",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "Продам квартиру https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-10-ID10BkYC.html?utm_source=app",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "share text",
+   "expect": {
+    "key": "olx:10BkYC"
+   }
+  },
+  {
+   "input": "ID10BkYC",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "bare ID-prefixed slug id",
+   "expect": {
+    "candidates_include": [
+     "olx:10BkYC"
+    ]
+   }
+  },
+  {
+   "input": "10BkYC",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "bare slug id",
+   "expect": {
+    "candidates_include": [
+     "olx:10BkYC"
+    ]
+   }
+  },
+  {
+   "input": "ID: 925031606",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "numeric id from page footer",
+   "expect": {
+    "candidates_include": [
+     "olx:10BkYC"
+    ]
+   }
+  },
+  {
+   "input": "925031606",
+   "origin": "stage0:synthetic:lun|www.olx.ua",
+   "note": "bare numeric 9-digit",
+   "expect": {
+    "candidates_include": [
+     "olx:10BkYC"
+    ]
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "ru (hreflang ru-UA)",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://m.olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "mobile alternate",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "no www",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "ios-app://663217552/app-olxua/https://www.olx.ua/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "iOS app link",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "android-app://ua.slando/https://www.olx.ua/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "Android app link",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "android-app://ua.slando/https/www.olx.ua/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "Android app link, standard split form",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/obyavlenie/kvartyra-test-15-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "legacy /obyavlenie/ without /d/",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html?search_reason=search%7Corganic",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "search_reason",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html?reason=observed_ad&utm_source=olx&utm_medium=share&srsltid=AfmBOoq",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "tracking",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html#a1b2c3d4;promoted",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "legacy anchor",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/zovsim-inshyi-zagolovok-IDNiPo4.html",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "slug changed (title edited)",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "Продам квартиру https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-15-IDNiPo4.html?utm_source=app",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "share text",
+   "expect": {
+    "key": "olx:NiPo4"
+   }
+  },
+  {
+   "input": "IDNiPo4",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "bare ID-prefixed slug id",
+   "expect": {
+    "candidates_include": [
+     "olx:NiPo4"
+    ]
+   }
+  },
+  {
+   "input": "NiPo4",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "bare slug id",
+   "expect": {
+    "candidates_include": [
+     "olx:NiPo4"
+    ]
+   }
+  },
+  {
+   "input": "ID: 728527904",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "numeric id from page footer",
+   "expect": {
+    "candidates_include": [
+     "olx:NiPo4"
+    ]
+   }
+  },
+  {
+   "input": "728527904",
+   "origin": "stage0:synthetic:olx|www.olx.ua",
+   "note": "bare numeric 9-digit",
+   "expect": {
+    "candidates_include": [
+     "olx:NiPo4"
+    ]
+   }
+  },
+  {
+   "input": "https://mojkvartiry.link/property/107",
+   "origin": "stage0:own",
+   "note": "property page",
+   "expect": {
+    "key": "own:107"
+   }
+  },
+  {
+   "input": "https://mojkvartiry.link/property/107?verify=0#prices",
+   "origin": "stage0:own",
+   "note": "query+anchor",
+   "expect": {
+    "key": "own:107"
+   }
+  },
+  {
+   "input": "https://abc-def-ghi.trycloudflare.com/property/107",
+   "origin": "stage0:own",
+   "note": "old quick-tunnel host",
+   "expect": {
+    "key": "own:107"
+   }
+  },
+  {
+   "input": "http://localhost:8000/property/107/",
+   "origin": "stage0:own",
+   "note": "local",
+   "expect": {
+    "key": "own:107"
+   }
+  },
+  {
+   "input": "https://mojkvartiry.link/api/analytics/property/107",
+   "origin": "stage0:own",
+   "note": "api",
+   "expect": {
+    "key": "own:107"
+   }
+  },
+  {
+   "input": "https://mojkvartiry.link/property/18",
+   "origin": "stage0:own",
+   "note": "merged property -> redirect",
+   "expect": {
+    "key": "own:18"
+   }
+  },
+  {
+   "input": "https://mojkvartiry.link/property/17446",
+   "origin": "stage0:own",
+   "note": "nonexistent property id",
+   "expect": {
+    "key": "own:17446"
+   }
+  },
+  {
+   "input": "https://mojkvartiry.link/?rooms=2&sort=price",
+   "origin": "stage0:own",
+   "note": "list page, no id",
+   "expect": {
+    "reason": "own_not_property"
+   }
+  },
+  {
+   "input": "13430",
+   "origin": "stage0:bare:collision",
+   "note": "blago planning id == existing property id",
+   "expect": {
+    "candidates_include": [
+     "own:13430",
+     "blago:13430"
+    ]
+   }
+  },
+  {
+   "input": "13439",
+   "origin": "stage0:bare:collision",
+   "note": "blago planning id == existing property id",
+   "expect": {
+    "candidates_include": [
+     "own:13439",
+     "blago:13439"
+    ]
+   }
+  },
+  {
+   "input": "107",
+   "origin": "stage0:bare:small",
+   "note": "small number -> property id",
+   "expect": {
+    "candidates_include": [
+     "own:107"
+    ]
+   }
+  },
+  {
+   "input": "https://www.olx.ua/uk/nedvizhimost/kvartiry/prodazha-kvartir/ivano-frankovsk/?currency=USD",
+   "origin": "stage0:negative",
+   "note": "OLX search page",
+   "expect": {
+    "reason": "not_listing"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/prodazha-kvartir/ivano-frankovsk/",
+   "origin": "stage0:negative",
+   "note": "RIA search page",
+   "expect": {
+    "reason": "not_listing"
+   }
+  },
+  {
+   "input": "https://dom.ria.com/uk/novostroyka-zhk-example-1234/",
+   "origin": "stage0:negative",
+   "note": "RIA newbuild complex page (synthetic)",
+   "expect": {
+    "reason": "not_listing"
+   }
+  },
+  {
+   "input": "https://lun.ua/sale/if/flats",
+   "origin": "stage0:negative",
+   "note": "LUN catalog",
+   "expect": {
+    "reason": "not_listing"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/flats-sale/",
+   "origin": "stage0:negative",
+   "note": "rieltor search",
+   "expect": {
+    "reason": "not_listing"
+   }
+  },
+  {
+   "input": "https://rieltor.ua/ivano-frankovsk/houses-sale/view/12345678/",
+   "origin": "stage0:negative",
+   "note": "rieltor non-flat category",
+   "expect": {
+    "reason": "not_flat"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/kvartyra-test-28-IDzzzzzz.html",
+   "origin": "stage0:negative",
+   "note": "OLX ad not in DB",
+   "expect": {
+    "key": "olx:zzzzzz"
+   }
+  },
+  {
+   "input": "https://example.com/realty-123-34616500.html",
+   "origin": "stage0:negative",
+   "note": "unsupported host",
+   "expect": {
+    "reason": "unsupported_host"
+   }
+  },
+  {
+   "input": "просто текст без посилання",
+   "origin": "stage0:negative",
+   "note": "no url",
+   "expect": {
+    "reason": "no_url"
+   }
+  },
+  {
+   "input": "https://www.olx.ua/d/uk/obyavlenie/prodazh-odnokmnatno-kvartiri-zruchniy-poverh-mebl-tehnka-tsentr-id10lnlw.html",
+   "origin": "stage0:synthetic:case_lost",
+   "note": "whole URL lowercased (some messengers/users) -> id case lost",
+   "expect": {
+    "case_lost_id": "10lnlw"
+   }
+  }
+ ]
+}

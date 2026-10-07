@@ -22,6 +22,11 @@
   python cli.py db migrate --dry-run   # план змін схеми (індекси, колонки), нічого не пише
   python cli.py db migrate             # застосувати під замком циклу (між циклами!)
   python cli.py db plans               # чи не проходять запити сайту всю таблицю
+  python cli.py links reindex --dry-run  # ключ «сайт:id» там, де NULL (план)
+  python cli.py links reindex --fix-mismatched --dry-run  # після правки links.toml
+  python cli.py links selftest         # кожна адреса знаходить свій рядок за ключем
+  python cli.py privacy scan           # скільки телефонів в описах (лише читання)
+  python cli.py privacy apply --yes    # разова заміна на «[телефон]» (після бекапу!)
 """
 from __future__ import annotations
 
@@ -569,6 +574,57 @@ def cmd_lookup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_links(args: argparse.Namespace) -> int:
+    """Ключ «сайт:id» (listings.site_key, крок E6, D51): заповнення, звірка, розбір."""
+    from realty import links_index
+
+    if args.action == "reindex":
+        return links_index.reindex(db=args.db, dry_run=args.dry_run, wait_min=args.wait_min,
+                                   fix_mismatched=args.fix_mismatched)
+    if args.action == "selftest":
+        import json
+
+        rep = links_index.selftest(db=args.db)
+        print(json.dumps(rep, ensure_ascii=False, indent=1) if args.json
+              else links_index.render_selftest(rep))
+        return 0 if rep["unparsed"] == 0 and rep["stored_mismatch"] == 0 else 1
+    if not args.text:
+        print("потрібен текст: cli.py links parse 'посилання'")
+        return 2
+    print(links_index.describe(" ".join(args.text)))
+    return 0
+
+
+def cmd_privacy(args: argparse.Namespace) -> int:
+    """Телефони в наявних описах і назвах (рішення власника 5, D46; E6–E7, D51)."""
+    import json
+
+    from realty import privacy_pass
+
+    if args.action == "scan":
+        if args.since:
+            try:
+                args.since = privacy_pass.parse_since(args.since)
+            except ValueError as e:
+                print(e)
+                return 2
+        rep = privacy_pass.scan(db=args.db, limit=args.limit, since=args.since)
+        print(json.dumps(rep, ensure_ascii=False, indent=1) if args.json
+              else privacy_pass.render_scan(rep))
+        return 0
+    if args.action == "impact":
+        rep = privacy_pass.impact(db=args.db, dedup=not args.no_dedup,
+                                  force_dedup=args.force_dedup)
+        print(json.dumps(rep, ensure_ascii=False, indent=1) if args.json
+              else privacy_pass.render_impact(rep))
+        total = sum(rep["differences"].values()) + sum(
+            rep["dedup"][x]["listings_in_changed_groups"] for x in ("active", "all")
+        ) if "dedup" in rep else sum(rep["differences"].values())
+        return 0 if total == 0 else 1
+    return privacy_pass.apply(db=args.db, yes=args.yes, wait_min=args.wait_min,
+                              no_backup_check=args.no_backup_check, ids_out=args.ids_out)
+
+
 def cmd_webcache(args: argparse.Namespace) -> int:
     """Покоління кешу сайту: показати або збільшити вручну."""
     from realty import webcache
@@ -768,6 +824,43 @@ def main() -> int:
     lk.add_argument("--no-drain", action="store_true",
                     help="лише це завдання, без інших, що чекають у черзі")
     lk.set_defaults(func=cmd_lookup)
+
+    lnk = sub.add_parser("links", help="ключ «сайт:id» оголошень (listings.site_key)")
+    lnk.add_argument("action", choices=("reindex", "selftest", "parse"),
+                     help="reindex — заповнити ключ там, де NULL (під замком циклу); "
+                          "selftest — звірка ключів (лише читання); parse — розбір посилання")
+    lnk.add_argument("text", nargs="*", help="parse: посилання чи id")
+    lnk.add_argument("--db", help="файл бази SQLite (типово — з DB_URL)")
+    lnk.add_argument("--dry-run", action="store_true", help="reindex: лише кількості")
+    lnk.add_argument("--fix-mismatched", action="store_true",
+                     help="reindex: ще й переписати ключі, що не збігаються з адресою "
+                          "(після правки config/links.toml)")
+    lnk.add_argument("--wait-min", type=float, default=10.0,
+                     help="reindex: скільки чекати, поки цикл звільнить замок (типово 10)")
+    lnk.add_argument("--json", action="store_true", help="selftest: сирі числа")
+    lnk.set_defaults(func=cmd_links)
+
+    pv = sub.add_parser("privacy", help="телефони в описах і назвах → «[телефон]»")
+    pv.add_argument("action", choices=("scan", "impact", "apply"),
+                    help="scan — що було б замінено (лише читання, без цифр); "
+                         "impact — чи не зміниться класифікація й зведення (лише читання); "
+                         "apply — разова заміна в наявних рядках (потрібен --yes)")
+    pv.add_argument("--db", help="файл бази SQLite (типово — з DB_URL)")
+    pv.add_argument("--limit", type=int, help="scan: переглянути лише перші N рядків")
+    pv.add_argument("--since", help="scan: лише нові оголошення (first_seen ≥ «2026-10-09», "
+                                    "«2026-10-09 01:00» чи «2026-10-09T01:00Z»; час — UTC, "
+                                    "як у базі)")
+    pv.add_argument("--json", action="store_true", help="scan/impact: сирі числа")
+    pv.add_argument("--no-dedup", action="store_true", help="impact: без пробного зведення")
+    pv.add_argument("--force-dedup", action="store_true",
+                    help="impact: перерахувати зведення, навіть якщо форми оголошень однакові")
+    pv.add_argument("--yes", action="store_true", help="apply: так, змінити дані")
+    pv.add_argument("--no-backup-check", action="store_true",
+                    help="apply: не вимагати свіжого бекапу (лише для копій бази)")
+    pv.add_argument("--wait-min", type=float, default=10.0,
+                    help="apply: скільки чекати, поки цикл звільнить замок (типово 10)")
+    pv.add_argument("--ids-out", help="apply: файл для id змінених рядків")
+    pv.set_defaults(func=cmd_privacy)
 
     wc = sub.add_parser("webcache", help="покоління кешу сайту (lists, analytics)")
     wc.add_argument("action", choices=("show", "bump"))

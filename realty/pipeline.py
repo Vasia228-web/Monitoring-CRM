@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import or_, select
 
-from . import ops
+from . import ops, privacy
 from .config import SOURCES, enabled_sources
 from .db import init_db, session_scope
 from .fetcher import BrowserFetcher, FetchError, Fetcher
@@ -26,6 +26,13 @@ CRITICAL = ("price", "rooms", "area_total")
 # Поля, заради яких варто зазирнути на сторінку оголошення, але не платити за
 # виклик моделі: сторінка деталей часто містить опис, з якого їх видно.
 DESIRABLE = ("market_type", "condition")
+
+# Політики полів запису (інтеграція, конфлікт «pipeline._upsert», крок E6, D51).
+# DERIVED — похідні поля: їх ставлять лише слухачі ORM (realty/models.py), запис
+# джерела їх не задає й не перезаписує: site_key = ключ «сайт:id» з original_url.
+# Телефони в description/title міняють ті самі слухачі — окремого кроку тут немає.
+# Поля «лише туди, де порожньо» (place_raw, seller_evidence) додадуть Блоки 1/3/4.
+DERIVED_FIELDS = frozenset({"site_key"})
 
 
 def _gaps(rec: dict) -> tuple[bool, bool]:
@@ -233,7 +240,8 @@ class Pipeline:
         Зміну ціни фіксуємо окремим записом в історії — саме заради цього
         повторні прогони оновлюють запис, а не створюють новий.
         """
-        fields = {c.name for c in Listing.__table__.columns} - {"id", "first_seen"}
+        fields = {c.name for c in Listing.__table__.columns} - {"id", "first_seen"} \
+            - DERIVED_FIELDS
         payload = {k: v for k, v in rec.items() if k in fields}
         existing = session.scalar(
             select(Listing).where(
@@ -327,7 +335,8 @@ class Pipeline:
         init_db()
         cache: dict[str, BaseSource] = {}
         updatable = [c.name for c in Listing.__table__.columns
-                     if c.name not in ("id", "source", "external_id", "first_seen")]
+                     if c.name not in ("id", "source", "external_id", "first_seen")
+                     and c.name not in DERIVED_FIELDS]
         with session_scope() as s:
             stmt = select(Listing).where(or_(
                 *[getattr(Listing, f).is_(None) for f in CRITICAL],
@@ -354,7 +363,11 @@ class Pipeline:
                     continue
                 for field in updatable:
                     value = out.get(field)
-                    if value is not None and getattr(row, field) != value:
+                    # Порівнюємо з тим, що справді ляже в базу: опис зі сторінки
+                    # несе номер, а в рядку він уже «[телефон]» (слухач ORM) —
+                    # інакше кожен прогін рахував би такий рядок оновленим.
+                    if value is not None and getattr(row, field) != \
+                            privacy.redact_field(field, value):
                         setattr(row, field, value)
                         changed = True
                 if changed:

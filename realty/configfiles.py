@@ -255,10 +255,232 @@ class LivenessConfig:
     run: LivenessRun
 
 
+def _regex_problems(where: str, pattern: str, *, groups: tuple[str, ...] = ()) -> list[str]:
+    """Регулярний вираз із конфігу компілюється й має потрібні іменовані групи.
+
+    Зламаний вираз інакше вилетів би `re.error` лише на першому розборі — у
+    кроці циклу чи в запиті сайту, а не в `cli.py config check` до розгортання.
+    """
+    import re
+
+    try:
+        rx = re.compile(pattern)
+    except re.error as e:
+        return [f"{where}: регулярний вираз не компілюється ({e})"]
+    missing = [g for g in groups if g not in rx.groupindex]
+    return [f"{where}: у виразі немає групи (?P<{g}>…)" for g in missing]
+
+
+@dataclass(frozen=True)
+class LinkFamily:
+    """Одне сімейство посилань (сайт) у `config/links.toml`."""
+
+    # Ім'я → вираз для ШЛЯХУ (після %-декодування, регістр збережено); перший
+    # збіг виграє. Група `id` обов'язкова; інші іменовані групи (slug, loc, cat,
+    # kind) — частини для шаблонів адрес і для `require`.
+    id_regex: dict[str, str]
+    # Параметр query → вираз значення: id, що живе лише в query (DOM.RIA
+    # realtyId, Благо planning_id). Решта query відкидається повністю.
+    query_id: dict[str, str]
+    # Сторінки того самого сайту, що не є оголошенням (пошук, ЖК, каталог).
+    non_listing_regex: dict[str, str]
+    # Група → дозволені значення: інакше це не квартира на продаж (not_flat).
+    require: dict[str, tuple[str, ...]]
+    # Шаблони адрес; береться ПЕРШИЙ, для якого відомі всі частини.
+    canonical_url: tuple[str, ...]
+    # Шаблони адреси для запиту перевірки; порожньо — не перевіряється.
+    fetch_url: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LinksHosts:
+    strip_prefixes: tuple[str, ...]
+    family: dict[str, str]
+    subdomain_family: dict[str, str]
+    own_suffixes: tuple[str, ...]
+    reject: dict[str, str]
+    short_links: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LinksUnwrap:
+    max_depth: int = field(**_limits(min=0, max=10))
+    max_decode: int = field(**_limits(min=0, max=5))
+    scheme: str
+    app_link: str
+    android_app_split: str
+    first_url_in_text: str
+    trailing_punct: str
+
+
+@dataclass(frozen=True)
+class LinksOlx:
+    alphabet: str
+    numeric_digits: int = field(**_limits(min=1, max=20))
+    case_lost_regex: str
+
+
+@dataclass(frozen=True)
+class LinksBare:
+    property_prefixed: str
+    olx_numeric_prefixed: str
+    numeric: str
+    olx_token: str
+    olx_id_prefix: str
+    number_families: tuple[str, ...]
+    family_key: str
+    family_alias: dict[str, str]
+
+
+@dataclass(frozen=True)
+class LinksReindex:
+    batch_rows: int = field(**_limits(min=1, max=200))
+
+
+@dataclass(frozen=True)
+class LinksConfig:
+    """`config/links.toml` — формати посилань джерел (крок E6, D51).
+
+    Спільний для Блоків 1, 3 і 5 (інтеграція, конфлікт «один ключ сайт:id»):
+    розбір посилання, ключ `listings.site_key`, канонічна адреса й адреса
+    перевірки. Код — `realty/links.py`.
+    """
+
+    listing_families: tuple[str, ...]
+    hosts: LinksHosts
+    unwrap: LinksUnwrap
+    olx: LinksOlx
+    bare: LinksBare
+    reindex: LinksReindex
+    families: dict[str, LinkFamily]
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        known = set(self.families)
+        for fam in self.listing_families:
+            if fam not in known:
+                out.append(f"listing_families: сімейства «{fam}» немає в [families]")
+        for where, mapping in (("hosts.family", self.hosts.family),
+                               ("hosts.subdomain_family", self.hosts.subdomain_family)):
+            for host, fam in mapping.items():
+                if fam not in known:
+                    out.append(f"{where}.{host}: сімейства «{fam}» немає в [families]")
+        alphabet = self.olx.alphabet
+        if len(alphabet) != 62 or len(set(alphabet)) != 62 or not alphabet.isalnum():
+            out.append("olx.alphabet: потрібні 62 різні літери й цифри")
+        for name in ("scheme", "app_link", "android_app_split", "first_url_in_text"):
+            out += _regex_problems(f"unwrap.{name}", getattr(self.unwrap, name))
+        out += _regex_problems("unwrap.app_link", self.unwrap.app_link, groups=("inner",))
+        out += _regex_problems("unwrap.android_app_split", self.unwrap.android_app_split,
+                               groups=("scheme", "rest"))
+        out += _regex_problems("olx.case_lost_regex", self.olx.case_lost_regex, groups=("id",))
+        for name in ("property_prefixed", "olx_numeric_prefixed", "numeric"):
+            out += _regex_problems(f"bare.{name}", getattr(self.bare, name), groups=("num",))
+        out += _regex_problems("bare.olx_token", self.bare.olx_token)
+        for fam in self.bare.number_families:
+            if fam not in known:
+                out.append(f"bare.number_families: сімейства «{fam}» немає в [families]")
+        out += _regex_problems("bare.family_key", self.bare.family_key, groups=("fam", "id"))
+        for alias, fam in self.bare.family_alias.items():
+            if fam not in known:
+                out.append(f"bare.family_alias.{alias}: сімейства «{fam}» немає в [families]")
+        for fam, spec in self.families.items():
+            if not spec.id_regex:
+                out.append(f"families.{fam}.id_regex: порожньо")
+            for name, rx in spec.id_regex.items():
+                out += _regex_problems(f"families.{fam}.id_regex.{name}", rx, groups=("id",))
+            for name, rx in {**spec.query_id, **spec.non_listing_regex}.items():
+                out += _regex_problems(f"families.{fam}.{name}", rx)
+            for tpl in (*spec.canonical_url, *spec.fetch_url):
+                if "{id}" not in tpl:
+                    out.append(f"families.{fam}: шаблон {tpl!r} без {{id}}")
+        return out
+
+
+@dataclass(frozen=True)
+class PrivacyPhone:
+    enabled: bool
+    replacement: str
+    fields: tuple[str, ...] = field(**_limits(choices=("description", "title")))
+    mobile_codes: tuple[str, ...] = field(**_limits(min_len=1))
+    area_first_digits: str
+    national_shapes: tuple[str, ...] = field(**_limits(min_len=1))
+    international_any_shape: bool
+    separators: str
+    max_sep_run: int = field(**_limits(min=1, max=5))
+    plus_inside_international: bool
+    mask_chars: str
+    min_mask_chars: int = field(**_limits(min=2))
+    min_mask_chars_full_international: int = field(**_limits(min=2))
+    max_mask_national_positions: int = field(**_limits(min=10, max=16))
+    short_local_shapes: tuple[str, ...]
+    short_local_keyword_regex: str
+    link_regex: dict[str, str]
+
+    def problems(self) -> list[str]:
+        import re
+
+        out: list[str] = []
+        if any(ch.isdigit() for ch in self.replacement):
+            # Ідемпотентність: заміна не має давати нового «номера» в тексті.
+            out.append("replacement: у заміні не може бути цифр")
+        if not self.replacement.strip():
+            out.append("replacement: порожньо")
+        for code in self.mobile_codes:
+            if not re.fullmatch(r"\d\d", code):
+                out.append(f"mobile_codes: {code!r} — потрібні дві цифри після 0")
+        if not re.fullmatch(r"\d+", self.area_first_digits):
+            out.append("area_first_digits: лише цифри")
+        for shape in (*self.national_shapes, *self.short_local_shapes):
+            if not re.fullmatch(r"\d+(?:-\d+)*", shape):
+                out.append(f"форма {shape!r} — числа через дефіс")
+        for shape in self.national_shapes:
+            if sum(int(x) for x in shape.split("-")) != 10:
+                out.append(f"national_shapes: {shape!r} — разом має бути 10 цифр")
+        if any(ch.isdigit() or ch.isalpha() for ch in self.separators):
+            out.append("separators: лише розділові знаки й пробіли")
+        if "+" in self.separators:
+            out.append("separators: «+» — лише через plus_inside_international (між цифрами +380)")
+        if any(ch.isdigit() for ch in self.mask_chars) or not self.mask_chars:
+            out.append("mask_chars: без цифр і не порожньо")
+        if set(self.mask_chars) & set(self.separators):
+            out.append("mask_chars: символ маски не може бути роздільником")
+        if self.min_mask_chars_full_international > self.min_mask_chars:
+            out.append("min_mask_chars_full_international: не більше за min_mask_chars")
+        out += _regex_problems("short_local_keyword_regex", self.short_local_keyword_regex)
+        for name, rx in self.link_regex.items():
+            out += _regex_problems(f"link_regex.{name}", rx)
+        return out
+
+
+@dataclass(frozen=True)
+class PrivacyScan:
+    top_patterns: int = field(**_limits(min=1))
+    loose_gap_max: int = field(**_limits(min=1, max=5))
+
+
+@dataclass(frozen=True)
+class PrivacyApply:
+    batch_rows: int = field(**_limits(min=1, max=200))
+    max_rows: int = field(**_limits(min=1))
+    backup_max_age_h: float = field(**_limits(min=0.1))
+
+
+@dataclass(frozen=True)
+class PrivacyConfig:
+    """`config/privacy.toml` — телефони в описах і назвах (рішення власника 5, D46; E6, D51)."""
+
+    phone: PrivacyPhone
+    scan: PrivacyScan
+    apply: PrivacyApply
+
+
 # Реєстр тем: ім'я файлу без .toml (з підтекою, якщо є) → схема.
 SCHEMAS: dict[str, type] = {
     "speed": SpeedConfig,
     "liveness": LivenessConfig,
+    "links": LinksConfig,
+    "privacy": PrivacyConfig,
 }
 
 
