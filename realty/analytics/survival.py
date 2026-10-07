@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
+from collections import Counter
 from dataclasses import dataclass
 
 from .settings import Settings, load
@@ -94,23 +96,43 @@ def kaplan_meier(observations: list[Observation]) -> Curve | None:
     тоді, а n — скільки ще лишалось під ризиком. Цензуровані спостереження
     не рахуються як події, але до свого моменту вони входять у n — саме так
     їхня інформація потрапляє в оцінку.
+
+    Складність — O(n log n), а не O(n × моменти). Досі група ризику
+    рахувалась повним проходом по всіх спостереженнях для КОЖНОГО моменту
+    події: на базі з 15 тис. квартир і ~3 тис. моментів це 88% часу сторінки
+    «Аналітика» (1,06 з 1,2 с на M4, на Fedora — 11,7 с; Етап 0, D45).
+    Тепер — двійковий пошук у відсортованих масивах входів і виходів. Число
+    те саме до останнього біта: ті самі цілі at_risk і events, ті самі
+    операції з плаваючою комою в тому самому порядку (тест порівнює з
+    давньою реалізацією, tests/test_survival_fast.py).
     """
     data = [o for o in observations if o.days is not None and o.days >= 0]
     if not data:
         return None
 
-    times = sorted({o.days for o in data if o.event})
+    # Скільки подій у кожен момент. Counter, як і множина раніше, зберігає
+    # перше написання моменту (1 чи 1.0) — тож і `time` у точках той самий.
+    events_at = Counter(o.days for o in data if o.event)
+    times = sorted(events_at)
     n_total = len(data)
     survival = 1.0
     cumulative = 0.0          # сума d / (n·(n−d)) для формули Грінвуда
     points: list[Point] = []
 
+    # Під ризиком у момент t — ті, хто вже увійшов у спостереження
+    # (entry < t) і ще не вибув (days >= t). Умова на `entry` і є поправкою на
+    # відкладений вхід. Спостереження з entry >= days під ризиком не бувають
+    # ніколи, тож їх відкидаємо одразу. Серед решти кожне, що вибуло до t
+    # (days < t), увійшло ще раніше (entry < days < t), тому
+    #   #{entry < t <= days} = #{entry < t} − #{days < t},
+    # а обидва лічильники — двійковий пошук у відсортованих масивах.
+    span = [o for o in data if o.entry < o.days]
+    entries = sorted(o.entry for o in span)
+    exits = sorted(o.days for o in span)
+
     for t in times:
-        # Під ризиком у момент t — ті, хто вже увійшов у спостереження
-        # (entry < t) і ще не вибув (days >= t). Умова на `entry` і є
-        # поправкою на відкладений вхід.
-        at_risk = sum(1 for o in data if o.entry < t <= o.days)
-        events = sum(1 for o in data if o.event and o.days == t)
+        at_risk = bisect_left(entries, t) - bisect_left(exits, t)
+        events = events_at[t]
         if at_risk <= 0:
             continue
         survival *= 1 - events / at_risk

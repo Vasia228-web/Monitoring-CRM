@@ -133,7 +133,8 @@ def test_snapshot_writes_manifest_with_hashes(golden):
     assert m["network_attempts"] == []
     # З якого коду й з якими порогами знято еталон.
     assert len(m["code"]["app_diff_sha256"]) == 64 and isinstance(m["code"]["app_dirty"], list)
-    assert set(m["inputs"]["config"]) == {"speed"}
+    from realty import configfiles
+    assert set(m["inputs"]["config"]) == set(configfiles.SCHEMAS)
     assert all(len(v) == 64 for v in m["inputs"]["config"].values())
     for e in m["urls"]:
         body = gzip.decompress((golden["out"] / e["file"]).read_bytes())

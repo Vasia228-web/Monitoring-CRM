@@ -16,6 +16,21 @@
     · зведено з {{ sources.count }} оголош.
   </p>
 </header>
+{#- Перевірка актуальності при відкритті (Блок 2, крок E5, D50): сайт сам у
+    мережу не ходить — відкриття поставило завдання в чергу, а тут сторінка
+    чекає результату (long-poll /api/property/{id}/liveness) і показує банер,
+    лише якщо щось змінилось — або якщо перевірку відкладено, бо йде цикл збору
+    (deferred: запити до джерел — після циклу). Блок позначений <!--live-check-->:
+    порівняння сторінок «до/після» його вирізає; з verify=0 його немає зовсім. -#}
+{%- if live_check %}
+<!--live-check--><div id="live-check" hidden role="status" aria-live="polite"
+  style="margin:12px 0;padding:10px 14px;border-radius:10px;background:var(--warn-bg,#fff4e0);color:var(--ink);font-size:14px"></div>
+<script>(function(){try{var box=document.getElementById("live-check"),url="/api/property/{{ item.property_id|int }}/liveness?wait={{ live_check.wait_s|int }}",t0=Date.now(),cap={{ (live_check.wait_s * 2000)|int }};
+function n(k,one,few,many){k=Math.abs(k);var a=k%100,b=k%10;return a>10&&a<15?many:b===1?one:b>1&&b<5?few:many;}
+function show(d){var parts=[];if(d.delisted)parts.push(d.delisted+" "+n(d.delisted,"оголошення знято","оголошення знято","оголошень знято"));if(d.restored)parts.push(d.restored+" "+n(d.restored,"повернулось у продаж","повернулись у продаж","повернулись у продаж"));if(!parts.length)return;box.innerHTML="Актуальність перевірено щойно: "+parts.join(", ")+" — <a href=\"\" onclick=\"location.reload();return false\">оновити сторінку</a>.";box.hidden=false;}
+function poll(){fetch(url,{cache:"no-store",headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).then(function(d){if(!d)return;if(d.state==="pending"||d.state==="queued"||d.state==="running"){if(Date.now()-t0<cap)setTimeout(poll,{{ live_check.poll_ms|int }});return;}if(d.state==="done")show(d);else if(d.state==="deferred"){box.textContent="Іде цикл збору — актуальність оголошень перевіримо, щойно він завершиться.";box.hidden=false;}}).catch(function(){});}
+poll();}catch(e){}})();</script><!--/live-check-->
+{%- endif %}
 
 {# --- головна відповідь --- #}
 {% if verdict %}

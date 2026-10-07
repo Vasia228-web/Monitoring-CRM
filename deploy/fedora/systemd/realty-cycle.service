@@ -20,7 +20,18 @@ TimeoutStartSec=2h20min
 KillMode=control-group
 Restart=on-failure
 RestartSec=10min
-Nice=5
+# Збір поступається сайту (Блок 2, крок E5, D50): під час циклу сайт гальмував
+# до 41 с і 120 с (цикл 146, Етап 0), а власник поставив умову «сайт має
+# пріоритет над збором». Nice 5 → 15, частка процесора 20 проти 1000 у сайту,
+# найнижчий пріоритет диска в класі best-effort. OOMScoreAdjust=500: за
+# нестачі пам'яті ядро вбиває Chromium збору, а не сайт (підвищувати можна без
+# прав). Усе це діє в користувацькому менеджері без root (див. realty-web.service);
+# збір від цього не повільніший у спокої — лише поступається, коли сайт працює.
+Nice=15
+CPUWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+OOMScoreAdjust=500
 # 3,7 ГБ на всю машину: Chromium не має витіснити решту системи.
 MemoryHigh=1800M
 MemoryMax=2600M

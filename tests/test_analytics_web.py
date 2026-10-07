@@ -217,24 +217,41 @@ def test_snapshot_is_reused_between_requests(client):
     assert first.segments
 
 
-def test_snapshot_is_rebuilt_after_deduplication_changes_masters(tmp_path):
-    """Перезведення майстер-записів не змінює `listings`, але має скидати кеш."""
+def test_snapshot_is_rebuilt_after_deduplication_changes_masters(tmp_path, monkeypatch):
+    """Перезведення майстер-записів не змінює `listings`, але має скидати кеш.
+
+    Блок 2 (крок E5, D50): ознака «дані змінились» — не повний прохід таблиці
+    на кожен запит (досі: кількість і max(last_seen) оголошень, кількість
+    квартир), а покоління «analytics» в ops.db, яке збільшує диригент після
+    кроку «дублі» (і `cli.py dedup`). Знімок перебудовується ФОНОМ: поки
+    перебудова йде, запит отримує попередній — тут її чекаємо явно.
+    """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
+    from realty import ops, webcache
     from realty.analytics import cache as cache_mod
     from realty.models import Base, Property
 
+    ops_engine = create_engine(f"sqlite:///{tmp_path/'ops.db'}", future=True)
+    monkeypatch.setattr(ops, "engine", ops_engine)
+    monkeypatch.setattr(ops, "OpsSession",
+                        sessionmaker(bind=ops_engine, expire_on_commit=False, future=True))
     engine = create_engine(f"sqlite:///{tmp_path/'c.db'}", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     cache_mod.invalidate()
+    webcache.GENERATIONS.poll()
     with Session() as s:
         s.add(Property(fingerprint="a", rooms=2, area_total=50.0, price_per_sqm=1000.0))
         s.commit()
         first = cache_mod.get(s)
         s.add(Property(fingerprint="b", rooms=2, area_total=50.0, price_per_sqm=1100.0))
         s.commit()
+        assert cache_mod.get(s) is first           # без нового покоління — той самий
+        webcache.bump("analytics", "дублі")         # крок «дублі» скінчився
+        webcache.GENERATIONS.poll()                 # фоновий потік сайту
+        assert cache_mod.HOLDER.wait_rebuild(30)
         second = cache_mod.get(s)
     assert second is not first
     assert len(second.universe) == 2

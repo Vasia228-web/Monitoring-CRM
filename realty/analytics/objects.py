@@ -12,10 +12,9 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from ..models import Listing, PriceEvent, Property
-from .segments import Item, Universe, compare, verdict
+from .segments import Item, Universe, compare, segment_curve, verdict
 from .settings import Settings, load
 from .stats import diff_pct
-from .survival import Observation, estimate
 
 # Спостереження почалось разом із системою, а не з появою оголошення. Тому
 # «перша ціна» — це перша ціна, яку побачили МИ, і підпис має це говорити.
@@ -39,13 +38,19 @@ def price_history(session, property_id: int) -> dict:
 
     Перша ціна натомість береться по ВСІХ склеєних оголошеннях разом — саме
     так її й треба розуміти: найраніше, що ми бачили про цю квартиру.
+
+    Порядок подій з ОДНАКОВИМ часом — явно за оголошенням і id події (Блок 2,
+    D49): від нього залежать перша й остання точки й відсоток зміни. Досі
+    нічию розв'язував порядок оголошень з індексу за property_id (тобто id);
+    індекс Блоку 2 (property_id, якість, …) віддав би їх за якістю. На копії
+    Етапу 0 таких нічиїх 0 — вивід той самий.
     """
     rows = session.execute(
         select(PriceEvent.observed_at, PriceEvent.price_usd, PriceEvent.source,
                PriceEvent.listing_id, Listing.original_url)
         .join(Listing, Listing.id == PriceEvent.listing_id)
         .where(Listing.property_id == property_id, PriceEvent.price_usd.isnot(None))
-        .order_by(PriceEvent.observed_at)).all()
+        .order_by(PriceEvent.observed_at, PriceEvent.listing_id, PriceEvent.id)).all()
     if not rows:
         return {"points": [], "first": None, "last": None, "change_pct": None,
                 "changes": 0, "single_point": True, "tracks": 0, "note": None}
@@ -90,12 +95,18 @@ def cfg_or_default(cfg: Settings | None) -> Settings:
 
 
 def cross_source(session, property_id: int, cfg_hint: Settings | None = None) -> dict:
-    """Розбіжність ціни між майданчиками для одного й того самого об'єкта."""
+    """Розбіжність ціни між майданчиками для одного й того самого об'єкта.
+
+    ORDER BY id — явно: рядки з однаковою ціною стоять у тому порядку, у якому
+    їх віддала база, а досі це був порядок id (індекс за property_id). Новий
+    індекс міг би його непомітно змінити (Блок 2, D48).
+    """
     rows = session.execute(
         select(Listing.source, Listing.price_usd, Listing.original_url,
                Listing.published_at, Listing.is_active)
         .where(Listing.property_id == property_id,
-               Listing.price_usd.isnot(None))).all()
+               Listing.price_usd.isnot(None))
+        .order_by(Listing.id)).all()
     listings = [{"source": s, "price": p, "url": u, "published_at": pub, "active": a}
                 for s, p, u, pub, a in rows]
     prices = [x["price"] for x in listings]
@@ -145,6 +156,10 @@ def liquidity(universe: Universe, item: Item, cfg: Settings | None = None) -> di
 
     Поки зафіксованих зникнень мало, блок чесно відмовляється рахувати —
     крива по кількох подіях була б плоскою лінією без змісту.
+
+    Крива — одна на сегмент (кімнатність × стан × ринок) і живе в пам'яті
+    знімка (Блок 2, D48): досі її рахували заново на кожне відкриття картки.
+    Словник із пам'яті спільний, тому підпис сегмента дописуємо в копію.
     """
     cfg = cfg or load()
     comparison = compare(universe, item, cfg, value=lambda o: o.days_listed,
@@ -152,12 +167,7 @@ def liquidity(universe: Universe, item: Item, cfg: Settings | None = None) -> di
     if comparison is None:
         return {"available": False, "events": 0, "needed": cfg.survival_min_events,
                 "message": "Схожих квартир надто мало, щоб про це говорити."}
-    peers = [o for o in universe.items
-             if o.band == item.band and o.condition == item.condition
-             and o.market == item.market]
-    observations = [Observation(days=obs[0], event=obs[1], entry=obs[2])
-                    for o in peers if (obs := o.observation) is not None]
-    result = estimate(observations, cfg)
+    result = dict(segment_curve(universe, cfg, item))
     result["segment"] = comparison.label
     return result
 
@@ -166,7 +176,8 @@ def analyse(session, universe: Universe, property_id: int,
             cfg: Settings | None = None) -> dict | None:
     """Повний набір для сторінки об'єкта."""
     cfg = cfg or load()
-    item = next((o for o in universe.items if o.property_id == property_id), None)
+    # Покажчик знімка замість проходу по всіх об'єктах (Блок 2, D48).
+    item = universe.by_id.get(property_id)
     if item is None:
         return None
     prop = session.get(Property, property_id)

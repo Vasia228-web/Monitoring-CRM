@@ -17,6 +17,11 @@
   python cli.py serve --port 8000      # веб-інтерфейс
   python cli.py stats                  # що вже є в базі
   python cli.py config check           # перевірити конфіги в config/ (перед розгортанням)
+  python cli.py speed probe            # коротко поміряти робочий сайт (лише 127.0.0.1)
+  python cli.py speed report           # зведення «Швидкість» із журналу часу
+  python cli.py db migrate --dry-run   # план змін схеми (індекси, колонки), нічого не пише
+  python cli.py db migrate             # застосувати під замком циклу (між циклами!)
+  python cli.py db plans               # чи не проходять запити сайту всю таблицю
 """
 from __future__ import annotations
 
@@ -361,6 +366,10 @@ def cmd_dedup(args: argparse.Namespace) -> int:
         dedup.RULES if args.rules == "all" else [r for r in args.rules.split(",") if r])
     with session_scope() as s:
         st = rebuild(s, dry_run=args.dry_run, rules=rules)
+    if not args.dry_run:
+        # Квартири перебудовано — знімок «Аналітики» сайту застарів (Блок 2, E5).
+        from realty import webcache
+        webcache.bump("analytics", "cli dedup")
     print("\n" + "=" * 58)
     print("МІЖПЛАТФОРМНА ДЕДУПЛІКАЦІЯ" + ("  (пробний прогін)" if args.dry_run else ""))
     print("=" * 58)
@@ -499,6 +508,79 @@ def cmd_config(args: argparse.Namespace) -> int:
                   "це свідомо, додайте --allow-override.")
             return 1
     return 1 if bad else 0
+
+
+def cmd_speed(args: argparse.Namespace) -> int:
+    """Вимірювання швидкості сайту (Блок 2, D49) — без зайвих процесів сайту."""
+    import json
+
+    from realty import speedprobe
+
+    if args.action == "report":
+        from realty import ops
+        from realty.web.perf import summary
+        ops.init_ops()                      # таблиці журналу часу — якщо їх ще немає
+        data = summary()
+        print(json.dumps(data, ensure_ascii=False, indent=1) if args.json
+              else speedprobe.render_summary(data))
+        return 0
+    if args.action == "priorities":
+        data = speedprobe.priorities()
+        print(json.dumps(data, ensure_ascii=False, indent=1) if args.json
+              else speedprobe.render_priorities(data))
+        return 0
+    return speedprobe.main(phase=args.phase, base=args.base, repeats=args.repeats,
+                           as_json=args.json)
+
+
+def cmd_db(args: argparse.Namespace) -> int:
+    """Схема бази: план і застосування міграції, плани запитів сайту (Блок 2, D50)."""
+    from realty import dbmigrate
+
+    if args.action == "plans":
+        return dbmigrate.plans(preview=args.preview, verbose=args.show_all)
+    return dbmigrate.migrate(dry_run=args.dry_run, wait_min=args.wait_min)
+
+
+def cmd_lookup(args: argparse.Namespace) -> int:
+    """Перевірки на вимогу з черги ops.lookup_checks (процес шаблону realty-lookup@).
+
+    Ліміти — з config/speed.toml [open_check] (D47 п. 1: чисел у коді немає):
+    `drain_budget_s` — після нього нових завдань не брати, `job_timeout_s` —
+    ліміт процесу (TimeoutStartSec у realty-lookup@.service).
+    """
+    import signal
+
+    from realty import configfiles
+    from realty.db import init_db
+    from realty.lookup import opened
+
+    # SIGTERM від systemd (TimeoutStartSec, зупинка служби) — як SystemExit:
+    # поточне завдання закривається «failed», а не лишається «running», і
+    # виконуються обробники atexit (txnwatch). SIGKILL і OOM цього не дадуть —
+    # тому покоління «lists» процес збільшує одразу після завдання, а не при виході.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    cfg = configfiles.load("speed").open_check
+    init_db()
+    done = opened.run(args.job, drain=not args.no_drain, budget_s=cfg.drain_budget_s,
+                      timeout_s=cfg.job_timeout_s)
+    for job_id, state in done:
+        print(f"завдання {job_id}: {state}")
+    return 0
+
+
+def cmd_webcache(args: argparse.Namespace) -> int:
+    """Покоління кешу сайту: показати або збільшити вручну."""
+    from realty import webcache
+
+    if args.action == "bump":
+        ok = webcache.bump(args.scope, args.reason or "вручну")
+        print("збільшено" if ok else "не вдалося (див. журнал)")
+        return 0 if ok else 1
+    for row in webcache.describe() or [{"name": "—", "gen": 0, "changed_at": None,
+                                        "reason": "ще ніхто не збільшував"}]:
+        print(f"  {row['name']:<10} {row['gen']:>6}  {row['changed_at'] or '—'}  {row['reason'] or ''}")
+    return 0
 
 
 def cmd_stats(_: argparse.Namespace) -> int:
@@ -655,8 +737,56 @@ def main() -> int:
                     help="свідомо перевірити теку з REALTY_CONFIG_DIR (тести, експерименти)")
     cf.set_defaults(func=cmd_config)
 
+    sp = sub.add_parser("speed", help="швидкість сайту: зонд, зведення, пріоритети служб")
+    sp.add_argument("action", choices=("probe", "report", "priorities"),
+                    help="probe — коротко поміряти робочий сайт на 127.0.0.1; "
+                         "report — зведення з журналу часу (ops.db); "
+                         "priorities — чинні пріоритети служб (cgroup, nice, ionice)")
+    sp.add_argument("--phase", choices=("idle", "cycle", "dedup"), default="idle",
+                    help="idle — одразу; cycle — дочекатися циклу; dedup — кроку «дублі»")
+    sp.add_argument("--base", help="адреса сайту (лише 127.0.0.1/localhost); типово — з config/speed.toml")
+    sp.add_argument("--repeats", type=int, help="повторів кожної адреси (типово — з конфігу)")
+    sp.add_argument("--json", action="store_true", help="сирі числа замість таблиці")
+    sp.set_defaults(func=cmd_speed)
+
+    dbp = sub.add_parser("db", help="схема бази: міграція (індекси, колонки) і плани запитів")
+    dbp.add_argument("action", choices=("migrate", "plans"),
+                     help="migrate — привести схему до моделі під замком циклу; "
+                          "plans — EXPLAIN запитів сайту (лише читання)")
+    dbp.add_argument("--dry-run", action="store_true", help="migrate: лише план DDL")
+    dbp.add_argument("--wait-min", type=float, default=10.0,
+                     help="migrate: скільки чекати, поки цикл звільнить замок (типово 10)")
+    dbp.add_argument("--preview", action="store_true",
+                     help="plans: на тимчасовій копії бази з індексами міграції")
+    dbp.add_argument("--all", dest="show_all", action="store_true",
+                     help="plans: показати плани всіх запитів, а не лише поганих")
+    dbp.set_defaults(func=cmd_db)
+
+    lk = sub.add_parser("lookup", help="перевірки на вимогу з черги (процес realty-lookup@)")
+    lk.add_argument("action", choices=("check",))
+    lk.add_argument("--job", type=int, required=True, help="номер завдання ops.lookup_checks")
+    lk.add_argument("--no-drain", action="store_true",
+                    help="лише це завдання, без інших, що чекають у черзі")
+    lk.set_defaults(func=cmd_lookup)
+
+    wc = sub.add_parser("webcache", help="покоління кешу сайту (lists, analytics)")
+    wc.add_argument("action", choices=("show", "bump"))
+    wc.add_argument("scope", nargs="?", default="lists", choices=("lists", "analytics"))
+    wc.add_argument("--reason")
+    wc.set_defaults(func=cmd_webcache)
+
     args = p.parse_args()
     _setup_logging(args.verbose)
+    # Вікна транзакцій запису кроку циклу (Блок 2, D49): лише якщо диригент
+    # поставив TXN_WATCH=1. Вмикається до першого звернення до бази.
+    from realty import txnwatch
+    txnwatch.install_from_env(sys.argv)
+    # Покоління кешу сайту (Блок 2, крок E5, D50): будь-яка команда, що
+    # зафіксувала запис у realty.db, при виході збільшує «lists» — сайт
+    # побачить зміни, навіть якщо команда не з переліку. Сайт (serve) свої
+    # записи бачить у власному процесі.
+    if args.cmd != "serve":
+        txnwatch.install_autobump(sys.argv)
     return args.func(args)
 
 

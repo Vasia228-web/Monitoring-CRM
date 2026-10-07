@@ -1,0 +1,33 @@
+[Unit]
+Description=Realty: перевірка на вимогу, завдання %i (окремо від сайту)
+# Сайт сам у мережу не ходить (Блок 2, крок E5, D50): відкриття квартири ставить
+# завдання в ops.lookup_checks і запускає цей шаблон
+# (`systemctl --user start --no-block realty-lookup@<номер>.service`). Процес
+# виконує своє завдання (і ті, що чекають у черзі) та виходить. Спільний із
+# Блоком 5 («Перевірити зараз»). Черга «доїдається» одним процесом за раз
+# (замок data/lookup.lock): сайт не запускає другого, поки перший працює.
+# Екземпляр, що впав (тайм-аут, OOM), systemd прибирає сам — інакше в
+# `systemctl --user --failed` накопичувалось би по одному на номер завдання.
+CollectMode=inactive-or-failed
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py lookup check --job %i
+# Для Type=oneshot ліміт часу — TimeoutStartSec (RuntimeMaxSec до «activating»
+# не застосовується); те саме число, що open_check.job_timeout_s у
+# config/speed.toml: після нього сайт перестає чекати завдання.
+TimeoutStartSec=3min
+# Поступається сайту, як і цикл (без root).
+Nice=10
+CPUWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+OOMScoreAdjust=500
+# HEAD-запити без браузера: пік RSS процесу на M4 — 86 МБ (справжній
+# verify_batch на 26–40 оголошень, мережа заборонена; замір D50, рецензія);
+# стеля — з запасом (план Блоку 5). Процес один за раз (lookup.lock).
+MemoryHigh=700M
+MemoryMax=1000M

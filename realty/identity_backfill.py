@@ -26,7 +26,7 @@ from pathlib import Path
 
 from sqlalchemy import func, or_, select, update
 
-from . import identity, ops
+from . import identity, ops, txnwatch
 from .config import DATA_DIR
 from .db import SessionLocal, init_db
 from .fetcher import FetchError, Fetcher
@@ -160,6 +160,11 @@ def _domria(deadline: float, report: dict) -> None:
                         identity={**(old or {}), **ident}, last_seen=Listing.last_seen))
                     done += 1
                 s.commit()
+            # Нічний пакет записано — покоління кешу сайту (Блок 2, E5, D50),
+            # не чекаючи кінця дозбору (до 105 хв).
+            bump = txnwatch.autobump()
+            if bump is not None:
+                bump.bump_if_dirty("lists", "дозбір identity")
     finally:
         fetcher.close()
         report["done"]["domria"] = done

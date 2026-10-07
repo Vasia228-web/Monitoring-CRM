@@ -162,13 +162,19 @@ def _kill_group(proc: subprocess.Popen) -> None:
         log.error("процес %s не завершився навіть після SIGKILL", proc.pid)
 
 
-def run_step(step: Step, budget: float) -> tuple[StepResult, int | None]:
-    """Виконує крок. Повертає результат і PID дочірнього процесу."""
+def run_step(step: Step, budget: float,
+             env: dict[str, str] | None = None) -> tuple[StepResult, int | None]:
+    """Виконує крок. Повертає результат і PID дочірнього процесу.
+
+    `env` — додаткові змінні оточення кроку (наприклад, TXN_WATCH для виміру
+    вікон запису); решта оточення успадковується, як і раніше.
+    """
     limit = min(step.timeout, budget)
     started = time.monotonic()
     log.info("▶ %s (ліміт %.0f хв)", step.name, limit / 60)
     try:
-        proc = subprocess.Popen(step.argv, cwd=ROOT, start_new_session=True)
+        proc = subprocess.Popen(step.argv, cwd=ROOT, start_new_session=True,
+                                env={**os.environ, **env} if env else None)
     except OSError as e:
         return StepResult(step.name, "failed", 0.0, None, f"не запустився: {e}"), None
     try:
@@ -220,9 +226,73 @@ class CycleLock:
 
     def release(self) -> None:
         if self._fh is not None:
+            # Вміст (PID, старт) стираємо ДО зняття замка, поки ще тримаємо його:
+            # запасна перевірка `lock_busy` (не Linux) судить саме за вмістом,
+            # і PID процесу, що відпустив замок, але ще живе, не має виглядати
+            # як «цикл іде».
+            try:
+                self._fh.seek(0)
+                self._fh.truncate()
+                self._fh.flush()
+            except OSError:
+                pass
             fcntl.flock(self._fh, fcntl.LOCK_UN)
             self._fh.close()
             self._fh = None
+
+
+PROC_LOCKS = Path("/proc/locks")
+
+
+def lock_busy(path: Path = LOCK_PATH, *, proc_locks: Path = PROC_LOCKS,
+              max_age_s: float | None = None) -> dict | None:
+    """Хто тримає замок `path` — або None, якщо ніхто. Сам замок НІКОЛИ не бере.
+
+    Навіщо не брати. `run_cycle` бере замок неблокуючи: якби перевірка «чи йде
+    цикл» хоч на мить брала його (навіть спільно, LOCK_SH), цикл, що стартує саме
+    в цю мить, вирішив би, що попередній ще триває, і пропустив би свій запуск
+    (план Блоку 5, `lock_busy`; інтеграція, конфлікт 19). Тому:
+      * Linux — /proc/locks: запис FLOCK (не очікувач «->») з inode файла замка.
+        Пристрій не порівнюємо: на btrfs (Fedora) st_dev файла — анонімний
+        пристрій підтому, а /proc/locks показує пристрій суперблока. Збіг inode
+        на іншому диску дав би хибне «зайнято» — безпечний бік (відкласти);
+      * інші системи (Mac для розробки) — вміст файла: PID живий і замок узято
+        не давніше за `max_age_s` (типово RUN_TIMEOUT × 1,5 — після цього цикл
+        і так примусово зупиняють). Вміст стирається при звільненні (`release`).
+    """
+    try:
+        inode = path.stat().st_ino
+    except OSError:
+        return None                                   # файла немає — замок ніхто не брав
+    holder = CycleLock(path).holder()
+    try:
+        text = proc_locks.read_text()
+    except OSError:
+        text = None
+    if text is not None:
+        for line in text.splitlines():
+            parts = line.split()
+            # Очікувач має «->» на місці типу — він замка не тримає.
+            if len(parts) < 6 or parts[1] != "FLOCK":
+                continue
+            dev_ino = parts[5].rsplit(":", 1)
+            if len(dev_ino) == 2 and dev_ino[1].isdigit() and int(dev_ino[1]) == inode:
+                return {**holder, "via": "proc_locks", "lock_pid": int(parts[4])
+                        if parts[4].lstrip("-").isdigit() else None}
+        return None
+    pid, started = holder.get("pid"), holder.get("started")
+    if not pid or not started:
+        return None
+    limit = RUN_TIMEOUT * 1.5 if max_age_s is None else max_age_s
+    if time.time() - float(started) > limit:
+        return None
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass                                          # процес є, але чужий — вважаємо живим
+    return {**holder, "via": "pid"}
 
 
 def _reap_overdue_holder(lock: CycleLock, run_timeout: float) -> bool:
@@ -281,6 +351,29 @@ def _close_killed_runs(pid: int, source: str, note: str) -> None:
             run.errors = (run.errors or 0) + 1
 
 
+def _txn_watch_enabled() -> bool:
+    """Чи міряти вікна запису кроків (config/speed.toml, `txn_watch.enabled`).
+
+    Зламаний конфіг не має зупинити збір: тоді вимір просто вимкнено, а
+    помилку видно в журналі (`cli.py config check` мав зупинити таке ще до
+    розгортання). Збір важливіший за вимір.
+    """
+    from . import configfiles
+
+    try:
+        return configfiles.load("speed").txn_watch.enabled
+    except configfiles.ConfigError as e:
+        log.error("config/speed.toml не читається — вікна запису кроків не міряються: %s", e)
+        return False
+
+
+def _step_env(step: Step, txn_watch: bool) -> dict[str, str] | None:
+    if not txn_watch:
+        return None
+    from .txnwatch import ENV_FLAG, ENV_STEP
+    return {ENV_FLAG: "1", ENV_STEP: step.name}
+
+
 def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
               steps: list[Step] | None = None, run_timeout: float = RUN_TIMEOUT,
               tasks: bool = True,
@@ -305,6 +398,7 @@ def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
 
     cycle_id = ops.start_cycle(trigger, socket.gethostname())
     ops.beat("цикл: старт", busy=True)
+    txn_watch = _txn_watch_enabled()
     results: list[StepResult] = []
     child_pids: list[int] = []
     timed_out = False
@@ -317,8 +411,13 @@ def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
                 results.append(StepResult(step.name, "skipped",
                                           note="вичерпано час усього циклу"))
                 continue
-            result, pid = run_step(step, remaining)
+            # Назва кроку — у серцебиття: сайт позначає нею свій журнал часу, а
+            # зонд швидкості за нею чекає кроку «дублі» (Блок 2, D49). Один
+            # рядок ops.db на крок.
+            ops.beat(f"{ops.STEP_NOTE}{step.name}", busy=True)
+            result, pid = run_step(step, remaining, env=_step_env(step, txn_watch))
             results.append(result)
+            _bump_after(step, result)
             if pid and step.kind == "source":
                 child_pids.append(pid)
                 if result.status == "timeout":
@@ -355,7 +454,32 @@ def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
                          steps=json.dumps([asdict(r) for r in results], ensure_ascii=False))
         ops.beat(f"цикл: {status}", busy=False)
         lock.release()
+        # Кінець циклу — знімок «Аналітики» сайту перебудовується (рішення
+        # власника D46: «кеш оновлюється після кожного циклу збору»).
+        if any(r.status in ("ok", "timeout", "failed") for r in results):
+            from . import webcache
+            webcache.bump("analytics", "кінець циклу")
     return result
+
+
+# Кроки, після яких застаріває знімок «Аналітики» (а не лише список): квартири
+# перебудовано. Інші кроки змінюють оголошення — для них досить «lists».
+ANALYTICS_STEPS = ("дублі",)
+
+
+def _bump_after(step: Step, result: StepResult) -> None:
+    """Покоління кешу сайту після КОЖНОГО кроку (Блок 2, крок E5, D50).
+
+    Процес кроку й сам збільшує «lists», якщо щось записав (txnwatch), але
+    процес, убитий за тайм-аутом, цього не встигне — тож диригент робить це
+    завжди. Кеш сайту застаріває не більше ніж на один крок.
+    """
+    if result.status == "skipped":
+        return
+    from . import webcache
+    webcache.bump("lists", step.name)
+    if step.name in ANALYTICS_STEPS:
+        webcache.bump("analytics", step.name)
 
 
 def render(result: CycleResult) -> str:

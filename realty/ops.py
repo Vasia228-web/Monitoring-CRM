@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import os
 import threading
+import weakref
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, Integer, String, Text, create_engine, event, func, inspect,
-    select, text,
+    Boolean, DateTime, Float, Index, Integer, String, Text, create_engine, event, func,
+    inspect, select, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -175,8 +176,139 @@ class DedupSample(OpsBase):
     details: Mapped[str | None] = mapped_column(Text)               # JSON по кожній квартирі
 
 
+class WebTiming(OpsBase):
+    """Скільки сервер відповідав на один запит сайту (Блок 2, D48).
+
+    Пишеться пакетами фоном (`web/deferred.py`), а не в самому запиті. Хто
+    саме дивився — не зберігається: ні IP, ні User-Agent, лише роль. Маршрут —
+    шаблон (`/property/{property_id}`), а не адреса з номером квартири.
+    """
+
+    __tablename__ = "web_timings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    route: Mapped[str] = mapped_column(String(128))
+    method: Mapped[str] = mapped_column(String(8))
+    status: Mapped[int] = mapped_column(Integer)
+    ms: Mapped[float] = mapped_column(Float)           # до початку відповіді (Server-Timing)
+    bytes: Mapped[int | None] = mapped_column(Integer)
+    cycle_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    cycle_step: Mapped[str | None] = mapped_column(String(96))
+    role: Mapped[str | None] = mapped_column(String(16))
+    config_hash: Mapped[str | None] = mapped_column(String(16))   # версія config/speed.toml
+    # Скільки з `ms` пішло на перебудову знімка «Аналітики» в цьому ж запиті;
+    # None — знімок був готовий (теплий запит). Без цього холодні запити (≈5 с
+    # на Fedora) змішувались би з теплими (≈0,7 с) в одне p95 (D49).
+    snapshot_ms: Mapped[float | None] = mapped_column(Float)
+
+
+class WebRum(OpsBase):
+    """Час переходу між сторінками, як його побачив браузер (маячок RUM, Блок 2).
+
+    Ціль власника (D46 п. 6) — перехід між вкладками з телефона на вже
+    відкритому з'єднанні ≤1,5 с — видно лише в браузері. Без IP і без рядка
+    User-Agent: лише роль і «телефон/комп'ютер».
+    """
+
+    __tablename__ = "web_rum"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    route: Mapped[str] = mapped_column(String(128))
+    nav_type: Mapped[str | None] = mapped_column(String(16))   # navigate | reload | back_forward
+    reused: Mapped[bool | None] = mapped_column(Boolean)      # з'єднання вже було відкрите
+    ttfb_ms: Mapped[int | None] = mapped_column(Integer)
+    dcl_ms: Mapped[int | None] = mapped_column(Integer)
+    load_ms: Mapped[int | None] = mapped_column(Integer)
+    transfer_bytes: Mapped[int | None] = mapped_column(Integer)
+    server_ms: Mapped[float | None] = mapped_column(Float)    # Server-Timing цієї ж сторінки
+    proto: Mapped[str | None] = mapped_column(String(16))
+    device: Mapped[str | None] = mapped_column(String(8))     # mobile | desktop
+    role: Mapped[str | None] = mapped_column(String(16))
+    resources: Mapped[str | None] = mapped_column(Text)       # JSON [[маршрут /api, мс], …]
+    config_hash: Mapped[str | None] = mapped_column(String(16))
+
+
+class WriteWindow(OpsBase):
+    """Найдовше вікно транзакції запису в realty.db одного процесу кроку циклу.
+
+    Поки процес тримає транзакцію запису, кнопки власника чекають (на Fedora
+    виміряно 8,9 с під блокуванням кроку «дублі», D48). `realty/txnwatch.py`
+    міряє від першої зміни в транзакції до commit/rollback — щоб лікувати
+    довгі блокування за виміром, а не наосліп.
+    """
+
+    __tablename__ = "write_windows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    process: Mapped[str | None] = mapped_column(String(64))    # команда cli.py
+    step: Mapped[str | None] = mapped_column(String(96))       # крок циклу, якщо є
+    max_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    total_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    txns: Mapped[int] = mapped_column(Integer, default=0)
+    max_sql: Mapped[str | None] = mapped_column(String(160))   # з чого почалось найдовше вікно
+    seconds: Mapped[float | None] = mapped_column(Float)       # скільки жив процес
+
+
+class WebGeneration(OpsBase):
+    """Покоління даних для кешів сайту (Блок 2, крок E5, D50).
+
+    «lists» — список, лічильники, зведення: збільшує диригент після КОЖНОГО
+    кроку циклу і будь-який процес, що зафіксував запис у realty.db, при виході
+    (`txnwatch.install_autobump`). «analytics» — знімок «Аналітики»: після
+    кроку «дублі» й у кінці циклу. Сайт читає таблицю фоном раз на
+    `generations.poll_s` і скидає лише кеші, чиє покоління змінилось — без
+    повних проходів таблиці на кожен запит.
+    """
+
+    __tablename__ = "web_generations"
+
+    name: Mapped[str] = mapped_column(String(16), primary_key=True)
+    gen: Mapped[int] = mapped_column(Integer, default=0)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    reason: Mapped[str | None] = mapped_column(String(96))
+
+
+class LookupCheck(OpsBase):
+    """Черга перевірок актуальності «на вимогу» (Блок 2 E5; спільна з Блоком 5).
+
+    Сайт сам у мережу не ходить (інтеграція, конфлікт «перевірка під час
+    відкриття»): відкриття квартири ставить сюди завдання `kind="opened"`, а
+    виконує його окремий короткий процес (`cli.py lookup check --job N`,
+    шаблон systemd realty-lookup@). Сторінка дізнається результат long-poll'ом
+    GET /api/property/{id}/liveness. Блок 5 додасть свої колонки й `kind`.
+    Ні IP, ні рядка браузера тут немає.
+    """
+
+    __tablename__ = "lookup_checks"
+    __table_args__ = (Index("ix_lookup_key_created", "key", "created_at"),
+                      Index("ix_lookup_state", "state"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))                # opened (Блок 5: lookup)
+    key: Mapped[str] = mapped_column(String(64))                 # «property:123»
+    property_id: Mapped[int | None] = mapped_column(Integer)
+    # queued → running → done | failed; skipped — нічого перевіряти (усе вже
+    # перевірене менш ніж opened_recheck_minutes тому або немає що перевіряти,
+    # чи збір на машині вимкнено — COLLECTOR_OFF). deferred — замок циклу
+    # зайнятий: перевірка (і мережа, і запис) — після нього (інтеграція,
+    # конфлікт 5), далі знову queued → running → …
+    state: Mapped[str] = mapped_column(String(12), default="queued")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    pid: Mapped[int | None] = mapped_column(Integer)
+    message: Mapped[str | None] = mapped_column(String(200))
+    result: Mapped[str | None] = mapped_column(Text)             # JSON: checked/delisted/…
+
+
 SUCCESS_STATUSES = ("ok", "partial")
 
+# Скільки чекати зайняту ops.db. Фоновий запис сайту ставить собі коротший
+# тайм-аут на свою транзакцію й повертає це значення назад (web/deferred.py).
+BUSY_TIMEOUT_MS = 30_000
 
 engine = create_engine(OPS_DB_URL, future=True)
 
@@ -186,16 +318,42 @@ def _tune_ops_sqlite(dbapi_connection, _record) -> None:
     """Те саме, що для основної бази: телеметрію пишуть кілька процесів одразу."""
     cur = dbapi_connection.cursor()
     try:
-        cur.execute("PRAGMA busy_timeout = 30000")
+        cur.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         cur.execute("PRAGMA journal_mode = WAL")
     finally:
         cur.close()
 OpsSession = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
+# Для яких рушіїв схему ops.db уже перевірено в цьому процесі — і скільки таблиць
+# тоді знала модель (Блок 2, D49). init_ops() викликається перед кожним
+# зверненням до ops.db: на кожен запит того, хто ввійшов (перевірка сесії), і
+# 11 разів на /api/status. Кожен раз — create_all і перевірка колонок, по 3
+# PRAGMA на таблицю: з новими таблицями Блоку 2 — 396 PRAGMA на один
+# /api/status із кукою. Схема за життя процесу не змінюється, тож досить
+# одного разу. Замір D49 (M4, копія Етапу 0): /api/status 44 → 29 мс,
+# перевірка сесії 1,24 → 0,15 мс, сторінка /status 2,0 → 0,7 мс. Ключ — сам об'єкт рушія (тести підставляють свій на
+# tmp_path — для нього перевірка пройде заново) і кількість таблиць моделі:
+# модуль із новою таблицею, імпортований пізніше (команди cli.py імпортують
+# модулі всередині команди), теж отримає свою таблицю, як і досі.
+_ready: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_ready_lock = threading.Lock()
 
-def init_ops() -> None:
-    OpsBase.metadata.create_all(engine)
-    _add_missing_columns()
+
+def init_ops(*, force: bool = False) -> None:
+    """Створює відсутні таблиці й колонки ops.db — один раз на процес і рушій.
+
+    `force=True` — перевірити заново (тести, що видаляють таблиці).
+    """
+    tables = len(OpsBase.metadata.tables)
+    current = engine
+    if not force and _ready.get(current) == tables:
+        return
+    with _ready_lock:
+        if not force and _ready.get(current) == tables:
+            return
+        OpsBase.metadata.create_all(current)
+        _add_missing_columns()
+        _ready[current] = tables
 
 
 def _add_missing_columns() -> None:
@@ -342,6 +500,30 @@ def beat(note: str | None = None, busy: bool | None = None) -> None:
             hb.note = note[:200]
         if busy is not None:
             hb.busy = busy
+
+
+# Підпис кроку в серцебитті (runner.py пише його перед кожним кроком циклу).
+STEP_NOTE = "крок: "
+
+
+def current_cycle(max_age_s: float) -> tuple[bool, str | None]:
+    """(чи йде цикл збору, назва кроку) — для журналу часу сайту й зонда (Блок 2).
+
+    «Йде» — є запис циклу «running», молодший за `max_age_s`: цикл, що впав, не
+    закриває свого запису, і без стелі віку вважався б живим вічно. Крок —
+    із серцебиття, куди диригент перед кожним кроком пише «крок: <назва>».
+    Лише читання: два дешеві запити до ops.db.
+    """
+    since = _now() - timedelta(seconds=max_age_s)
+    with ops_session() as s:
+        running = s.scalar(select(func.count()).select_from(CycleRecord).where(
+            CycleRecord.status == "running", CycleRecord.started_at >= since)) or 0
+        hb = s.get(Heartbeat, 1)
+        note = hb.note if hb is not None else None
+    step = None
+    if running and note and note.startswith(STEP_NOTE):
+        step = note[len(STEP_NOTE):][:96]
+    return bool(running), step
 
 
 # --- Зведення для дашборда ----------------------------------------------------

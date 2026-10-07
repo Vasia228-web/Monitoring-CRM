@@ -5,13 +5,16 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
+import logging
+
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
+from .. import configfiles
 from ..dedup import resolve_property_id
-from ..db import SessionLocal, init_db
+from ..db import SessionLocal, init_db, tune_for_web
 from ..ops import init_ops
 from ..models import (
     Condition, Listing, MarketType, PriceEvent, Property, effective_active, is_clean,
@@ -19,6 +22,7 @@ from ..models import (
 
 BASE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+log = logging.getLogger(__name__)
 
 
 def _relative_date(value) -> str:
@@ -76,16 +80,62 @@ templates.env.filters["relative_date"] = _relative_date
 templates.env.filters["money"] = _money
 templates.env.filters["plural"] = _plural
 
+def _speed_or_none():
+    """config/speed.toml або None: зламаний конфіг не має зупинити сайт (D49 п. 7)."""
+    try:
+        return configfiles.get("speed")
+    except configfiles.ConfigError as e:
+        log.error("config/speed.toml не читається — сайт без налаштувань швидкості: %s", e)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
     init_ops()
     warn_if_open()
-    yield
+    # Фоновий потік сайту (Блок 2, D49–D50): журнал часу й маячок, перегляди
+    # карток і last_seen сесій — пакетами; раз на `generations.poll_s` —
+    # покоління даних і стан циклу. Запит лише кладе рядок у буфер; при
+    # зупинці сайту буфер дописується.
+    from .perf import WRITER
+    WRITER.start()
+    # Потік перевірок при відкритті — одразу: завдання, що лишились із часу до
+    # перезапуску (відкладені на цикл чи не взяті), отримають процес перевірки,
+    # не чекаючи, поки хтось відкриє квартиру.
+    from .livecheck import LIVE
+    LIVE.start()
+    # Шаблони компілюються при першому рендері (~десятки мс на Fedora) — нехай
+    # це станеться до першого запиту, а не в ньому. Знімок «Аналітики» й типові
+    # списки рахуються фоном: перша людина після перезапуску їх не чекає.
+    for name in ("index.html", "processing.html", "analytics.html", "property.html",
+                 "status.html", "property_missing.html", "login.html"):
+        try:
+            templates.env.get_template(name)
+        except Exception as e:                      # noqa: BLE001 — лише прогрів
+            log.warning("шаблон %s не скомпілювався заздалегідь: %s", name, e)
+    from . import speedcache
+    speedcache.warm()
+    speedcache.BACKGROUND.submit("warm-analytics", _warm_analytics)
+    try:
+        yield
+    finally:
+        WRITER.stop()
+
+
+def _warm_analytics() -> None:
+    from ..analytics import cache
+
+    with SessionLocal() as s:
+        cache.get(s)
 
 
 app = FastAPI(title="Нерухомість Івано-Франківська", docs_url="/api/docs",
               lifespan=lifespan)
+
+# Кеш сторінок SQLite для з'єднань сайту (config/speed.toml, sqlite.cache_kb).
+if (_cfg := _speed_or_none()) is not None:
+    tune_for_web(_cfg.sqlite.cache_kb)
 
 # Сторінка стану системи та ручне управління збором.
 from .status import router as status_router  # noqa: E402
@@ -102,6 +152,25 @@ from .dedup_routes import router as dedup_router  # noqa: E402
 
 app.include_router(dedup_router)
 
+# Стан перевірки при відкритті квартири (Блок 2, крок E5): обидві ролі.
+from .livecheck import router as livecheck_router  # noqa: E402
+
+app.include_router(livecheck_router)
+
+# Стиснення на origin (Блок 2, крок E5, D50): сторінка списку 124 → ~12 КБ через
+# тунель, «Аналітика» 64 → ~10,5 КБ (план Блоку 2, D48); ~5 мс процесора на
+# Fedora. Поріг і рівень — config/speed.toml [gzip]; читаються на старті (зміна —
+# з перезапуском сайту); зламаний конфіг — без стиснення, як до Блоку 2.
+# Шар — ВНУТРІШНІЙ (додано першим), а не зовнішній, як писав план: зовні від
+# BaseHTTPMiddleware (вхід) тіло приходить потоком, і GZipMiddleware стискав би
+# навіть 70-байтні відповіді кнопок, ігноруючи поріг (виявив тест). Ціна —
+# Server-Timing включає ~5 мс стиснення: це теж час сервера.
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+
+if (_cfg := _speed_or_none()) is not None:
+    app.add_middleware(GZipMiddleware, minimum_size=_cfg.gzip.min_bytes,
+                       compresslevel=_cfg.gzip.level)
+
 # Захист усього інтерфейсу. Вмикається наявністю AUTH_USER/AUTH_PASSWORD,
 # тож локальна розробка не потребує пароля, а публічний хостинг — потребує.
 from .auth import (  # noqa: E402
@@ -111,6 +180,16 @@ from .auth import (  # noqa: E402
 app.add_middleware(AuthMiddleware)
 app.include_router(auth_router)
 templates.env.globals["current_role"] = current_role
+
+# Вимірювання швидкості (Блок 2, крок E2, D49): заголовок Server-Timing і журнал
+# часу на кожну відповідь, маячок браузера, зведення для власника. Проміжний
+# шар додано ОСТАННІМ — отже, він зовнішній і міряє весь шлях запиту разом із
+# перевіркою входу. Поблажок для 127.0.0.1 немає: тунель теж приходить звідти.
+from .perf import ServerTimingMiddleware, router as perf_router, rum_for  # noqa: E402
+
+app.add_middleware(ServerTimingMiddleware)
+app.include_router(perf_router)
+templates.env.globals["rum_for"] = rum_for
 
 
 @app.get("/robots.txt", include_in_schema=False)
@@ -140,7 +219,11 @@ def _num(value: str | None) -> float | None:
         return None
 
 
-from .queries import DEFAULT_SORT, MAX_ROWS, SORTS, listing_query
+from . import speedcache  # noqa: E402
+from .queries import (  # noqa: E402
+    DEFAULT_SORT, MAX_ROWS, SORTS, list_ids_select, listing_query, page_rows_select,
+    visible_now,
+)
 
 
 def _median(values: list[float]) -> float | None:
@@ -190,6 +273,56 @@ def _stats(session) -> dict:
     }
 
 
+def _cached_stats(session) -> dict:
+    """Зведення шапки списку й /api/stats — раз на покоління даних (Блок 2, E5).
+
+    Досі на КОЖЕН перегляд: 5 повних проходів таблиці й дві вибірки по ~28
+    тис. значень для медіан. Значення спільне — не змінювати.
+    """
+    return speedcache.stats(session, lambda: _stats(session))
+
+
+def _in_work(session) -> int:
+    """Скільки оголошень «в обробці» — живим запитом за ix_listings_in_progress.
+
+    Не кешується: значок у навігації має змінитись на НАСТУПНОМУ ж відкритті
+    після «взяти в обробку» (умова власника), а за індексом це SEARCH, а не
+    прохід таблиці.
+    """
+    return session.scalar(select(func.count()).select_from(Listing)
+                          .where(Listing.in_progress.is_(True))) or 0
+
+
+_thresholds_memo: dict = {}
+
+
+def _thresholds():
+    """Пороги якості — з пам'яті, доки файл той самий (час зміни й розмір).
+
+    Досі файл читався й розбирався на кожен перегляд списку. Немає файлу —
+    як і раніше, `load_thresholds` (рахує й зберігає).
+    """
+    from ..quality import rules
+
+    path = rules.THRESHOLDS_FILE
+    try:
+        st = path.stat()
+    except OSError:
+        return load_thresholds()
+    stamp = (str(path), st.st_mtime_ns, st.st_size)
+    if _thresholds_memo.get("stamp") != stamp:
+        _thresholds_memo.update(stamp=stamp, value=load_thresholds())
+    return _thresholds_memo["value"]
+
+
+def _page_rows(session, page_ids) -> list:
+    """Рядки сторінки за id — у порядку списку id (фаза 2)."""
+    if not len(page_ids):
+        return []
+    got = {r.id: r for r in session.scalars(page_rows_select(page_ids)) if visible_now(r)}
+    return [got[i] for i in page_ids if i in got]
+
+
 def _peer_comparison(row, thresholds) -> dict:
     """Наскільки об'єкт дорожчий або дешевший за схожі.
 
@@ -233,20 +366,25 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
     # з сирцем і ремонт із його відсутністю — через це кожен рядок показував
     # «+55%», «+76%», і цифра переставала щось означати: якщо всі вище
     # медіани, це вже не порівняння.
-    thresholds = load_thresholds()
-    stmt = listing_query(condition=condition, market=market, source=source,
-                         rooms=rooms, price_min=lo, price_max=hi, sort=sort,
-                         in_progress=in_progress, collapse=collapse)
+    thresholds = _thresholds()
+    # Список у дві фази (Блок 2, крок E5, D50): упорядковані id усіх рядків
+    # фільтра — з покривного індексу й з кешу за поколінням даних; лічильник
+    # «за фільтром» — їх кількість, сторінка — зріз. Рядки сторінки — за id.
+    # Той самий фільтр і порядок, що й досі, тож і рядки, і лічильник, і
+    # нумерація ті самі (scripts/page_equality.py: 0 відмінностей).
+    query = dict(condition=condition, market=market, source=source, rooms=rooms,
+                 price_min=lo, price_max=hi, sort=sort, in_progress=in_progress,
+                 collapse=collapse)
+    key = speedcache.list_key({**query, "all_ads": all_ads}, in_progress=in_progress,
+                              collapse=collapse)
     with SessionLocal() as s:
-        matched = s.scalar(
-            select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+        ids = speedcache.list_ids(
+            s, key, lambda: s.execute(list_ids_select(**query)).scalars().all())
+        matched = len(ids)
         pager = build_page(matched, page, per_page)
-        # Нарізає база: вибирати 15 тисяч записів заради сорока — це і
-        # повільно, і зайва пам'ять на кожен перегляд.
-        rows = s.scalars(stmt.limit(pager.size).offset(pager.offset)).all()
-        stats = _stats(s)
-        in_work = s.scalar(select(func.count()).select_from(Listing)
-                           .where(Listing.in_progress.is_(True))) or 0
+        rows = _page_rows(s, ids[pager.offset:pager.offset + pager.size])
+        stats = _cached_stats(s)
+        in_work = _in_work(s)
     peers = {row.id: _peer_comparison(row, thresholds) for row in rows}
     return templates.TemplateResponse(request, template, {
         "rows": rows, "stats": stats, "sources": sorted(stats["by_source"]),
@@ -363,6 +501,7 @@ def api_set_processing(listing_id: int, payload: dict = Body(default={})):
         row.in_progress = bool(value)
         row.in_progress_at = datetime.now() if value else None
         s.commit()
+        speedcache.owner_changed("in_progress")
         return JSONResponse({"ok": True, "id": row.id, "in_progress": row.in_progress,
                              "in_progress_at": row.in_progress_at.isoformat()
                              if row.in_progress_at else None})
@@ -393,6 +532,7 @@ def api_set_property_processing(property_id: int, payload: dict = Body(default={
             row.in_progress = bool(value)
             row.in_progress_at = now
         s.commit()
+        speedcache.owner_changed("in_progress")
         return JSONResponse({"ok": True, "property_id": property_id,
                              "listings": len(rows), "in_progress": bool(value)})
 
@@ -415,6 +555,9 @@ def api_set_status(listing_id: int, payload: dict = Body(default={})):
                                 status_code=404)
         row.manual_active = value
         s.commit()
+        # Рядок зникає зі списку (чи повертається), лічильники й «неактуальних»
+        # у зведенні — на наступному ж відкритті (умова власника для кешу).
+        speedcache.owner_changed("manual_active")
         return JSONResponse({
             "ok": True, "id": row.id, "manual_active": row.manual_active,
             "is_active": row.is_active,
@@ -473,9 +616,11 @@ def api_property_prices(property_id: int):
         if prop is None:
             return JSONResponse({"detail": "не знайдено"}, status_code=404)
         ids = [l.id for l in prop.listings]
+        # Події з однаковим часом — за оголошенням і id, явно (див.
+        # objects.price_history): порядок не має залежати від плану запиту.
         events = s.scalars(
             select(PriceEvent).where(PriceEvent.listing_id.in_(ids))
-            .order_by(PriceEvent.observed_at)
+            .order_by(PriceEvent.observed_at, PriceEvent.listing_id, PriceEvent.id)
         ).all()
         return JSONResponse({
             "property_id": property_id,
@@ -489,4 +634,25 @@ def api_property_prices(property_id: int):
 @app.get("/api/stats")
 def api_stats():
     with SessionLocal() as s:
-        return _stats(s)
+        return _cached_stats(s)
+
+
+def _warm_lists() -> None:
+    """Типові ключі «/» і «В обробці» та зведення — фоном після нового покоління.
+
+    Той самий шлях, що й у запиті (ключ, запит id, зведення), тож прогрітий
+    кеш — рівно те, що запит узяв би сам.
+    """
+    with SessionLocal() as s:
+        for in_progress in (None, True):
+            query = dict(condition="", market="", source="", rooms="", price_min=None,
+                         price_max=None, sort=DEFAULT_SORT, in_progress=in_progress,
+                         collapse=True)
+            key = speedcache.list_key({**query, "all_ads": ""}, in_progress=in_progress,
+                                      collapse=True)
+            speedcache.list_ids(s, key,
+                                lambda q=query: s.execute(list_ids_select(**q)).scalars().all())
+        _cached_stats(s)
+
+
+speedcache.set_warmer(_warm_lists)

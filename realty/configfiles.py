@@ -137,12 +137,27 @@ class SpeedDeferred:
     views_flush_s: float = field(**_limits(min=1))
     busy_timeout_ms: int = field(**_limits(min=0))
     session_touch: bool
+    max_buffer_rows: int = field(**_limits(min=1))
 
 
 @dataclass(frozen=True)
 class SpeedOpenCheck:
     enabled: bool
     wait_max_s: float = field(**_limits(min=0))
+    poll_s: float = field(**_limits(min=0.1))
+    job_timeout_s: float = field(**_limits(min=10))
+    drain_budget_s: float = field(**_limits(min=0))
+    launch_grace_s: float = field(**_limits(min=1))
+    launcher: str = field(**_limits(choices=("auto", "systemd", "subprocess")))
+
+    def problems(self) -> list[str]:
+        # Процес перевірки бере нові завдання лише до drain_budget_s, а
+        # останнє має встигнути до job_timeout_s (TimeoutStartSec) — інакше
+        # systemd вбиває процес посеред завдання.
+        if self.drain_budget_s >= self.job_timeout_s:
+            return [f"drain_budget_s: {self.drain_budget_s} має бути меншим за "
+                    f"job_timeout_s ({self.job_timeout_s})"]
+        return []
 
 
 @dataclass(frozen=True)
@@ -165,6 +180,8 @@ class SpeedTimings:
     flush_s: float = field(**_limits(min=1))
     sample_polls: int = field(**_limits(min=1))
     retention_days: int = field(**_limits(min=1))
+    cleanup_every_h: float = field(**_limits(min=1))
+    roles: tuple[str, ...] = field(**_limits(choices=("owner", "friend")))
 
 
 @dataclass(frozen=True)
@@ -172,14 +189,28 @@ class SpeedRum:
     enabled: bool
     roles: tuple[str, ...] = field(**_limits(choices=("owner", "friend")))
     retention_days: int = field(**_limits(min=1))
+    max_body_bytes: int = field(**_limits(min=256))
+    max_resources: int = field(**_limits(min=0))
+    max_per_min: int = field(**_limits(min=1))
 
 
 @dataclass(frozen=True)
 class SpeedProbe:
+    base_url: str = field(**_limits(prefix="http://"))
     urls: tuple[str, ...] = field(**_limits(min_len=1, prefix="/"))
     repeats: int = field(**_limits(min=1))
     pause_s: float = field(**_limits(min=0))
     timeout_s: float = field(**_limits(min=1))
+    phase_wait_max_min: float = field(**_limits(min=0))
+    phase_poll_s: float = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class SpeedSummary:
+    server_window_h: float = field(**_limits(min=1))
+    rum_window_days: float = field(**_limits(min=1))
+    recent: int = field(**_limits(min=1))
+    max_rows: int = field(**_limits(min=1))
 
 
 @dataclass(frozen=True)
@@ -203,12 +234,31 @@ class SpeedConfig:
     timings: SpeedTimings
     rum: SpeedRum
     probe: SpeedProbe
+    summary: SpeedSummary
     txn_watch: SpeedTxnWatch
+
+
+@dataclass(frozen=True)
+class LivenessRun:
+    opened_recheck_minutes: float = field(**_limits(min=0))
+
+
+@dataclass(frozen=True)
+class LivenessConfig:
+    """`config/liveness.toml` — Блок 1 (перевірка актуальності).
+
+    Поки тут один спільний ключ (інтеграція, конфлікт «перевірка під час
+    відкриття»): як часто можна повторно перевіряти оголошення, яке відкрили.
+    Решту схеми Блок 1 додасть разом зі своїм кодом.
+    """
+
+    run: LivenessRun
 
 
 # Реєстр тем: ім'я файлу без .toml (з підтекою, якщо є) → схема.
 SCHEMAS: dict[str, type] = {
     "speed": SpeedConfig,
+    "liveness": LivenessConfig,
 }
 
 
@@ -320,7 +370,15 @@ def _build(cls, data: dict, where: str, errors: list[str]):
         kwargs[f.name] = value
     if errors:
         return None
-    return cls(**kwargs)
+    value = cls(**kwargs)
+    # Обмеження між полями однієї таблиці (метод `problems` схеми): межі
+    # min/max бачать лише одне поле.
+    check = getattr(value, "problems", None)
+    if check is not None:
+        errors.extend(f"{prefix}{msg}" for msg in check())
+        if errors:
+            return None
+    return value
 
 
 def _read(name: str) -> tuple[Path, dict]:

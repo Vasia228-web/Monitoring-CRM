@@ -106,8 +106,16 @@ class Listing(Base):
     # --- Актуальність ---------------------------------------------------------
     # `is_active` виставляє перевірка посилань, `manual_active` — людина.
     # Ручне рішення завжди сильніше за автоматичне; None означає «не чіпали».
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    manual_active: Mapped[bool | None] = mapped_column(Boolean, index=True)
+    # Без index=True (Блок 2, D50): окремі індекси на булевих полях і на
+    # quality_status шкодять планувальнику — виміряно, що ix_listings_quality_status
+    # сповільнює першу сторінку списку з 0,4 до 36 мс, а глибоку — з 15 до 148 мс
+    # (ANALYZE не рятує), а запити кроків циклу могли б перехопити план. У
+    # робочій базі цих індексів і не було: create_all не додає індексів до
+    # наявної таблиці. Видимість у списку обслуговують складені індекси нижче
+    # (ix_listings_visible, ix_listings_keeper), а застарілі імена прибирає
+    # `db.migrate()` (OBSOLETE_INDEXES), якщо вони є (свіжі установки до D50).
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    manual_active: Mapped[bool | None] = mapped_column(Boolean)
     delisted_at: Mapped[datetime | None] = mapped_column(DateTime)
     # `last_checked` — коли ми востаннє ОТРИМАЛИ ВІДПОВІДЬ, і вона була
     # зрозумілою: живе або знято. Саме ця позначка потрібна аналізу виживання,
@@ -120,13 +128,14 @@ class Listing(Base):
     # 2105 посилань LUN на olx.ua не перевірились жодного разу. Змішати їх
     # означало б або зациклити чергу, або збрехати аналітиці, що ми бачили
     # оголошення живим тоді, коли насправді не достукались.
-    last_attempt: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    # Без індексу (D50): черга перевірок однаково сортує всю таблицю.
+    last_attempt: Mapped[datetime | None] = mapped_column(DateTime)
     # Скільки разів картку об'єкта відкривали. Те, на що дивляться, варто
     # перевіряти частіше за те, на що ніхто не дивиться: мертве посилання
     # дратує рівно там, куди дивляться. Лічильник тримаємо на оголошенні, а
     # не в окремій таблиці, бо нам потрібне саме число для черги, а не
     # журнал переглядів — журнал був би даними про користувача без потреби.
-    views: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    views: Mapped[int] = mapped_column(Integer, default=0)          # без індексу — D50
     viewed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # Скільки разів поспіль відповідь була незрозумілою. Потрібно, щоб
@@ -137,7 +146,7 @@ class Listing(Base):
     # інтервал, усередині якого воно зникло. Точної дати зняття ми не знаємо
     # і знати не можемо — аналіз виживання вміє працювати з інтервалом, але
     # тільки якщо його межі збережені.
-    last_alive_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    last_alive_at: Mapped[datetime | None] = mapped_column(DateTime)  # без індексу — D50
 
     # --- Робочий процес -------------------------------------------------------
     # «Взято в обробку» — позначка користувача про те, що об'єктом займаються.
@@ -151,7 +160,8 @@ class Listing(Base):
     # Запис не потрапляє у видачу, доки не пройшов перевірку. `pending` —
     # щойно зібраний, `ok` — чистий, `review` — підозрілий і чекає людину,
     # `rejected` — не пускаємо, але й не видаляємо.
-    quality_status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # Без окремого індексу (D50): див. коментар біля is_active.
+    quality_status: Mapped[str] = mapped_column(String(16), default="pending")
     quality_reason: Mapped[str | None] = mapped_column(Text)
     quality_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -179,10 +189,34 @@ class Listing(Base):
     # квартир. Через це всі 2 681 зняті оголошення мали «бачили» ПІСЛЯ дати
     # зняття, а діагностика «давно не бачили» не знаходила жодного (D43).
     # Чи існує оголошення — окреме поле `last_alive_at` (пряма перевірка).
-    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Індекс (Блок 2, D50): «оновлено …» у шапці списку — max(last_seen) — без
+    # повного проходу таблиці.
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Listing {self.source}:{self.external_id} {self.price_usd}$ {self.rooms}к>"
+
+
+# --- Індекси списку (Блок 2, крок E4, D50) -------------------------------------
+# Перше поле обох — ВИРАЗ чинної актуальності, той самий `effective_active()`,
+# що стоїть у запитах сайту: SQLite бере індекс за виразом, лише якщо вираз у
+# запиті збігається з ним, тож запити кроків циклу («is_active IS 1 AND
+# quality_status IN (…)») цих індексів не бачать і їхній план не змінюється
+# (перевірено в прототипі: жодного перехоплення). Без ANALYZE — свідомо.
+#
+# ix_listings_visible — покривний для запиту id списку (`queries.list_ids_select`):
+# усі поля фільтрів і сортувань, тож список id для будь-якого фільтра береться з
+# індексу без читання рядків таблиці (замір прототипу: 6,5–10,5 мс на M4 замість
+# 7 повних проходів 94-МБ таблиці на кожен перегляд «/»).
+# ix_listings_keeper — для представника квартири (max(id) серед чистих і
+# актуальних оголошень квартири, GROUP BY property_id).
+# Нові фільтри Блоків 3/4 мають або ввійти сюди, або пройти тест-охоронець
+# планів (tests/test_list_plans.py) — інакше список знову піде в сканування.
+Index("ix_listings_visible", effective_active(), Listing.quality_status,
+      Listing.property_id, Listing.in_progress, Listing.source, Listing.rooms,
+      Listing.condition, Listing.market_type, Listing.price_usd, Listing.price_per_sqm,
+      Listing.published_at)
+Index("ix_listings_keeper", Listing.property_id, Listing.quality_status, effective_active())
 
 
 class Property(Base):

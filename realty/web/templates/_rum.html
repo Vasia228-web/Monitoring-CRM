@@ -1,0 +1,15 @@
+{#- Маячок часу переходу (Блок 2, D49): лише для тих, хто ввійшов, і лише ролі з
+    config/speed.toml [rum]. Після переходу браузер надсилає власні числа
+    Navigation Timing (без адреси з параметрами, без IP і рядка браузера — лише
+    «телефон/комп'ютер»), щоб ціль власника «перехід ≤1,5 с з телефона» була
+    видна з самого телефона. Блок позначений <!--rum-->: порівняння сторінок
+    «до/після» його вирізає. Коли маячок вимкнено, шаблон не дає жодного байта.
+    Тіло — рядок JSON (браузер шле його як text/plain), а не Blob типу
+    application/json: Chrome відмовляє sendBeacon із Blob, тип якого не з
+    «простих» для CORS (crbug.com/490015), і з телефона маячок мовчки не
+    доходив би. Сайт читає тіло як JSON незалежно від Content-Type. Помилка
+    в самому маячку сторінці не заважає (try/catch і в обробнику). -#}
+{%- set rum = rum_for(request) -%}
+{%- if rum -%}
+<!--rum--><script>(function(){try{var sent=false;function send(){if(sent)return;try{var P=window.performance,n=P&&P.getEntriesByType&&P.getEntriesByType("navigation")[0];if(!n||!n.loadEventEnd||!navigator.sendBeacon)return;sent=true;var st=(n.serverTiming||[]).filter(function(x){return x.name==="app";})[0];var res=P.getEntriesByType("resource").filter(function(r){return r.initiatorType==="fetch"&&r.name.indexOf("/api/")>=0&&r.name.indexOf("/api/rum")<0;}).slice(-{{ rum.max_resources|int }}).map(function(r){return[new URL(r.name).pathname,Math.round(r.duration)];});var ua=navigator.userAgentData,mob=ua?ua.mobile:/Mobi|Android|iPhone|iPad/.test(navigator.userAgent);navigator.sendBeacon("/api/rum",JSON.stringify({route:location.pathname,nav:n.type,reused:n.connectEnd===n.connectStart,ttfb:Math.round(n.responseStart),dcl:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd),transfer:n.transferSize,server:st?st.duration:null,proto:n.nextHopProtocol||null,device:mob?"mobile":"desktop",res:res}));}catch(e){}}addEventListener("pagehide",send);document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden")send();});}catch(e){}})();</script><!--/rum-->
+{%- endif -%}

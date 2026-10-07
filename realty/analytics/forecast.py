@@ -79,9 +79,9 @@ def observed_span(session) -> float:
     return (last - first).total_seconds() / 86400
 
 
-def readiness(session, cfg: Settings | None = None) -> Readiness:
+def readiness(session, cfg: Settings | None = None, *, span: float | None = None) -> Readiness:
     cfg = cfg or load()
-    span = observed_span(session)
+    span = observed_span(session) if span is None else span
     points = int(span // WEEK)
     needed = cfg.forecast_fit_points + cfg.forecast_backtest_points
     ready = points >= needed
@@ -96,14 +96,15 @@ def readiness(session, cfg: Settings | None = None) -> Readiness:
     )
 
 
-def horizon_schedule(session, cfg: Settings | None = None) -> list[dict]:
+def horizon_schedule(session, cfg: Settings | None = None, *,
+                     span: float | None = None) -> list[dict]:
     """Коли який горизонт стане доступним — таблиця замість обіцянок.
 
     Потрібна, щоб на місце «прогнозу на 36 місяців» стало видно реальний
     графік зростання можливостей: скільки чекати і що саме отримаєш.
     """
     cfg = cfg or load()
-    span = observed_span(session)
+    span = observed_span(session) if span is None else span
     start = _now() - timedelta(days=span)
     rows = []
     for months in (3, 6, 12, 24):
@@ -326,9 +327,12 @@ def state(session=None, cfg: Settings | None = None) -> dict:
     own = session is None
     session = session or SessionLocal()
     try:
-        r = readiness(session, cfg)
+        # Один прохід історії цін на обидва розрахунки, а не два (Блок 2, D50:
+        # «Аналітика» й сторінка квартири викликають це на кожен запит).
+        span = observed_span(session)
+        r = readiness(session, cfg, span=span)
         return {"readiness": r, "message": r.message(),
-                "schedule": horizon_schedule(session, cfg),
+                "schedule": horizon_schedule(session, cfg, span=span),
                 "seasonality_years": cfg.seasonality_years}
     finally:
         if own:

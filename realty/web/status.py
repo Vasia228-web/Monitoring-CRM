@@ -263,7 +263,16 @@ def api_run(payload: dict = Body(default={})):
 
 @router.get("/status", response_class=HTMLResponse)
 def status_page(request: Request):
+    from .. import configfiles
     from .app import templates
 
+    # Інтервали опитування й пауза у фоновій вкладці — config/speed.toml
+    # [status_poll] (Блок 2, крок E5, D50). Зламаний конфіг не валить сторінку:
+    # тоді — інтервали, що стояли в шаблоні до Блоку 2, без паузи.
+    try:
+        poll = configfiles.get("speed").status_poll
+    except configfiles.ConfigError as e:
+        log.error("config/speed.toml не читається — /status з інтервалами до Блоку 2: %s", e)
+        poll = None
     return templates.TemplateResponse(request, "status.html",
-                                      {"sources": list(SOURCES)})
+                                      {"sources": list(SOURCES), "poll": poll})

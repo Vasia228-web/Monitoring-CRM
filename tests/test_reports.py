@@ -149,9 +149,27 @@ def test_reported_listings_jump_the_verification_queue(tmp_path, monkeypatch):
         assert order[0] == flagged.id
 
 
+def _opened_job(client, pid):
+    """Відкрити картку без verify=0 і дочекатися, поки сайт поставить завдання.
+
+    Блок 2 (крок E5, D50): сайт сам у мережу не ходить — відкриття ставить
+    завдання в чергу ops.lookup_checks, а виконує його окремий процес
+    (`cli.py lookup check`). У тестах процес не запускається (conftest), тест
+    виконує завдання сам — тим самим кодом.
+    """
+    from realty.lookup import queue
+    from realty.web import livecheck
+
+    assert client.get(f"/property/{pid}").status_code == 200
+    assert livecheck.LIVE.join(10)
+    job = queue.active_for(queue.opened_key(pid), timeout_s=600)
+    assert job is not None, livecheck.LIVE.status(pid)
+    return job.id
+
+
 def test_opening_a_card_checks_that_exact_listing(client, monkeypatch):
-    """Один запит у момент, коли він справді потрібен."""
-    from realty.web import analytics_routes
+    """Один запит у момент, коли він справді потрібен — тепер окремим процесом."""
+    from realty.lookup import opened
 
     called = {}
 
@@ -163,31 +181,50 @@ def test_opening_a_card_checks_that_exact_listing(client, monkeypatch):
                 "by_source": {}, "by_host": {}, "blocked": 0, "blocked_sources": []}
 
     monkeypatch.setattr("realty.verify.verify_batch", fake)
-    assert client.get(f"/property/{_checkable_property()}").status_code == 200
+    pid = _checkable_property()
+    job = _opened_job(client, pid)
+    assert "reason" not in called, "сторінка не має перевіряти сама, у запиті"
+    assert opened.run_job(job) == "done"
     assert called.get("reason") == "opened"
     assert called.get("ids")
+    state = client.get(f"/api/property/{pid}/liveness").json()
+    assert state["state"] == "done" and state["checked"] == len(called["ids"])
 
 
 def test_a_failing_source_does_not_break_the_page(client, monkeypatch):
     """Сторінка не має падати через те, що сайт-джерело не відповів."""
+    from realty.lookup import opened
+
     def boom(**kw):
         raise RuntimeError("мережа впала")
 
     monkeypatch.setattr("realty.verify.verify_batch", boom)
-    assert client.get(f"/property/{_checkable_property()}").status_code == 200
+    pid = _checkable_property()
+    job = _opened_job(client, pid)
+    assert opened.run_job(job) == "failed"
+    assert client.get(f"/api/property/{pid}/liveness").json()["state"] == "failed"
+    assert client.get(f"/property/{pid}").status_code == 200
 
 
 def test_opening_a_card_counts_as_a_view(client):
-    """Те, на що дивляться, має перевірятись частіше за те, на що ніхто не дивиться."""
+    """Те, на що дивляться, має перевірятись частіше за те, на що ніхто не дивиться.
+
+    Перегляд пишеться фоном (Блок 2, крок E5, D50): GET лише кладе його в буфер,
+    а фоновий потік раз на `deferred.views_flush_s` записує — тут запис
+    викликано явно.
+    """
     from sqlalchemy import select as sa_select
 
     from realty.db import SessionLocal
+    from realty.web.perf import WRITER
 
     pid = _checkable_property()
+    WRITER.flush_views()
     with SessionLocal() as s:
         before = sum(r.views or 0 for r in s.scalars(
             sa_select(Listing).where(Listing.property_id == pid)))
     client.get(f"/property/{pid}", params={"verify": "0"})
+    WRITER.flush_views()
     with SessionLocal() as s:
         rows = list(s.scalars(sa_select(Listing).where(Listing.property_id == pid)))
     assert sum(r.views or 0 for r in rows) > before

@@ -24,9 +24,11 @@ import base64
 import hmac
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote, urlsplit
 
+import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -187,6 +189,75 @@ def _fail(request: Request, user: str) -> None:
 # --- Проміжний шар -----------------------------------------------------------------------
 
 
+@dataclass
+class _Who:
+    """Що вирішила перевірка входу (у потоці, поза event loop)."""
+
+    user: str | None = None
+    role: str | None = None
+    via: str | None = None
+    blocked: object | None = None       # рядок блокування → 429
+    wrong: str | None = None            # невдалий вхід заголовком → 401 з цим текстом
+
+
+def _authenticate(request: Request, accts: dict) -> _Who:
+    """Хто прийшов — кука сесії або заголовок Basic для скриптів.
+
+    Виконується в пулі потоків (Блок 2, крок E5, D50): тут читання й записи в
+    ops.db (сесії, ліміт спроб), а на event loop вони зупиняли ВСІ запити сайту
+    разом, поки ops.db була зайнята (busy_timeout 30 с; план Блоку 2, D48).
+    Рішення ті самі, що й досі: ролі, ліміт спроб, блокування — без змін.
+    Оновлення last_seen сесії (раз на 5 хв) — фоном (`deferred.session_touch`).
+    """
+    touch_later = _touch_deferred()
+    row = sessions.validate(request.cookies.get(COOKIE), accts, touch=not touch_later)
+    if row is not None:
+        if touch_later and sessions.needs_touch(row):
+            from .perf import WRITER
+            WRITER.touch_session(row.sid, ops_now())
+        return _Who(row.user, row.role, "cookie")
+    header = request.headers.get("authorization", "")
+    # Заголовок входу — лише для скриптів. Браузер, що пам'ятає пароль
+    # від старого віконця, сам підставляє його до кожного запиту: Firefox
+    # показував «Невірний логін або пароль» замість форми й рахував
+    # кожне відкриття як невдалу спробу — так можна було заблокувати себе.
+    if header.startswith("Basic ") and not from_browser(request):
+        # Вхід для скриптів — під тим самим лімітом, що й форма.
+        ip = client_ip(request)
+        if (b := sessions.blocked(ip)) is not None:
+            return _Who(blocked=b)
+        try:
+            raw = base64.b64decode(header[6:]).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            raw = ":"
+        u, _, p = raw.partition(":")
+        role = check(u, p, accts)
+        if role is None:
+            _fail(request, u.strip())
+            _explain_mismatch(u, p, accts)
+            b = sessions.blocked(ip)
+            note = (f". Забагато невдалих спроб — вхід з цієї адреси заблоковано "
+                    f"до {_hhmm(b.blocked_until)}") if b else ""
+            return _Who(wrong="Невірний логін або пароль" + note)
+        sessions.register_success(ip)
+        return _Who(u.strip(), role, "header")
+    return _Who()
+
+
+def _touch_deferred() -> bool:
+    from .. import configfiles
+
+    try:
+        return configfiles.get("speed").deferred.session_touch
+    except configfiles.ConfigError:
+        return False                    # як до Блоку 2: оновлення в самій перевірці
+
+
+def ops_now():
+    from .. import ops
+    return ops._now()
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await self._dispatch(request, call_next)
@@ -200,38 +271,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not accts or path in OPEN_PATHS:
             return await call_next(request)
 
-        via = None
-        user = role = None
-        row = sessions.validate(request.cookies.get(COOKIE), accts)
-        if row is not None:
-            user, role, via = row.user, row.role, "cookie"
-        else:
-            header = request.headers.get("authorization", "")
-            # Заголовок входу — лише для скриптів. Браузер, що пам'ятає пароль
-            # від старого віконця, сам підставляє його до кожного запиту: Firefox
-            # показував «Невірний логін або пароль» замість форми й рахував
-            # кожне відкриття як невдалу спробу — так можна було заблокувати себе.
-            if header.startswith("Basic ") and not from_browser(request):
-                # Вхід для скриптів — під тим самим лімітом, що й форма.
-                ip = client_ip(request)
-                if (b := sessions.blocked(ip)) is not None:
-                    return _blocked_response(request, b)
-                try:
-                    raw = base64.b64decode(header[6:]).decode("utf-8")
-                except (ValueError, UnicodeDecodeError):
-                    raw = ":"
-                u, _, p = raw.partition(":")
-                role = check(u, p, accts)
-                if role is None:
-                    _fail(request, u.strip())
-                    _explain_mismatch(u, p, accts)
-                    b = sessions.blocked(ip)
-                    note = (f". Забагато невдалих спроб — вхід з цієї адреси заблоковано "
-                            f"до {_hhmm(b.blocked_until)}") if b else ""
-                    return PlainTextResponse("Невірний логін або пароль" + note,
-                                             status_code=401)
-                sessions.register_success(ip)
-                user, via = u.strip(), "header"
+        who = await anyio.to_thread.run_sync(_authenticate, request, accts)
+        if who.blocked is not None:
+            return _blocked_response(request, who.blocked)
+        if who.wrong is not None:
+            return PlainTextResponse(who.wrong, status_code=401)
+        user, role, via = who.user, who.role, who.via
 
         if user is None:
             return _unauthorized(request)
@@ -246,6 +291,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return _forbidden(request, "Запит прийшов не з цього сайту — відхилено.")
         request.state.user = user
         request.state.role = role
+        # Як саме ввійшли: «cookie» — браузер, «header» — скрипт (зонд швидкості).
+        # Журнал часу запити скриптів не пише (perf.py): ~720 запитів зонда за
+        # замір змішались би з переглядами власника в p50/p95.
+        request.state.via = via
         return await call_next(request)
 
 
@@ -260,7 +309,8 @@ BasicAuthMiddleware = AuthMiddleware
 def login_page(request: Request, next: str = "/"):
     if not accounts():
         return RedirectResponse("/", status_code=303)
-    if sessions.validate(request.cookies.get(COOKIE), accounts()) is not None:
+    # Лише перевірка, без запису last_seen: GET нічого не пише (Блок 2, E5).
+    if sessions.validate(request.cookies.get(COOKIE), accounts(), touch=False) is not None:
         return RedirectResponse(_safe_next(next), status_code=303)
     return templates.TemplateResponse(request, "login.html",
                                       {"error": None, "next": _safe_next(next), "user": ""})

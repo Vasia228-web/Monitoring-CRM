@@ -66,6 +66,12 @@ POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/properties/{property_id}/processing"): FRIEND,
     ("POST", "/api/listings/{listing_id}/status"): FRIEND,
     ("POST", "/api/listings/{listing_id}/report"): FRIEND,
+    # Маячок часу переходу (Блок 2, D49): обидві ролі; вхід і same-origin — як
+    # для будь-якого POST.
+    ("POST", "/api/rum"): FRIEND,
+    # Стан перевірки при відкритті квартири (Блок 2, крок E5, D50): банер на
+    # сторінці квартири, яку бачать обидві ролі. Лише читання ops.db.
+    ("GET", "/api/property/{property_id}/liveness"): FRIEND,
     # Документація API — за входом, як і все, що не відкрите явно.
     ("GET", "/openapi.json"): FRIEND,
     ("GET", "/api/docs"): FRIEND,
@@ -77,6 +83,7 @@ POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/status/reports"): OWNER,
     ("GET", "/api/status/dedup"): OWNER,
     ("GET", "/api/status/runs"): OWNER,
+    ("GET", "/api/status/speed"): OWNER,                    # зведення «Швидкість» (D49)
     ("POST", "/api/status/run"): OWNER,                     # запуск збору
     ("GET", "/api/auth/blocks"): OWNER,
     ("POST", "/api/auth/blocks/{ip}/unblock"): OWNER,

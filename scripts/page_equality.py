@@ -98,8 +98,10 @@ CLEARED_ENV = ("SOURCES", "DEDUP_RULES", "DEDUP_GEO_VETO_M", "DEDUP_PRICE_GAP",
 # замороженому «зараз» і сталих даних вони детерміновані.
 VOLATILE_JSON_KEYS = ("generated_at", "built_at", "age_seconds", "cache_age_s")
 HTML_RULES = [
-    # Позначені блоки, які Блок 2 додає навмисно (маячок RUM, банер перевірки).
-    (re.compile(r"<!--(rum|live-check)-->.*?<!--/\1-->", re.S), ""),
+    # Позначені блоки, які Блок 2 додає навмисно: маячок RUM, банер перевірки при
+    # відкритті, панель «Швидкість» і пауза опитування на /status (D50). Решта
+    # сторінки, зокрема наявні панелі й рядки опитування, порівнюється повністю.
+    (re.compile(r"<!--(rum|live-check|speed-panel|status-poll)-->.*?<!--/\1-->", re.S), ""),
     # Одноразові токени (зараз їх немає; з'являться — не шумітимуть).
     (re.compile(r'(\snonce=")[^"]*(")'), rf"\g<1>{PLACEHOLDER}\g<2>"),
     (re.compile(r'(name="csrf[\w-]*"\s+value=")[^"]*(")', re.I), rf"\g<1>{PLACEHOLDER}\g<2>"),
@@ -108,7 +110,8 @@ NORMALIZATION = [
     f"JSON: значення ключів {', '.join(VOLATILE_JSON_KEYS)} на будь-якій глибині → "
     f"«{PLACEHOLDER}»; JSON переформатовано (indent=1, порядок ключів збережено)",
     'не маскуються: age_min і <div class="updated">оновлено …</div> (заморожене «зараз»)',
-    "HTML: блоки <!--rum-->…<!--/rum--> і <!--live-check-->…<!--/live-check--> вирізано",
+    "HTML: блоки <!--rum-->, <!--live-check-->, <!--speed-panel--> і <!--status-poll--> "
+    "(…<!--/назва-->) вирізано",
     "HTML: nonce=\"…\" і приховані csrf-поля → плейсхолдер",
 ]
 

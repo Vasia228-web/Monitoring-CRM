@@ -17,10 +17,15 @@ from .stats import summarise
 
 
 def composition(session) -> list[dict]:
-    """Склад кожного джерела — доказ того, чому наївне порівняння хибне."""
+    """Склад кожного джерела — доказ того, чому наївне порівняння хибне.
+
+    Порядок рядків — явно за id (див. `matched`): від нього залежить порядок
+    джерел із рівною кількістю.
+    """
     rows = session.execute(
         select(Listing.source, Listing.market_type, Listing.price_per_sqm)
-        .where(Listing.quality_status == "ok", Listing.price_per_sqm.isnot(None))).all()
+        .where(Listing.quality_status == "ok", Listing.price_per_sqm.isnot(None))
+        .order_by(Listing.id)).all()
     agg: dict[str, dict] = {}
     for source, market, ppsqm in rows:
         bucket = agg.setdefault(source, {"values": [], "primary": 0})
@@ -43,13 +48,20 @@ def matched(session, cfg: Settings | None = None) -> dict:
 
     У таблицю потрапляє лише сегмент, у якому щонайменше два джерела мають
     достатню вибірку: порівнювати нема з чим, якщо джерело в сегменті одне.
+
+    Порядок рядків задано явно (ORDER BY id). Від нього залежить, яке з
+    джерел із РІВНОЮ медіаною буде позначене «найдешевшим» (min бере перше),
+    і порядок сегментів із рівною кількістю. Досі це був порядок повного
+    проходу таблиці (за id); у прототипі Блоку 2 новий покривний індекс змінив
+    його, і позначка перескочила між двома джерелами з медіаною $1 946 (D48).
     """
     cfg = cfg or load()
     rows = session.execute(
         select(Listing.source, Listing.rooms, Listing.condition, Listing.market_type,
                Listing.price_per_sqm)
         .where(Listing.quality_status == "ok", Listing.price_per_sqm.isnot(None),
-               Listing.rooms.isnot(None))).all()
+               Listing.rooms.isnot(None))
+        .order_by(Listing.id)).all()
 
     groups: dict[tuple, dict[str, list[float]]] = {}
     for source, rooms, cond, market, ppsqm in rows:

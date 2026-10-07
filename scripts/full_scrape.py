@@ -68,6 +68,12 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="лише план і оцінка часу")
     ap.add_argument("--no-llm", action="store_true")
     args = ap.parse_args()
+    # Покоління кешу сайту (Блок 2, D50): цей скрипт пише в realty.db поза
+    # cli.main, тож сам ставить автоматичне покоління «lists» — і явне після
+    # кожного джерела (повний збір триває години; сайт не має чекати до кінця
+    # чи запасного ліміту віку кешу, 15 хв).
+    from realty import txnwatch
+    autobump = txnwatch.install_autobump(sys.argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -126,6 +132,8 @@ def main() -> int:
             print(report.render())
         except Exception:
             log.exception("%s: збір перервано помилкою — прогрес збережено", name)
+        finally:
+            autobump.bump_if_dirty("lists", f"full_scrape {name}")
 
     print(f"\nЗагальний час: {timedelta(seconds=int(time.monotonic() - started))}")
     print(f"Стан: {STATE_FILE}")

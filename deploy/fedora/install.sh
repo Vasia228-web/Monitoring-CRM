@@ -72,8 +72,34 @@ fi
 echo "== конфіги (config/)"
 .venv/bin/python cli.py config check
 
+# Схема бази (Блок 2, D50): лише ПЛАН, нічого не пише. Застосування — окремо,
+# між циклами, після бекапу: `.venv/bin/python cli.py db migrate` (бере замок
+# циклу, звіряє кількості й суми, integrity_check, foreign_key_check).
+echo "== схема бази (план, без змін)"
+.venv/bin/python cli.py db migrate --dry-run || echo "   план не вдалося скласти — див. вище"
+
+# Пріоритети в юнітах (Блок 2, D50) діють без root, але якщо ядро чи systemd
+# відмовить (EPERM), служба сайту не стартувала б зовсім. Тому спершу пробний
+# запуск із тими самими налаштуваннями; відмова — юніти не встановлюю.
+echo "== пріоритети служб: пробний запуск без root"
+probe() { systemd-run --user --quiet --wait --collect "$@" /bin/true; }
+# Три набори: сайт, цикл, процес перевірки realty-lookup@ (там ще й ліміти пам'яті).
+if probe -p CPUWeight=1000 -p IOSchedulingClass=best-effort -p IOSchedulingPriority=0 \
+   && probe -p Nice=15 -p CPUWeight=20 -p IOSchedulingClass=best-effort \
+            -p IOSchedulingPriority=7 -p OOMScoreAdjust=500 \
+   && probe -p Nice=10 -p CPUWeight=20 -p IOSchedulingClass=best-effort \
+            -p IOSchedulingPriority=7 -p OOMScoreAdjust=500 \
+            -p MemoryHigh=700M -p MemoryMax=1000M; then
+  echo "   ok"
+else
+  echo "   ПОМИЛКА: systemd не прийняв налаштувань пріоритету — юніти НЕ оновлено." >&2
+  echo "   Див. implementation-notes.md, D50 (пріоритети; що потребує root — дія власника)." >&2
+  exit 1
+fi
+
 echo "== юніти systemd (користувацькі)"
 mkdir -p "$UNITS"
+# Разом із шаблоном realty-lookup@.service (перевірка при відкритті квартири).
 cp deploy/fedora/systemd/*.service deploy/fedora/systemd/*.timer "$UNITS/"
 systemctl --user daemon-reload
 

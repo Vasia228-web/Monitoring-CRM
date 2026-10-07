@@ -162,13 +162,30 @@ def test_changing_filters_returns_to_the_first_page(client):
 
 
 def test_slicing_happens_in_the_database(client):
-    """Сторінка не має вибирати всю базу в пам'ять заради сорока рядків."""
-    import inspect
+    """Сторінка не має вибирати всю базу в пам'ять заради сорока рядків.
 
-    from realty.web import app as app_mod
+    Блок 2 (крок E5, D50) читає список у дві фази: спершу лише id усіх рядків
+    фільтра (з покривного індексу, без самих рядків), потім рядки сторінки за
+    id. Тому перевірка — за суттю, а не за текстом коду (досі тест шукав
+    `.limit(...).offset(...)` у джерелі функції): повних рядків оголошень
+    завантажується не більше, ніж показує сторінка.
+    """
+    from sqlalchemy import event
 
-    source = inspect.getsource(app_mod._render_list)
-    assert ".limit(pager.size).offset(pager.offset)" in source
+    from realty.models import Listing
+
+    loaded = []
+
+    def on_load(target, _context):
+        loaded.append(target.id)
+
+    event.listen(Listing, "load", on_load)
+    try:
+        html = client.get("/", params={"per_page": 50, "page": 2}).text
+    finally:
+        event.remove(Listing, "load", on_load)
+    assert html.count('data-id="') <= 50
+    assert 0 < len(loaded) <= 50, len(loaded)
 
 
 def test_merged_listings_collapse_into_one_row(client):

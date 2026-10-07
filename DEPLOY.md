@@ -12,6 +12,7 @@
 | `realty-cycle.timer` | цикл кожні 3 год (00:05, 03:05…); пропущений — після старту |
 | `realty-backup.timer` | бекап о 04:30 з перевіркою відновлення й копією поза машиною |
 | `realty-watchdog.timer` | сторож кожні 30 хв: тиша, падіння джерел, блокування, бекап |
+| `realty-lookup@.service` | шаблон: перевірка квартири, яку щойно відкрили (запускає сайт) |
 
 Порядок першого розгортання:
 
@@ -20,6 +21,21 @@ sudo bash ~/realty/deploy/fedora/root-setup.sh     # кришка, сон, linge
 bash ~/realty/deploy/fedora/install.sh             # залежності, Chromium, cloudflared, юніти
 bash deploy/migrate-to-fedora.sh u@<fedora>        # на MacBook: вимкнути збір там, перенести базу
 bash ~/realty/deploy/fedora/install.sh --enable    # увімкнути служби
+```
+
+Оновлення коду (між циклами; кроки циклу запускають `cli.py` з диска, тож
+`git pull` посеред циклу змішав би версії коду):
+
+```bash
+systemctl --user list-timers 'realty-*'            # цикл і нічні роботи неактивні, ≥30 хв до старту
+.venv/bin/python cli.py backup run                 # свіжий бекап із перевіркою відновлення
+git pull && .venv/bin/python cli.py config check   # ненульовий код — зупинитись
+.venv/bin/python cli.py db migrate --dry-run       # план змін схеми (лише читання)
+.venv/bin/python cli.py db plans --preview         # плани запитів сайту на копії з індексами
+.venv/bin/python cli.py db migrate                 # під замком циклу, одна транзакція; розбіжність — ROLLBACK
+bash deploy/fedora/install.sh                      # юніти (пробний запуск пріоритетів), daemon-reload
+systemctl --user restart realty-web                # нові кеші, стиснення, черга перевірок
+.venv/bin/python cli.py speed priorities           # чи діють пріоритети (cgroup, nice, ionice)
 ```
 
 Щоденне:

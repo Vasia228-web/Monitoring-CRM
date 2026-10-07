@@ -339,6 +339,114 @@ td a,.row a{color:var(--accent)}
     </div>
   </section>
 
+{#- Панель «Швидкість» (Блок 2, крок E5, D50): час сервера за добу (спокій і цикл
+    окремо), час переходів із браузера за 7 днів, кеші. Дані — GET
+    /api/status/speed (лише власник), раз на `status_poll.panels_s`, з паузою у
+    фоновій вкладці. Блок позначений <!--speed-panel-->: порівняння сторінок
+    «до/після» його вирізає — це нова панель, а не зміна наявного вмісту. -#}
+{% if poll and poll.pause_hidden %}<!--status-poll-->{#
+    Опитування сторінки стану (Блок 2, крок E5, D50): інтервали — з
+    config/speed.toml [status_poll] (рядки setInterval унизу), а у фоновій
+    вкладці виклики пропускаються й надолужуються одразу після повернення:
+    /api/status коштує ~0,35 с процесора на Fedora кожні 5 с, навіть коли
+    вкладку ніхто не бачить (план Блоку 2, D48). Обгортка setInterval — лише на
+    цій сторінці й лише для її таймерів; позначена <!--status-poll--> (порівняння
+    «до/після» її вирізає). Зламаний конфіг — інтервали як до Блоку 2, без паузи.
+    Стоїть ПЕРЕД панеллю «Швидкість»: її setInterval має пройти вже через
+    обгортку, інакше панель опитувала б /api/status/speed і у фоновій вкладці.
+#}<script>
+(function(){
+  const native = window.setInterval.bind(window);
+  const jobs = [];
+  window.setInterval = function(fn, ms, ...args){
+    const job = {fn, ms, args, last: Date.now()};
+    jobs.push(job);
+    return native(() => {
+      if (document.hidden) return;              // фонова вкладка — не опитуємо
+      job.last = Date.now();
+      fn(...args);
+    }, ms);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    const now = Date.now();
+    for (const job of jobs){                    // повернулись — одразу свіже
+      if (now - job.last >= job.ms){ job.last = now; job.fn(...job.args); }
+    }
+  });
+})();
+</script><!--/status-poll-->{% endif %}<!--speed-panel-->
+  <section>
+    <h2>Швидкість</h2>
+    <p class="hint" id="sp-hint">Ціль: відповідь сервера ≤<b id="sp-t-server">—</b> мс у 95% запитів;
+      перехід між вкладками з телефона на вже відкритому з'єднанні ≤<b id="sp-t-tab">—</b> мс.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Сторінка</th><th class="r">Запитів</th><th class="r">p50, мс</th>
+          <th class="r">p95, мс</th><th class="r">p95 у спокої</th><th class="r">p95 у циклі</th>
+          <th class="r">Холодних</th><th></th></tr></thead>
+        <tbody id="sp-routes"><tr><td colspan="8" style="color:var(--muted)">завантаження…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="rows" id="sp-rum" style="margin-top:12px"></div>
+    <h3 style="margin:20px 0 8px;font-size:14px">Останні переходи (браузер)</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Коли</th><th>Сторінка</th><th>Пристрій</th><th>З'єднання</th>
+          <th class="r">До завантаження, мс</th><th class="r">Сервер, мс</th><th></th></tr></thead>
+        <tbody id="sp-recent"><tr><td colspan="7" style="color:var(--muted)">ще немає</td></tr></tbody>
+      </table>
+    </div>
+    <p class="hint" id="sp-cache" style="margin-top:10px"></p>
+  </section>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? "—").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const ms = (v) => v === null || v === undefined ? "—" : Math.round(v).toLocaleString("uk-UA");
+  const when = (iso) => iso ? new Date(iso).toLocaleString("uk-UA", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "—";
+  async function speed(){
+    try{
+      const r = await fetch("/api/status/speed", {cache: "no-store"});
+      if (!r.ok) return;
+      const d = await r.json();
+      $("sp-t-server").textContent = ms(d.targets.server_p95_ms);
+      $("sp-t-tab").textContent = ms(d.targets.tab_switch_ms);
+      const routes = d.server.routes;
+      $("sp-routes").innerHTML = routes.length ? routes.map(x => `<tr>
+        <td class="src">${esc(x.method === "GET" ? x.route : x.method + " " + x.route)}</td>
+        <td class="r num">${ms(x.n)}</td><td class="r num">${ms(x.p50)}</td>
+        <td class="r num">${ms(x.p95)}</td><td class="r num">${ms(x.idle.p95)}</td>
+        <td class="r num">${ms(x.cycle.p95)}</td><td class="r num">${ms(x.cold.n)}</td>
+        <td><span class="pill ${x.ok ? "ok" : "bad"}">${x.ok ? "у межах" : "повільно"}</span></td>
+      </tr>`).join("") : `<tr><td colspan="8" style="color:var(--muted)">за добу запитів ще немає</td></tr>`;
+      const R = d.rum;
+      $("sp-rum").innerHTML = [
+        ["Переходів за " + R.window_days + " дн.", ms(R.all.n)],
+        ["p95 на відкритому з'єднанні", ms(R.reused.p95) + " мс"],
+        ["…з телефона", ms(R.phone_reused.p95) + " мс"],
+        ["p95 кнопок", ms(R.buttons.p95) + " мс"],
+      ].map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("");
+      $("sp-recent").innerHTML = R.recent.length ? R.recent.map(x => `<tr>
+        <td>${when(x.at)}</td><td class="src">${esc(x.route)}</td>
+        <td>${x.device === "mobile" ? "телефон" : x.device === "desktop" ? "комп'ютер" : "—"}</td>
+        <td>${x.reused ? "відкрите" : "нове"}</td>
+        <td class="r num">${ms(x.load_ms)}</td><td class="r num">${ms(x.server_ms)}</td>
+        <td><span class="pill ${x.ok ? "ok" : "bad"}">${x.ok ? "≤ цілі" : "довше"}</span></td>
+      </tr>`).join("") : `<tr><td colspan="7" style="color:var(--muted)">ще немає</td></tr>`;
+      const C = d.cache || {};
+      const g = C.generations || {};
+      $("sp-cache").textContent = `Кеш: покоління даних ${g.lists ?? "—"} / аналітики ${g.analytics ?? "—"}; ` +
+        `список — влучань ${ms(C.list_ids && C.list_ids.hits)}, перерахунків ${ms(C.list_ids && C.list_ids.misses)}; ` +
+        `знімок «Аналітики» — ${C.analytics && C.analytics.built ? "є, вік " + ms(C.analytics.age_s) + " с" : "ще немає"}.`;
+    }catch(e){ /* панель просто не оновиться */ }
+  }
+  speed();
+  setInterval(speed, {{ (poll.panels_s * 1000)|int if poll else 60000 }});
+})();
+</script>
+<!--/speed-panel-->
+
 </div>
 
 <script>
@@ -572,9 +680,9 @@ async function refreshDedup(){
 refresh();
 refreshBlocks();
 refreshDedup();
-setInterval(refresh, 5000);
-setInterval(refreshBlocks, 15000);
-setInterval(refreshDedup, 60000);
+setInterval(refresh, {{ (poll.status_s * 1000)|int if poll else 5000 }});
+setInterval(refreshBlocks, {{ (poll.blocks_s * 1000)|int if poll else 15000 }});
+setInterval(refreshDedup, {{ (poll.dedup_s * 1000)|int if poll else 60000 }});
 </script>
 </body>
 </html>

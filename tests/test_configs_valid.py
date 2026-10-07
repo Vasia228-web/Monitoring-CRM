@@ -131,8 +131,12 @@ def test_speed_values_match_the_owner_targets():
 def cfg_dir(tmp_path, monkeypatch):
     d = tmp_path / "config"
     d.mkdir()
-    (d / "speed.toml").write_text((CONFIG / "speed.toml").read_text(encoding="utf-8"),
-                                  encoding="utf-8")
+    # Усі теми (D50: з'явився liveness.toml) — інакше `config check` на копії
+    # падав би на відсутньому файлі, а не на правці, яку перевіряє тест.
+    for src in CONFIG.rglob("*.toml"):
+        dst = d / src.relative_to(CONFIG)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setenv(configfiles.ENV_DIR, str(d))
     return d
 
@@ -158,8 +162,11 @@ def test_override_dir_is_used(cfg_dir):
     ("server_p95_ms = 300", "server_p95_ms = true", "очікувалось ціле число"),   # bool ≠ 1
     ("pause_hidden = true", "pause_hidden = 1", "очікувалось true/false"),
     ("level = 5", "level = 12", "більше за допустимий максимум 9"),
-    ('roles = ["owner", "friend"]', 'roles = ["owner", "guest"]', "не з переліку"),
-    ('roles = ["owner", "friend"]', 'roles = "owner"', "очікувався список"),
+    # roles є у [timings] і в [rum] — правка однієї секції за рядком, що йде після.
+    ('roles = ["owner", "friend"]\n\n[rum]', 'roles = ["owner", "guest"]\n\n[rum]',
+     "timings.roles: 'guest' — не з переліку"),
+    ('roles = ["owner", "friend"]\n# Скільки днів', 'roles = "owner"\n# Скільки днів',
+     "rum.roles: очікувався список"),
     ('"/status", "/api/status",', '"/status", "api/status",', "має починатися з '/'"),
     ("[txn_watch]\n", "[txn_watch_typo]\n", "txn_watch: ключа немає"),          # секція
     # nan і inf — чинний TOML, але межі min/max їх не зупиняють (порівняння з nan
@@ -169,6 +176,10 @@ def test_override_dir_is_used(cfg_dir):
     ("views_flush_s = 60", "views_flush_s = -inf", "очікувалось скінченне число"),
     # Ціле, яке не влазить у float: OverflowError не має проскочити повз ConfigError.
     ("pause_s = 2.5", "pause_s = " + "9" * 400, "число завелике"),
+    # Між полями: процес перевірки бере нові завдання лише до drain_budget_s, а
+    # останнє має встигнути до job_timeout_s (TimeoutStartSec юніта).
+    ("drain_budget_s = 60", "drain_budget_s = 180",
+     "open_check.drain_budget_s: 180.0 має бути меншим за job_timeout_s (180.0)"),
 ])
 def test_broken_config_is_refused(cfg_dir, old, new, needle):
     _edit(cfg_dir, old, new)

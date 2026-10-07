@@ -15,6 +15,20 @@ from ..analytics import cache
 from ..db import session_scope
 from ..dedup import merge_into, split_off
 from ..models import DedupDecision, Listing
+from . import speedcache
+
+
+def _refresh(property_ids) -> None:
+    """Дію власника видно одразу (Блок 2, крок E5, D50).
+
+    Знімок «Аналітики» оновлюється лише для зачеплених квартир (нова квартира
+    після «розділити» відкривається одразу, а не 404 до перебудови; та, що
+    зникла після «злити», — прибрана), зведення перераховуються фоном. Кеш
+    списку — за версією даних процесу й явною позначкою власника.
+    """
+    with session_scope() as s:
+        cache.patch_properties(s, [p for p in property_ids if p is not None])
+    speedcache.owner_changed("dedup")
 
 router = APIRouter()
 
@@ -35,7 +49,7 @@ def api_split(payload: dict = Body(default={})):
             new_pid = split_off(s, pid, ids)
     except ValueError as e:
         return _fail(str(e))
-    cache.invalidate()
+    _refresh([pid, new_pid])
     return {"ok": True, "property_id": pid, "new_property_id": new_pid}
 
 
@@ -49,12 +63,13 @@ def api_merge(payload: dict = Body(default={})):
         return _fail("незрозумілий запит")
     if not m:
         return _fail("вкажіть номер квартири або посилання на неї")
+    other = int(m.group(1))
     try:
         with session_scope() as s:
-            kept = merge_into(s, pid, int(m.group(1)))
+            kept = merge_into(s, pid, other)
     except ValueError as e:
         return _fail(str(e))
-    cache.invalidate()
+    _refresh([pid, other, kept])
     return {"ok": True, "property_id": kept}
 
 
@@ -65,6 +80,7 @@ def api_undo(decision_id: int):
         if d is None or not d.active:
             return _fail("такого чинного рішення немає", 404)
         d.active = False
+    speedcache.owner_changed("dedup_undo")
     return {"ok": True, "note": "поділ квартир повернеться до правил на найближчій перебудові"}
 
 

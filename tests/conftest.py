@@ -81,10 +81,47 @@ def _repair(path: Path) -> Path:
 os.environ["DB_URL"] = f"sqlite:///{_repair(_copy('realty.db'))}"
 os.environ["OPS_DB_URL"] = f"sqlite:///{_copy('ops.db')}"
 
-# Як сайт на старті (lifespan → init_db): доливаємо в копію нові колонки схеми.
-# Інакше тести з копією робочої бази падали б на кожному новому полі моделі.
-from realty.db import init_db as _init_db  # noqa: E402
-_init_db()
+# Як після розгортання (`cli.py db migrate`, Блок 2 E4, D50): нові таблиці,
+# колонки й індекси схеми — у КОПІЇ. Інакше тести з копією робочої бази падали б
+# на кожному новому полі моделі, а запити сайту йшли б без індексів.
+from realty.db import migrate as _migrate  # noqa: E402
+_migrate()
+
+# Перевірка при відкритті квартири (Блок 2, крок E5, D50): сайт ставить
+# завдання в чергу й запускає окремий процес `cli.py lookup check`. У тестах
+# процес НЕ запускається (він ходив би в мережу й писав у базу поза тестом):
+# запуск лише записується, а тест, якому треба, виконує завдання сам тим самим
+# кодом (realty.lookup.opened.run_job).
+from realty.web import livecheck as _livecheck  # noqa: E402
+
+LAUNCHED: list[int] = []
+
+
+def _record_launch(job_id: int) -> str:
+    LAUNCHED.append(int(job_id))
+    return "test"
+
+
+_livecheck.launch = _record_launch
+
+# Замки й прапорець перевірки при відкритті — у тимчасовій теці, а не в data/
+# репозиторію: на Mac розробника data/COLLECTOR_OFF існує (базу перенесено на
+# Fedora), і кожне завдання закривалось би «skipped», а тест, що бере замок
+# циклу, не має чіпати справжній data/cycle.lock.
+from realty.lookup import opened as _opened  # noqa: E402
+
+_opened.DRAIN_LOCK = _TMP / "lookup.lock"
+_opened.CYCLE_LOCK = _TMP / "cycle.lock"
+_opened.DISABLED_FLAG = _TMP / "COLLECTOR_OFF"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_livecheck():
+    """Диспетчер перевірок — один на процес; у кожного тесту своя ops.db, тож
+    номери завдань і «щойно запущений процес» попереднього тесту тут чужі."""
+    _livecheck.LIVE.reset()
+    yield
+    _livecheck.LIVE.reset()
 
 # Курс НБУ: справжній `usd_uah_rate` ходить на bank.gov.ua під час кожного
 # прогону конвеєра (to_uah). Досі тести тихо робили цей запит — заборона мережі

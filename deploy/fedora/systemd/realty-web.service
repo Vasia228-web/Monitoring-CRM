@@ -9,6 +9,21 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=%h/realty/.venv/bin/python cli.py serve --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
+# --- Пріоритет сайту над збором (Блок 2, крок E5, D50) ---------------------------
+# Лише те, що діє в користувацькому менеджері systemd БЕЗ root:
+#  * CPUWeight — частка процесора серед служб користувача (цикл: 20). Діє, якщо
+#    контролер cpu делеговано user@.service (у systemd ≥252 — типово:
+#    Delegate=pids memory cpu); інакше systemd тихо його не застосує. Перевірка —
+#    `cli.py speed priorities` (cpu.weight у cgroup служби).
+#  * IOSchedulingClass/Priority — пріоритет диска процесу (ionice). Клас
+#    best-effort із будь-яким рівнем 0–7 ядро дозволяє без прав (лише realtime
+#    вимагає CAP_SYS_ADMIN); діє з планувальником BFQ (HDD на Fedora — типово).
+# Чого тут НЕМАЄ, бо без root не діє: IOWeight (контролер io не делеговано
+# користувачу), MemoryLow (захист пам'яті потребує memory.low і в батьківських
+# групах), від'ємні Nice/OOMScoreAdjust. Це — дія власника через sudo (D50).
+CPUWeight=1000
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
 
 [Install]
 WantedBy=default.target

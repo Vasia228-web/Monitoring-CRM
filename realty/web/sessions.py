@@ -100,8 +100,19 @@ def create(user: str, role: str, password: str, ip: str | None, ua: str | None) 
     return f"{sid}.{_mac('sid:' + sid)[:32]}"
 
 
-def validate(cookie: str | None, accounts: dict) -> AuthSession | None:
-    """Сесія за кукою — або None. Перевіряє підпис, термін, пароль і роль."""
+def needs_touch(row: AuthSession, now: datetime | None = None) -> bool:
+    """Чи пора оновити last_seen сесії (не частіше ніж раз на TOUCH_EVERY)."""
+    return (now or ops._now()) - row.last_seen > TOUCH_EVERY
+
+
+def validate(cookie: str | None, accounts: dict, *, touch: bool = True) -> AuthSession | None:
+    """Сесія за кукою — або None. Перевіряє підпис, термін, пароль і роль.
+
+    `touch=False` — без запису last_seen (Блок 2, крок E5, D50): сайт оновлює
+    його фоном (`deferred.touch_session`), щоб перевірка входу на кожен запит
+    не відкривала транзакцію запису. Сесію, що вже не діє (пароль чи роль
+    змінились), видаляємо одразу, як і досі: це безпека, а не лічильник.
+    """
     if not cookie or "." not in cookie:
         return None
     sid, _, sig = cookie.partition(".")
@@ -119,7 +130,7 @@ def validate(cookie: str | None, accounts: dict) -> AuthSession | None:
                 not hmac.compare_digest(row.pw_tag, pw_tag(acct[0])):
             s.delete(row)
             return None
-        if now - row.last_seen > TOUCH_EVERY:
+        if touch and needs_touch(row, now):
             row.last_seen = now
         s.expunge(row)
         return row
@@ -181,8 +192,19 @@ def register_success(ip: str) -> None:
 
 
 def unblock(ip: str) -> bool:
+    """Знімає блок і лічильник невдалих спроб з адреси (успішний вхід, кнопка власника).
+
+    Спершу читання, видалення — лише якщо рядок є (Блок 2, D49). Скрипти
+    (зонд швидкості) входять заголовком Basic на КОЖЕН запит, і кожен такий
+    вхід досі робив DELETE — транзакцію запису в ops.db на event loop, яка під
+    час циклу чекала на записи кроків (busy_timeout 30 с). Читання транзакції
+    запису не відкриває; результат той самий: невдалі спроби й блок після
+    успішного входу зникають.
+    """
     ops.init_ops()
     with ops.ops_session() as s:
+        if s.scalar(select(AuthBlock.ip).where(AuthBlock.ip == ip).limit(1)) is None:
+            return False
         return s.execute(delete(AuthBlock).where(AuthBlock.ip == ip)).rowcount > 0
 
 

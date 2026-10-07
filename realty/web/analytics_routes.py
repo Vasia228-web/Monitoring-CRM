@@ -15,17 +15,14 @@ from sqlalchemy import func, select
 from ..analytics import cache, forecast
 from ..analytics.inventory import check_rate
 from ..analytics.objects import analyse
+from . import livecheck
 from ..analytics.segments import (
-    COND_LABEL, MARKET_LABEL, by_condition, by_market, by_rooms,
-    days_by_condition, days_distribution, headline_condition, headline_days,
-    headline_market, headline_rooms,
-    liquidity_proxy, primary_vs_secondary, rooms_label,
+    COND_LABEL, MARKET_LABEL, analytics_parts, filter_curve, rooms_label,
 )
 from ..analytics.settings import load
-from ..analytics.survival import Observation, estimate
 from ..dedup import resolve_property_id
 from ..db import SessionLocal
-from ..models import DataReport, Listing
+from ..models import DataReport, Listing, Property
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +61,7 @@ def api_report(listing_id: int, payload: dict = Body(default={})):
 
 
 def _in_work(session) -> int:
+    """Значок «В обробці»: живим запитом за ix_listings_in_progress (Блок 2, E4)."""
     return session.scalar(select(func.count()).select_from(Listing)
                           .where(Listing.in_progress.is_(True))) or 0
 
@@ -93,39 +91,19 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
         sweep = check_rate(s)
 
     universe = snapshot.universe
+    # Те, що від фільтра не залежить (пари «новобудова/вторинка», дні на ринку,
+    # проксі ліквідності, зрізи), рахується раз на знімок, а не на кожен запит;
+    # крива строку продажу — раз на фільтр (Блок 2, D48). Фільтр застосовується
+    # до готових рядків тут, як і раніше. Отримане — спільне: не змінювати.
+    parts = analytics_parts(universe, cfg)
     segments = _filtered(snapshot.segments, rooms=rooms, condition=condition, market=market)
-    pairs = [r for r in primary_vs_secondary(universe, cfg)
+    pairs = [r for r in parts["pairs"]
              if (not rooms or str(r["rooms"] or "") == rooms)
              and (not condition or r["condition"] == condition)]
-    day_rows = days_by_condition(universe, cfg)
-    proxy = _filtered(liquidity_proxy(universe, cfg),
-                      rooms=rooms, condition=condition, market=market)
-
-    # Ліквідність рахуємо тут же, а не заглушкою в шаблоні: блок сам увімкнеться,
-    # щойно накопичиться достатньо зафіксованих зникнень.
-    peers = [o for o in universe.items
-             if (not rooms or str(o.band or "") == rooms)
-             and (not condition or o.condition == condition)
-             and (not market or o.market == market)]
-    liquidity = estimate([Observation(days=obs[0], event=obs[1], entry=obs[2])
-                          for o in peers if (obs := o.observation) is not None], cfg)
-
-    # Прості зрізи для сторінки: один графік — одна думка. Складені сегменти
-    # лишаються для порівняння конкретної квартири, де вони й потрібні.
-    cuts = [
-        {"key": "rooms", "rows": by_rooms(universe, cfg),
-         "title": headline_rooms(by_rooms(universe, cfg)),
-         "note": "Менша квартира зазвичай дорожча за метр — так на ринку "
-                 "буває завжди."},
-        {"key": "condition", "rows": by_condition(universe, cfg),
-         "title": headline_condition(by_condition(universe, cfg)),
-         "note": "Порівняні тільки ті квартири, де стан вказано прямо."},
-        {"key": "market", "rows": by_market(universe, cfg),
-         "title": headline_market(by_market(universe, cfg)),
-         "note": "Новобудовою вважаємо квартиру, яку так назвав сам продавець "
-                 "або майданчик."},
-    ]
-    cuts = [c for c in cuts if len(c["rows"]) >= 2]
+    day_rows = parts["days"]
+    proxy = _filtered(parts["proxy"], rooms=rooms, condition=condition, market=market)
+    liquidity = filter_curve(universe, cfg, rooms=rooms, condition=condition, market=market)
+    cuts = parts["cuts"]
 
     covered = sum(r["n"] for r in segments)
     return templates.TemplateResponse(request, "analytics.html", {
@@ -134,7 +112,7 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
         "sources": snapshot.sources_matched,
         "composition": snapshot.sources_composition,
         "below": snapshot.below, "covered": covered, "liquidity": liquidity,
-        "cuts": cuts, "days": day_rows, "days_title": headline_days(day_rows),
+        "cuts": cuts, "days": day_rows, "days_title": parts["days_title"],
         "sweep": sweep, "proxy": proxy,
         "universe_size": len(universe),
         "forecast": forecast_state,
@@ -149,48 +127,60 @@ def analytics_page(request: Request, rooms: str = Query(""), condition: str = Qu
 
 
 def _count_view(session, property_id: int) -> None:
-    """Відмічає, що картку відкривали.
+    """Відмічає, що картку відкривали — у буфері, а не записом у запиті (Блок 2, E5).
 
     Лічильник рухає чергу перевірок: те, на що дивляться, варто перевіряти
-    частіше за те, на що ніхто не дивиться. Рахується окремо від самої
-    перевірки — відкриття є фактом незалежно від того, чи ходили ми цього
-    разу на сайт.
+    частіше за те, на що ніхто не дивиться. Досі GET писав у базу й чекав
+    чужого блокування запису: під 12-секундним блокуванням кроку циклу
+    сторінка відкривалась 12 047 мс, під 40-секундним — 500 «database is
+    locked» (заміри плану Блоку 2, D48). Тепер id оголошень квартири йдуть у
+    буфер (`web/deferred.py`), а фоновий потік раз на `deferred.views_flush_s`
+    робить те саме, що й досі: views + число відкриттів, viewed_at — час
+    останнього. Перегляд — факт незалежно від того, чи ходили ми на сайт.
     """
-    now = datetime.now()
-    for row in session.scalars(
-            select(Listing).where(Listing.property_id == property_id)):
-        row.views = (row.views or 0) + 1
-        row.viewed_at = now
-    session.commit()
+    from .perf import WRITER
+
+    ids = list(session.scalars(select(Listing.id).where(Listing.property_id == property_id)))
+    WRITER.add_views(ids, datetime.now(), engine=session.get_bind())
 
 
-def _refresh_liveness(session, property_id: int) -> dict:
-    """Перевіряє саме це оголошення просто зараз.
+def property_rows(session, property_id: int) -> list[Listing]:
+    """Оголошення квартири для її сторінки: від найдорожчого до найдешевшого.
 
-    Один запит у момент, коли він справді потрібен: людина відкрила картку й
-    зараз на неї дивитиметься. Мертве посилання дратує найбільше саме тут, а
-    черга сліпих перевірок дійде сюди нескоро.
+    Рівні ціни — за id, явно. Досі їхній порядок давала база, і це був порядок
+    id (перевірено на копії Етапу 0: 3 936 квартир із рівними цінами, 0
+    відмінностей від ORDER BY ціна, id). Новий індекс міг би його змінити
+    (Блок 2, D48).
     """
-    from ..verify import is_checkable, verify_batch
+    return session.scalars(select(Listing)
+                           .where(Listing.property_id == property_id)
+                           .order_by(Listing.price_usd.desc(), Listing.id)).all()
 
-    ids = [row.id for row in session.scalars(
-        select(Listing).where(Listing.property_id == property_id,
-                              Listing.is_active.is_(True)))
-        if is_checkable(row.original_url)]
-    if not ids:
-        return {"checked": 0, "delisted": 0}
-    try:
-        stats = verify_batch(limit=len(ids), ids=ids, reason="opened")
-    except Exception as e:                                      # noqa: BLE001
-        # Сторінка не має падати через те, що джерело не відповіло.
-        log.warning("Перевірка при відкритті %s не вдалась: %s", property_id, e)
-        return {"checked": 0, "delisted": 0}
-    return {"checked": stats["checked"], "delisted": stats["delisted"]}
+
+def _analyse(session, property_id: int, cfg) -> dict | None:
+    """analyse() за знімком; квартира, якої знімок ще не знає, — точкове оновлення.
+
+    Знімок перебудовується за поколінням (після кроку «дублі» й у кінці
+    циклу), а список живий: квартира, яку щойно створило зведення, вже є в
+    списку, але ще не в знімку. Досі такий запит перебудовував увесь знімок
+    (≈5 с на Fedora); тепер — рядок однієї квартири (Блок 2, E5, D50).
+    """
+    data = analyse(session, cache.get(session).universe, property_id, cfg)
+    if data is None and session.get(Property, property_id) is not None:
+        if cache.patch_properties(session, [property_id], rebuild=False):
+            data = analyse(session, cache.get(session).universe, property_id, cfg)
+    return data
 
 
 @router.get("/property/{property_id}", response_class=HTMLResponse)
 def property_page(request: Request, property_id: int, verify: str = Query("1")):
-    """Аналітика однієї квартири — головна відповідь «краща чи гірша за ринок»."""
+    """Аналітика однієї квартири — головна відповідь «краща чи гірша за ринок».
+
+    GET нічого не пише й у мережу не ходить (Блок 2, крок E5): перегляд — у
+    буфер, перевірка актуальності — завданням у черзі (`livecheck`), результат
+    якої сторінка показує банером. Функція та сама, що й досі: перевірка при
+    кожному відкритті без verify=0.
+    """
     from .app import templates
 
     cfg = load()
@@ -201,10 +191,8 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"/property/{current}{query}", status_code=302)
         _count_view(s, property_id)
-        if verify != "0":
-            _refresh_liveness(s, property_id)
-        snapshot = cache.get(s)
-        data = analyse(s, snapshot.universe, property_id, cfg)
+        live_check = livecheck.request(property_id) if verify != "0" else None
+        data = _analyse(s, property_id, cfg)
         in_work = _in_work(s)
         forecast_state = forecast.state(s, cfg)
         if data is None:
@@ -214,9 +202,7 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
                  "path": "/", "f": {}},
                 status_code=404)
         # Оголошення потрібні шаблону для кнопки «взяти в обробку».
-        data["rows"] = s.scalars(select(Listing)
-                                 .where(Listing.property_id == property_id)
-                                 .order_by(Listing.price_usd.desc())).all()
+        data["rows"] = property_rows(s, property_id)
         # Об'єкт вважаємо взятим в обробку, якщо позначене хоч одне з оголошень:
         # інакше статус, поставлений зі списку, не було б видно на цій сторінці.
         data["in_progress"] = any(r.in_progress for r in data["rows"])
@@ -226,7 +212,7 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
             data["can_fix_dedup"] = True
             data["decisions"] = decisions_for(s, {r.id for r in data["rows"]})
     data.update({"page": "list", "in_work": in_work, "forecast": forecast_state,
-                 "path": "/", "f": {},
+                 "path": "/", "f": {}, "live_check": live_check,
                  "cfg": cfg, "rooms_label": rooms_label(data["item"].band),
                  "condition_label": COND_LABEL[data["item"].condition],
                  "market_label": MARKET_LABEL[data["item"].market]})
@@ -265,7 +251,7 @@ def api_property(property_id: int):
     cfg = load()
     with SessionLocal() as s:
         property_id = resolve_property_id(s, property_id) or property_id
-        data = analyse(s, cache.get(s).universe, property_id, cfg)
+        data = _analyse(s, property_id, cfg)
     if data is None:
         return {"error": "not_found", "property_id": property_id}
     item, history = data["item"], data["history"]

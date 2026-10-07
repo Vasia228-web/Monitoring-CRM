@@ -11,3 +11,7 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=%h/realty/.venv/bin/python cli.py dedup sample
 TimeoutStartSec=15min
 Nice=10
+# Службові й нічні задачі теж поступаються сайту (Блок 2, D50; без root).
+CPUWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

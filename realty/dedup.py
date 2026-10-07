@@ -939,8 +939,14 @@ def split_off(session, property_id: int, listing_ids: list[int]) -> int:
     """«Це різні квартири»: вибрані оголошення стають окремою квартирою.
 
     Повертає її id. Решта лишається під старим id (там більшість або те, що
-    власник не позначив)."""
-    rows = list(session.scalars(select(Listing).where(Listing.property_id == property_id)))
+    власник не позначив).
+
+    Учасники — у порядку id, явно: `_attrs` бере перше значення серед рівних
+    (`_pick`, вулиця), тож від порядку залежить, які поля отримає квартира.
+    Досі це був порядок індексу за property_id (тобто id); новий індекс міг
+    би його змінити (Блок 2, D48)."""
+    rows = list(session.scalars(select(Listing).where(Listing.property_id == property_id)
+                                .order_by(Listing.id)))
     chosen = {r.id for r in rows} & set(listing_ids)
     rest = [r for r in rows if r.id not in chosen]
     if not chosen or not rest:
@@ -965,8 +971,12 @@ def merge_into(session, property_id: int, other_id: int) -> int:
         raise ValueError("такої квартири немає")
     if pid == other:
         raise ValueError("це вже одна квартира")
-    mine = list(session.scalars(select(Listing).where(Listing.property_id == pid)))
-    theirs = list(session.scalars(select(Listing).where(Listing.property_id == other)))
+    # Порядок учасників — за id, явно (див. split_off): від нього залежать поля
+    # квартири з `_attrs`.
+    mine = list(session.scalars(select(Listing).where(Listing.property_id == pid)
+                                .order_by(Listing.id)))
+    theirs = list(session.scalars(select(Listing).where(Listing.property_id == other)
+                                  .order_by(Listing.id)))
     decide(session, "same", [r.id for r in mine], [r.id for r in theirs], pid, other)
     # Лишається id квартири з більшістю оголошень (як у перебудові, `assign_ids`),
     # за рівності — старший: так живуть збережені посилання.

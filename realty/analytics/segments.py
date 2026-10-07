@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import logging
 import statistics as st
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,10 +15,15 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from .. import configfiles
 from ..db import SessionLocal
 from ..models import Condition, Listing, MarketType, PriceEvent, Property
+from .memo import Memo, curve_capacity
 from .settings import Settings, load
 from .stats import Summary, diff_pct, percentile_of, summarise
+from .survival import Observation, estimate
+
+log = logging.getLogger(__name__)
 
 COND_LABEL = {"renovated": "з ремонтом", "needs_repair": "без ремонту",
               "unknown": "стан не визначено"}
@@ -114,27 +120,81 @@ class Universe:
 
     items: list[Item] = field(default_factory=list)
     built_at: datetime | None = None
+    # Покажчики й пам'ять знімка (Блок 2, D48). Сторінка квартири шукала свій
+    # об'єкт і «схожі» повним проходом по 15 тис. об'єктів на кожен щабель
+    # драбини — 75–114 мс на M4. Покажчики будуються з `items` один раз;
+    # пам'ять (`memo.Memo`) тримає пораховане для цього знімка. У порівняння
+    # й repr не входять: це похідне від items, а не дані.
+    _index: tuple | None = field(default=None, init=False, repr=False, compare=False)
+    curves: Memo = field(default_factory=Memo, init=False, repr=False, compare=False)
+    parts_memo: Memo = field(default_factory=Memo, init=False, repr=False, compare=False)
 
     def __len__(self) -> int:
         return len(self.items)
+
+    def reset_derived(self) -> None:
+        """Забути все, що пораховано з `items`: покажчики, криві, частини сторінки.
+
+        ОБОВ'ЯЗКОВО для коду, що змінює `items` живого знімка на місці (крок
+        E5 Блоку 2: оновлення квартир після «розділити/злити»). Покажчики
+        самі помічають лише підміну чи зміну довжини списку; заміна елемента
+        `items[i] = …` тієї самої довжини і пам'ять кривих та частин цього не
+        помічають — без виклику наступне відкриття сторінки показало б старе.
+        """
+        self._index = None
+        self.curves = Memo()
+        self.parts_memo = Memo()
+
+    def _indexes(self) -> tuple[dict[int, Item], dict[int | None, list[Item]]]:
+        # Покажчики перебудовуються, якщо список items підмінили чи доповнили
+        # (так роблять тести); заміну елемента на місці бачить лише
+        # reset_derived(). Порядок у кожному кошику — як в items: від
+        # нього залежать суми з плаваючою комою в статистиці «схожих».
+        key = (id(self.items), len(self.items))
+        index = self._index
+        if index is None or index[0] != key:
+            by_id: dict[int, Item] = {}
+            by_band: dict[int | None, list[Item]] = {}
+            for o in self.items:
+                by_id.setdefault(o.property_id, o)      # перший, як раніше next(...)
+                by_band.setdefault(o.band, []).append(o)
+            index = self._index = (key, by_id, by_band)
+        return index[1], index[2]
+
+    @property
+    def by_id(self) -> dict[int, Item]:
+        """property_id → об'єкт (замість пошуку проходом по всіх)."""
+        return self._indexes()[0]
+
+    @property
+    def by_band(self) -> dict[int | None, list[Item]]:
+        """Смуга кімнатності → об'єкти цієї смуги в порядку `items`."""
+        return self._indexes()[1]
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _price_moves(session) -> dict[int, tuple[int, float | None]]:
+def _price_moves(session, property_ids=None) -> dict[int, tuple[int, float | None]]:
     """Скільки разів ціна об'єкта падала і наскільки глибоко сумарно.
 
     Рахується в межах одного оголошення: поява того самого об'єкта на другому
     майданчику дає новий запис, але це не рух ціни продавця.
+
+    Останній ключ порядку — id події (Блок 2, D49): дві події одного
+    оголошення з однаковим часом інакше йшли б у порядку плану запиту. На
+    копії Етапу 0 таких 0, і індекс (listing_id, observed_at) дає цей самий
+    порядок без сортування (rowid — неявна остання колонка індексу).
     """
-    rows = session.execute(
-        select(Listing.property_id, PriceEvent.listing_id, PriceEvent.price_usd,
-               PriceEvent.observed_at)
-        .join(Listing, Listing.id == PriceEvent.listing_id)
-        .where(Listing.property_id.isnot(None), PriceEvent.price_usd.isnot(None))
-        .order_by(PriceEvent.listing_id, PriceEvent.observed_at)).all()
+    stmt = (select(Listing.property_id, PriceEvent.listing_id, PriceEvent.price_usd,
+                   PriceEvent.observed_at)
+            .join(Listing, Listing.id == PriceEvent.listing_id)
+            .where(Listing.property_id.isnot(None), PriceEvent.price_usd.isnot(None))
+            .order_by(PriceEvent.listing_id, PriceEvent.observed_at, PriceEvent.id))
+    if property_ids is not None:
+        stmt = stmt.where(Listing.property_id.in_(property_ids))
+    rows = session.execute(stmt).all()
 
     previous: dict[int, float] = {}
     drops: dict[int, int] = defaultdict(int)
@@ -157,20 +217,45 @@ def _price_moves(session) -> dict[int, tuple[int, float | None]]:
 
 
 def build_universe(session) -> Universe:
-    """Збирає знімок: один майстер-об'єкт — один рядок."""
-    props = session.execute(
-        select(Property.id, Property.rooms, Property.area_total, Property.price_usd_min,
-               Property.price_per_sqm, Property.condition, Property.market_type,
-               Property.district)).all()
+    """Збирає знімок: один майстер-об'єкт — один рядок.
 
+    Порядок рядків задано явно (ORDER BY id), а не залишено планувальнику:
+    від порядку об'єктів залежать порядок рядків у таблицях і суми з
+    плаваючою комою в статистиці «схожих». Досі це був порядок повного
+    проходу таблиці (за rowid = id) — той самий, що дає ORDER BY id; але
+    новий індекс міг би непомітно його змінити (Блок 2, D48: так у прототипі
+    перескочила позначка «найдешевше» в порівнянні джерел).
+    """
+    now = _now()
+    return Universe(items=build_items(session, None, now=now), built_at=now)
+
+
+def build_items(session, property_ids, *, now: datetime) -> list[Item]:
+    """Рядки знімка для квартир `property_ids` (None — для всіх), у порядку id.
+
+    Той самий розрахунок, що й для повного знімка: кожне поле квартири
+    залежить лише від її власних оголошень і подій ціни. Тому точкове
+    оновлення знімка після «розділити/злити» (Блок 2, крок E5, D50) дає ті
+    самі рядки, що й повна перебудова з тим самим `now` (тест
+    test_universe_patch_equals_rebuild). Квартири, якої вже немає, у
+    результаті немає.
+    """
+    ids = None if property_ids is None else sorted(set(property_ids))
+    props_stmt = (select(Property.id, Property.rooms, Property.area_total,
+                         Property.price_usd_min, Property.price_per_sqm, Property.condition,
+                         Property.market_type, Property.district).order_by(Property.id))
     # Дату публікації і джерела беремо з оголошень: у майстер-записі їх немає,
     # а «скільки днів на ринку» рахується від найранішої публікації серед усіх
     # склеєних оголошень — інакше переклеєне оголошення виглядало б новим.
-    listings = session.execute(
-        select(Listing.property_id, Listing.published_at, Listing.source,
-               Listing.delisted_at, Listing.price_usd, Listing.last_alive_at,
-               Listing.first_seen)
-        .where(Listing.property_id.isnot(None))).all()
+    listings_stmt = (select(Listing.property_id, Listing.published_at, Listing.source,
+                            Listing.delisted_at, Listing.price_usd, Listing.last_alive_at,
+                            Listing.first_seen)
+                     .where(Listing.property_id.isnot(None)).order_by(Listing.id))
+    if ids is not None:
+        props_stmt = props_stmt.where(Property.id.in_(ids))
+        listings_stmt = listings_stmt.where(Listing.property_id.in_(ids))
+    props = session.execute(props_stmt).all()
+    listings = session.execute(listings_stmt).all()
     published: dict[int, datetime] = {}
     delisted: dict[int, datetime] = {}
     last_alive: dict[int, datetime] = {}
@@ -197,8 +282,7 @@ def build_universe(session) -> Universe:
         elif prop_id not in delisted or gone > delisted[prop_id]:
             delisted[prop_id] = gone
 
-    price_moves = _price_moves(session)
-    now = _now()
+    price_moves = _price_moves(session, ids)
     items = []
     for pid, rooms, area, stored_price, stored_ppsqm, cond, market, district in props:
         pub = published.get(pid)
@@ -230,7 +314,7 @@ def build_universe(session) -> Universe:
             lifetime_days=lifetime, interval_days=interval, entry_days=entry,
             price_drops=drops, price_drop_pct=depth,
         ))
-    return Universe(items=items, built_at=now)
+    return items
 
 
 # --- Драбина сегментів --------------------------------------------------------
@@ -252,6 +336,10 @@ def ladder(item: Item, cfg: Settings) -> list[Level]:
     відомий лише для 83% об'єктів і швидко залишає вибірку без даних. Стан і
     ринок тримаємо до останнього: новобудова-сирець і вторинка з ремонтом —
     це різні ринки, зводити їх разом безглуздо.
+
+    Кожен щабель вимагає тієї самої смуги кімнатності (o.band == item.band):
+    на цьому стоїть пошук «схожих» лише в кошику смуги (`compare`). Новий
+    щабель без цієї умови — лише разом зі зміною `compare`.
     """
     band = item.band
     area = item.area
@@ -328,8 +416,13 @@ def compare(universe: Universe, item: Item, cfg: Settings | None = None,
     результат, а не помилка: у деяких об'єктів просто немає з чим порівнювати.
     """
     cfg = cfg or load()
+    # Кожен щабель драбини вимагає тієї самої смуги кімнатності (o.band ==
+    # item.band), тож шукати «схожих» досить у кошику цієї смуги, а не серед
+    # усіх об'єктів бази. Кошик зберігає порядок `universe.items`, тому список
+    # схожих і суми над ним ті самі до біта (Блок 2, D48).
+    pool = universe.by_band.get(item.band, ())
     for level in ladder(item, cfg):
-        peers = [v for o in universe.items
+        peers = [v for o in pool
                  if o.property_id != item.property_id and level.match(o)
                  and (v := value(o)) is not None]
         if len(peers) < cfg.min_sample:
@@ -649,3 +742,113 @@ def headline_market(rows: list[dict]) -> str | None:
     if gap < 5:
         return "Новобудова і вторинка коштують майже однаково"
     return f"{rows[0]['label'].capitalize()} дорожча на {gap}%"
+
+
+# --- Пам'ять знімка: частини «Аналітики» й криві виживання ---------------------
+# Блок 2 (D48): усе нижче залежить лише від знімка й налаштувань, а не від
+# запиту, тож рахується один раз на знімок (`Universe.parts_memo`, `.curves`).
+# Ключ включає налаштування (`Settings` — заморожений, хешований): змінили
+# пороги — інший ключ, а не старе число.
+
+
+def _compute_parts(universe: Universe, cfg: Settings) -> dict:
+    day_rows = days_by_condition(universe, cfg)
+    rooms_rows = by_rooms(universe, cfg)
+    condition_rows = by_condition(universe, cfg)
+    market_rows = by_market(universe, cfg)
+    # Прості зрізи для сторінки: один графік — одна думка. Складені сегменти
+    # лишаються для порівняння конкретної квартири, де вони й потрібні.
+    cuts = [
+        {"key": "rooms", "rows": rooms_rows,
+         "title": headline_rooms(rooms_rows),
+         "note": "Менша квартира зазвичай дорожча за метр — так на ринку "
+                 "буває завжди."},
+        {"key": "condition", "rows": condition_rows,
+         "title": headline_condition(condition_rows),
+         "note": "Порівняні тільки ті квартири, де стан вказано прямо."},
+        {"key": "market", "rows": market_rows,
+         "title": headline_market(market_rows),
+         "note": "Новобудовою вважаємо квартиру, яку так назвав сам продавець "
+                 "або майданчик."},
+    ]
+    return {
+        "pairs": primary_vs_secondary(universe, cfg),
+        "days": day_rows,
+        "days_title": headline_days(day_rows),
+        "proxy": liquidity_proxy(universe, cfg),
+        "cuts": [c for c in cuts if len(c["rows"]) >= 2],
+    }
+
+
+def analytics_parts(universe: Universe, cfg: Settings) -> dict:
+    """Те, що на сторінці «Аналітика» не залежить від фільтра, — раз на знімок.
+
+    Досі рахувалось на кожен запит, а зрізи по кімнатах, стану й ринку — ще й
+    двічі (рядки й заголовок). Фільтр застосовується до готових рядків уже в
+    маршруті, як і раніше. Значення спільні між запитами — не змінювати.
+    """
+    # Наборів налаштувань одночасно буває один; 4 — запас на їх зміну.
+    return universe.parts_memo.get(("parts", cfg),
+                                   lambda: _compute_parts(universe, cfg), capacity=4)
+
+
+def _curve(observed: list[Item], cfg: Settings) -> dict:
+    return estimate([Observation(days=obs[0], event=obs[1], entry=obs[2])
+                     for o in observed if (obs := o.observation) is not None], cfg)
+
+
+_capacity_error: list[str] = []
+
+
+def _remembered(universe: Universe, key: tuple, compute) -> dict:
+    """Крива з пам'яті знімка; якщо config/speed.toml не читається — без пам'яті.
+
+    Сторінки «Аналітика» й квартири до Блоку 2 від speed.toml не залежали, і
+    налаштування виміру не має їх валити (500). Без пам'яті крива та сама —
+    лише рахується заново; помилка — в журнал (раз на текст помилки, а не на
+    кожен запит), як і решта виміру швидкості (perf.py, runner.py).
+    """
+    try:
+        capacity = curve_capacity()
+    except configfiles.ConfigError as e:
+        text = str(e)
+        if text not in _capacity_error:
+            _capacity_error[:] = [text]
+            log.error("config/speed.toml не читається — криві «Аналітики» без пам'яті: %s",
+                      text)
+        return compute()
+    return universe.curves.get(key, compute, capacity=capacity)
+
+
+def filter_curve(universe: Universe, cfg: Settings, *, rooms: str = "",
+                 condition: str = "", market: str = "") -> dict:
+    """Строк продажу (крива виживання) для фільтра сторінки «Аналітика».
+
+    Ліквідність рахуємо тут же, а не заглушкою в шаблоні: блок сам увімкнеться,
+    щойно накопичиться достатньо зафіксованих зникнень. Результат — спільний
+    між запитами словник: не змінювати.
+    """
+    def compute() -> dict:
+        peers = [o for o in universe.items
+                 if (not rooms or str(o.band or "") == rooms)
+                 and (not condition or o.condition == condition)
+                 and (not market or o.market == market)]
+        return _curve(peers, cfg)
+
+    return _remembered(universe, ("filter", rooms, condition, market, cfg), compute)
+
+
+def segment_curve(universe: Universe, cfg: Settings, item: Item) -> dict:
+    """Крива виживання сегмента квартири (кімнатність × стан × ринок).
+
+    Одна на сегмент, а не на квартиру: усі квартири сегмента мають ту саму
+    криву. Результат спільний — сторінка квартири копіює його, перш ніж
+    дописати підпис сегмента.
+    """
+    def compute() -> dict:
+        peers = [o for o in universe.by_band.get(item.band, ())
+                 if o.condition == item.condition and o.market == item.market]
+        return _curve(peers, cfg)
+
+    return _remembered(universe, ("segment", item.band, item.condition, item.market, cfg),
+                       compute)
