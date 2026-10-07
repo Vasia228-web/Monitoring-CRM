@@ -188,6 +188,29 @@
       Квартири, які ще продаються, теж пораховані — інакше вийшло б, що всі
       продаються швидко. {{ liquidity.disclaimer }}
     </p>
+  {% elif liquidity.available %}
+    {# Крива вже є, а до половини ще не опустилась: медіани немає, але
+       контрольні точки й кількість подій мають сенс (survival.estimate). #}
+    <h2>Скільки часу займає продаж — поки рано казати</h2>
+    <p class="said">{{ liquidity.median_note }}</p>
+    <div class="facts">
+      <div><span class="v num">{{ liquidity.events | money }}</span>
+        <span class="k">квартир уже зникло з продажу</span></div>
+      <div><span class="v num">{{ liquidity.censored | money }}</span>
+        <span class="k">ще продаються — теж враховані</span></div>
+    </div>
+    {% if liquidity.checkpoints %}
+      <div class="bars big">
+        {% for c in liquidity.checkpoints %}
+          <div class="bar" style="--i:{{ loop.index0 }}">
+            <span class="name"><b>через {{ c.day }} {{ c.day | plural('день','дні','днів') }}</b>ще продається</span>
+            <span class="track"><i class="fill" style="width:{{ c.survival }}%"></i></span>
+            <span class="val num">{{ c.survival | round | int }}%</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    <p class="said">{{ liquidity.disclaimer }}</p>
   {% else %}
     <h2>Скільки часу займає продаж — поки не знаємо</h2>
     <div class="gap">
