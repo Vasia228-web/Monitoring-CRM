@@ -131,6 +131,7 @@ def main() -> int:
     print(f"  квартир із 8+ оголошеннями: {len(big)}, з них розщеплено всіма правилами: {big_split}")
     out["big"] = {"total": len(big), "split": big_split}
 
+    out["slash"] = slash_check(shapes, by_id)
     if args.sample:
         out["sample"] = sample_report(args.sample, args.evidence, current, base, allp, variants)
     if args.json:
@@ -191,6 +192,43 @@ def calibrate(shapes) -> dict:
     return res
 
 
+def slash_check(shapes, by_id) -> dict:
+    """Чи «34/7» — окремий будинок: звіряємо з id будинку DIM.RIA та OSM.
+
+    Власник просив перевірити на реальних прикладах: дріб у номері може бути
+    корпусом, кутовим будинком або номером квартири."""
+    slash = [sh for sh in shapes if sh.korpus and "/" in (by_id[sh.id].identity or {}).get("korpus", "")]
+    base = defaultdict(set)                   # (вулиця, номер будинку) → id будинків
+    for sh in shapes:
+        ident = by_id[sh.id].identity or {}
+        if sh.street and (ident.get("building") or ident.get("osm")):
+            for h in sh.house:
+                base[(sh.street, h)].add(ident.get("osm") or ident.get("building"))
+    distinct = same = 0
+    examples = []
+    for sh in slash:
+        ident = by_id[sh.id].identity or {}
+        mine = ident.get("osm") or ident.get("building")
+        others = set()
+        for h in sh.house:
+            others |= base.get((sh.street, h), set())
+        others.discard(mine)
+        if mine and others:
+            distinct += 1
+            examples.append({"listing": sh.id, "korpus": ident.get("korpus"),
+                             "building": mine, "others": sorted(others)[:3]})
+        elif mine:
+            same += 1
+    print(f"\nЗапис «34/7» у DIM.RIA: {len(slash)} оголошень; з id будинку — "
+          f"{distinct} мають ІНШИЙ будинок, ніж інші оголошення з тим самим номером, "
+          f"{same} — той самий (тобто не корпус)")
+    for e in examples[:5]:
+        print(f"    оголошення {e['listing']}: «{e['korpus']}» → будинок {e['building']}, "
+              f"поруч {e['others']}")
+    return {"listings": len(slash), "other_building": distinct, "same_building": same,
+            "examples": examples[:20]}
+
+
 VERDICT = {
     "одна": [232, 3007, 3228, 3238], "ймовірно одна": [107], "неясно": [1177, 318, 3630],
     "кілька": [24, 1783, 2529, 2783, 2246, 2289, 3611, 1448, 2201, 3354, 3555, 203],
@@ -206,21 +244,25 @@ def _ham(a, b):
 
 
 def evidence_pairs(rows):
-    """Пари «точно одна» (id DIM.RIA, фото, опис) і «точно різні» (різні id DIM.RIA)."""
-    same, diff = set(), set()
+    """Пари з надійним доказом (id квартири DIM.RIA) і зі слабким (фото, опис).
+
+    Слабкі докази в новобудовах брехливі: 45 пар із РІЗНИМИ id квартири мали
+    майже однаковий опис, 15 — однакове головне фото (шаблони забудовника).
+    Тому вони йдуть окремо й вердикту не визначають.
+    """
+    same, diff, weak = set(), set(), set()
     for i, a in enumerate(rows):
         for b in rows[i + 1:]:
             key = (min(a["id"], b["id"]), max(a["id"], b["id"]))
             if a.get("flat") and b.get("flat"):
                 (same if a["flat"] == b["flat"] else diff).add(key)
-                continue
             if a.get("hash") and b.get("hash") and _ham(a["hash"], b["hash"]) <= 6:
-                same.add(key)
+                weak.add(key)
             da = _norm(a.get("description") or a.get("db_description"))
             db = _norm(b.get("description") or b.get("db_description"))
             if len(da) > 80 and len(db) > 80 and SequenceMatcher(None, da, db).ratio() >= 0.9:
-                same.add(key)
-    return same, diff
+                weak.add(key)
+    return same, diff, weak - same - diff
 
 
 def sample_report(sample_path, evidence_path, current, base, allp, variants):
@@ -235,19 +277,23 @@ def sample_report(sample_path, evidence_path, current, base, allp, variants):
         ids = [l["id"] for l in prop["listings"] if l["id"] in allp]
         parts = Counter(allp[i] for i in ids)
         sizes = sorted(parts.values(), reverse=True)
-        same, diff = evidence_pairs(evidence.get(pid, []))
-        broken_same = sum(1 for a, b in same if a in allp and b in allp and allp[a] != allp[b])
-        kept_diff = sum(1 for a, b in diff if a in allp and b in allp and allp[a] == allp[b])
+        same, diff, weak = evidence_pairs(evidence.get(pid, []))
+        inside = lambda pairs: [(a, b) for a, b in pairs if a in allp and b in allp]
+        broken_same = sum(1 for a, b in inside(same) if allp[a] != allp[b])
+        kept_diff = sum(1 for a, b in inside(diff) if allp[a] == allp[b])
+        broken_weak = sum(1 for a, b in inside(weak) if allp[a] != allp[b])
         by_rule = {r: len({v[i] for i in ids}) for r, v in variants.items()
                    if len({v[i] for i in ids}) > 1}
         rows_out.append({"property_id": pid, "verdict": verdict.get(pid), "listings": len(ids),
                          "parts": sizes, "evidence_same": len(same), "same_split": broken_same,
                          "evidence_diff": len(diff), "diff_still_together": kept_diff,
+                         "weak_pairs": len(weak), "weak_split": broken_weak,
                          "by_rule": by_rule})
         print(f"  /property/{pid:<5d} {verdict.get(pid, '?'):14s} {len(ids):3d} огол. → "
               f"{len(sizes)} частин {sizes[:8]}{'…' if len(sizes) > 8 else ''} | "
-              f"доведено-одна пар {len(same)}, з них розірвано {broken_same} | "
-              f"доведено-різні пар {len(diff)}, досі разом {kept_diff}"
+              f"id DIM.RIA: одна квартира {len(same)} пар (розірвано {broken_same}), "
+              f"різні {len(diff)} (досі разом {kept_diff}) | слабкі докази {len(weak)} "
+              f"(розірвано {broken_weak})"
               f"{' | правила: ' + ', '.join(f'{r}→{n}' for r, n in by_rule.items()) if by_rule else ''}")
     ones = [r for r in rows_out if r["verdict"] == "одна"]
     print("  «одна» цілі: " + ", ".join(
