@@ -66,6 +66,12 @@ else
   echo "   .env ще немає — його кладе людина вручну (див. .env.example)"
 fi
 
+# Конфіги перевіряються ДО того, як служби підхоплять новий код (конвенція
+# config/README.md, п. 6): зламаний TOML або REALTY_CONFIG_DIR у .env зупиняють
+# встановлення тут (set -e), а не сайт на першому запиті.
+echo "== конфіги (config/)"
+.venv/bin/python cli.py config check
+
 echo "== юніти systemd (користувацькі)"
 mkdir -p "$UNITS"
 cp deploy/fedora/systemd/*.service deploy/fedora/systemd/*.timer "$UNITS/"

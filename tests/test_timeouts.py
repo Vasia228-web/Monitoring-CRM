@@ -122,6 +122,7 @@ def _chromium_available() -> bool:
 
 
 @pytest.mark.skipif(not _chromium_available(), reason="Chromium для Playwright не встановлено")
+@pytest.mark.allow_browser          # справжній Chromium, але лише about:blank — мережі не треба
 def test_real_browser_hang_is_killed_and_source_abandoned():
     """Справжній Chromium, справжнє зависання: нескінченний цикл у сторінці.
 

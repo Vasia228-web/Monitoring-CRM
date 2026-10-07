@@ -16,6 +16,7 @@
   python cli.py quality audit          # аудит дедуплікації
   python cli.py serve --port 8000      # веб-інтерфейс
   python cli.py stats                  # що вже є в базі
+  python cli.py config check           # перевірити конфіги в config/ (перед розгортанням)
 """
 from __future__ import annotations
 
@@ -24,7 +25,15 @@ import logging
 import os
 import sys
 
-from realty.config import SOURCES, SourceConfig
+# Заборона зовнішньої мережі для дочірніх процесів тестів (D45): conftest
+# ставить REALTY_NETGUARD=1, і `cli.py`, запущений тестом окремим процесом,
+# інакше був би неохоплений. Без цієї змінної — нічого не робить (у роботі її
+# немає). Стоїть до імпорту realty.config, тож .env її ввімкнути не може.
+from realty import netguard as _netguard
+
+_netguard.install_from_env()
+
+from realty.config import SOURCES, SourceConfig  # noqa: E402
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -462,6 +471,36 @@ def cmd_analytics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config(args: argparse.Namespace) -> int:
+    """Перевірка конфігів: кожен файл проходить свою схему, для кожної схеми є файл.
+
+    Запускається в процедурі розгортання ДО перезапуску служб: ненульовий код
+    скасовує розгортання, і сайт не стартує з конфігом, якого не можна прочитати.
+    """
+    from realty import configfiles
+
+    results = configfiles.check_all()
+    print(f"тека конфігів: {configfiles.config_dir()}")
+    for r in results:
+        if r.ok:
+            print(f"  ok      {r.name:<24} версія {r.digest[:12]}")
+        else:
+            print(f"  ПОМИЛКА {r.name:<24} {r.message}")
+    bad = sum(not r.ok for r in results)
+    print("усі конфіги чинні" if not bad else f"помилок: {bad}")
+    # Перекриття читається й з .env: рядок REALTY_CONFIG_DIR там тихо підмінив
+    # би конфіг із git для всіх служб. Розгортання з ним не проходить; свідомо
+    # (тести, експерименти) — лише з --allow-override.
+    override = configfiles.override_dir()
+    if override:
+        print(f"УВАГА: перекриття {configfiles.ENV_DIR}={override} — це не config/ із git.")
+        if not args.allow_override:
+            print("  Перевірку не зараховано: приберіть змінну (і з .env) або, якщо "
+                  "це свідомо, додайте --allow-override.")
+            return 1
+    return 1 if bad else 0
+
+
 def cmd_stats(_: argparse.Namespace) -> int:
     from sqlalchemy import func, select
 
@@ -609,6 +648,12 @@ def main() -> int:
 
     st = sub.add_parser("stats", help="підсумки по базі")
     st.set_defaults(func=cmd_stats)
+
+    cf = sub.add_parser("config", help="конфіги в config/: перевірка перед розгортанням")
+    cf.add_argument("action", choices=("check",))
+    cf.add_argument("--allow-override", action="store_true",
+                    help="свідомо перевірити теку з REALTY_CONFIG_DIR (тести, експерименти)")
+    cf.set_defaults(func=cmd_config)
 
     args = p.parse_args()
     _setup_logging(args.verbose)

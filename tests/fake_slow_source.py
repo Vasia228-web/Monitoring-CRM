@@ -15,6 +15,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Дочірній процес тестів: та сама заборона зовнішньої мережі, що й у батька
+# (conftest, D45). Курс НБУ — резервний: справжній ходив би на bank.gov.ua.
+from realty import netguard  # noqa: E402
+
+if netguard.install_from_env():
+    from realty import normalize as _normalize  # noqa: E402
+
+    _normalize.usd_uah_rate = lambda: _normalize.FALLBACK_USD_UAH
+
 from realty.fetcher import FetchError, Fetcher  # noqa: E402
 from realty.pipeline import Pipeline  # noqa: E402
 from realty.sources import REGISTRY  # noqa: E402
