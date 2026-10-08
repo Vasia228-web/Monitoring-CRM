@@ -80,6 +80,9 @@ NIGHT_TIERS = (TIER_M2_RESEEN, TIER_M2_LEGACY404, TIER_M3_HINTED, TIER_M3_BLIND,
 # в пулі підказаних (D56). Ті, що перевіряють уже ЗНЯТІ рядки (живі повертаються), — у
 # tiered зняті рядки поза частками, ще актуальні рядки їхніх ключів — у пулі підказаних.
 RANDOM_POOL_TIERS = (TIER_CANARY, TIER_RANDOM, TIER_M3_BLIND)
+# Сліпий обхід і нічний догін — окремий пул із межею хоста hosts.*.sweep_share (рецензія
+# D56: у пулі підказаних з 97% зламаний підпис знімав би сотні живих обходом).
+SWEEP_POOL_TIERS = (TIER_SWEEP, TIER_OVERDUE)
 REMOVED_TARGET_TIERS = (TIER_SAMPLE, TIER_M2_RESEEN, TIER_M2_LEGACY404, TIER_HELD_RETURN)
 
 # Скільки днів на ринку вважаємо «давно». Свіже оголошення майже напевно ще
@@ -448,7 +451,11 @@ def canary_keys(u: Universe, cfg) -> list[str]:
     hosts.*.canary_sources — не давніше run.canary_fresh_hours), не зниклі, останнє —
     не «знято».
 
-    Порядок — найдавніша спроба першою (контроль обходить різні ключі)."""
+    Порядок — навперемінно: найстаріше оголошення (найменший id рядка) і найдавніша
+    спроба. Інкрементні стрічки бачать здебільшого нові оголошення, а підпис може
+    зламатись лише на старих (шаблон давніх сторінок) — тож половина контрольних —
+    найстаріші з тих, кого сайт показав у стрічці (рецензія D56); друга половина
+    обходить різні ключі."""
     fresh_after = u.now - timedelta(hours=cfg.run.canary_fresh_hours)
     out = []
     for k in u.active_keys:
@@ -465,8 +472,16 @@ def canary_keys(u: Universe, cfg) -> list[str]:
         if latest is not None and (latest[2] is False or latest[1] == "not_found"):
             continue
         out.append(k)
-    out.sort(key=lambda k: (max((r.last_attempt or datetime.min) for r in u.groups[k]), k))
-    return out
+    by_attempt = sorted(out, key=lambda k: (
+        max((r.last_attempt or datetime.min) for r in u.groups[k]), k))
+    by_age = sorted(out, key=lambda k: (min(r.id for r in u.groups[k]), k))
+    mixed, used = [], set()
+    for pair in zip(by_age, by_attempt):
+        for k in pair:
+            if k not in used:
+                used.add(k)
+                mixed.append(k)
+    return mixed
 
 
 def random_keys(u: Universe, cfg, rng: random.Random, *, held=(), exclude=()
@@ -490,7 +505,9 @@ def random_keys(u: Universe, cfg, rng: random.Random, *, held=(), exclude=()
         if k in exclude or k in pending or (held and key_held(u, cfg, k, held)):
             continue
         rs = u.groups[k]
-        if any(r.absent_since for r in rs):
+        # Лише ключі, усі рядки яких актуальні: «знято» на змішаному ключі (рядок уже
+        # знято, копія ще актуальна) — здебільшого справжнє і штучно здувало б частку.
+        if not all(r.is_active for r in rs) or any(r.absent_since for r in rs):
             continue
         h = u.hist(k)
         if h and h.latest and h.latest[1] == "not_found":

@@ -169,7 +169,7 @@ def test_fuse_alerts_through_the_watchdog_until_released(db):
     _domria(db, 25, start=34900000)
     net = FakeNet({f"domria:{34900000 + i}": (200, ria_page(34900000 + i, archived=True))
                    for i in range(25)})
-    # Крок циклу ярусами: «знято» на 20 випадкових з 20 — тримати (tiered, D56).
+    # Крок циклу ярусами: «знято» на 24 випадкових з 24 — тримати (tiered, D56).
     verify.verify_batch(http=net)
     alerts = {a.key: a for a in watchdog.check_liveness(datetime(2026, 10, 8, 12, 0))}
     assert "liveness-fuse:domria" in alerts
@@ -192,7 +192,7 @@ def test_release_lets_the_held_removals_through(db):
     net = FakeNet({f"domria:{35200000 + i}": (200, ria_page(35200000 + i, archived=True))
                    for i in range(25)})
     first = verify.verify_batch(http=net)                       # крок циклу ярусами
-    assert first["tiers"]["dom.ria.com"].get("random") == 20, first["tiers"]
+    assert first["tiers"]["dom.ria.com"].get("random") == 24, first["tiers"]
     assert fuse.held_sources() == {"domria"}
     assert all(get(db, i).is_active for i in ids)
     assert fuse.clear("domria", by="owner:/status") is True

@@ -7,7 +7,9 @@
 через liveness.apply.
 
 Роботи перевірки актуальності (яруси — realty/liveness/queue.py):
-  canary          — контрольні «відомо живі», порція хоста `canaries_per_run`;
+  canary          — контрольні «відомо живі»: порція хоста `canaries_per_run` на
+                    початку смуги і по night jobs.canaries_per_batch у кожному
+                    наступному пакеті (spread_canaries, D56);
   held            — вердикт, не застосований через запобіжник, — щойно джерело й сайт
                     відпущено: «знято» актуальному рядку — ярус held (запобіжник його
                     не рахує: власник, відпускаючи, бачив саме ці вердикти), «живе»
@@ -45,6 +47,7 @@ M2 і M3 одноразові за визначенням стану, а не з
 """
 from __future__ import annotations
 
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -154,6 +157,37 @@ def night_key(now: datetime, attempted_since: datetime | None = None,
     return now.date().isoformat()
 
 
+def night_batches(ncfg) -> int:
+    """Скільки пакетів (lanes.batch_minutes) у найдовшому вікні ночі."""
+    from ..configfiles import hhmm_minutes
+
+    longest = max(hhmm_minutes(w.stop_requests) - hhmm_minutes(w.start) for w in ncfg.windows)
+    return max(1, math.ceil(longest / ncfg.lanes.batch_minutes))
+
+
+def spread_canaries(p: HostPlan, first: int, per_batch: int, batch_minutes: float) -> None:
+    """Контрольні — у кожен пакет смуги (D56): перші `first` — на початку, далі по
+    `per_batch` через кожні ~batch_minutes × 60 / pace запитів. Ті, що випали б за
+    кінець черги, не питаємо (запитів не більшає понад план)."""
+    canaries = [i for i in p.items if i.tier == queue.TIER_CANARY]
+    if len(canaries) <= first or per_batch <= 0:
+        return
+    rest = [i for i in p.items if i.tier != queue.TIER_CANARY]
+    step = max(1, int(batch_minutes * 60 / max(p.pace, 0.1)))
+    extra = canaries[first:]
+    out = list(canaries[:first])
+    pos = 0
+    for b in range(1, len(extra) // per_batch + 1):
+        nxt = min(len(rest), b * step)
+        if b * step > len(rest):
+            break
+        out += rest[pos:nxt] + extra[(b - 1) * per_batch: b * per_batch]
+        pos = nxt
+    out += rest[pos:]
+    p.items = out
+    p.tiers[queue.TIER_CANARY] = sum(1 for i in out if i.tier == queue.TIER_CANARY)
+
+
 def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
           attempted_since: datetime | None = None, skip_hosts: dict | None = None,
           hosts=None, night: str | None = None) -> NightPlan:
@@ -227,9 +261,12 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
             legacy, by_404 = legacy_removals(session)
         return _m2_keys(u, lcfg, tier, legacy, by_404)
 
+    batches = night_batches(ncfg)
     for job in order:
         if job == queue.TIER_CANARY:
-            fill(job, queue.canary_keys(u, lcfg), lambda h: lcfg.hosts[h].canaries_per_run)
+            fill(job, queue.canary_keys(u, lcfg),
+                 lambda h: lcfg.hosts[h].canaries_per_run + ncfg.jobs.canaries_per_batch
+                 * max(0, batches - 1))
         elif job == queue.TIER_HELD:
             fill(queue.TIER_HELD, queue.unapplied_removal_keys(u, lcfg, held))
             # Незастосоване «живе» ключа M2 повертає сам M2 (причина події — його ярус).
@@ -254,6 +291,9 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
             if late:
                 fill(job, [k for k in queue.due_keys(u, lcfg, session, held=held, exclude=taken)
                            if u.key_host[k] in late])
+    for host, p in plans.items():
+        spread_canaries(p, lcfg.hosts[host].canaries_per_run, ncfg.jobs.canaries_per_batch,
+                        ncfg.lanes.batch_minutes)
     return NightPlan(hosts=plans, held=held, now=now)
 
 

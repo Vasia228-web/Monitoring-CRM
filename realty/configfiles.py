@@ -288,7 +288,12 @@ class LivenessFuse:
     min_checked: int = field(**_limits(min=1))
     hinted_share: float = field(**_limits(min=0, max=1))
     hinted_min_checked: int = field(**_limits(min=1))
+    # Лише tiered: пул сліпого обходу й нічного догону — n для оцінки (межа —
+    # hosts.*.sweep_share; D56).
+    sweep_min_checked: int = field(**_limits(min=1))
     canary_trip_min: int = field(**_limits(min=1))
+    # «Справжніх знять» контрольних DOM.RIA на хост за прогін, що не тримають (D56).
+    canary_genuine_max: int = field(**_limits(min=0))
     window_hours: float = field(**_limits(min=0))
     # Лише tiered: пул випадкових і контрольних, що в прогоні не набрав min_checked, —
     # разом із такими перевірками за стільки годин (і в кроці циклу, D56).
@@ -422,6 +427,8 @@ class LivenessHost:
     # Випадкові ключі на прогін (ярус random, D56) — З порції sweep_per_run: сліпий
     # обхід бере sweep_per_run мінус узяті випадкові, запитів на прогін не більшає.
     random_per_run: int = field(**_limits(min=0))
+    # Межа частки «знято» пулу обходу хоста (tiered; D56) — за виміряною звичайною.
+    sweep_share: float = field(**_limits(min=0, max=1))
     hinted_cap_per_run: int = field(**_limits(min=0))
     removed_sample_per_run: int = field(**_limits(min=0))
     canaries_per_run: int = field(**_limits(min=0))
@@ -834,6 +841,9 @@ class NightLanes:
 @dataclass(frozen=True)
 class NightJobs:
     order: tuple[str, ...] = field(**_limits(min_len=1, choices=NIGHT_JOBS))
+    # Контрольних на хост у КОЖНОМУ наступному пакеті вікна (перший пакет — повна порція
+    # liveness hosts.*.canaries_per_run; рішення власника 08.10, D55/D56).
+    canaries_per_batch: int = field(**_limits(min=0))
     onetime_seed: int
     rm_sample_per_host: dict[str, int]
     identity_sources: dict[str, str]

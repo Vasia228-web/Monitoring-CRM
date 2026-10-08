@@ -103,13 +103,13 @@ def test_small_hosts_are_judged_with_the_random_window():
 
 
 def test_random_tier_takes_its_budget_from_the_sweep(db, frozen):
-    """DOM.RIA: 20 випадкових + 25 обходу = ті самі 45 запитів на прогін."""
+    """DOM.RIA: 24 випадкових + 21 обходу = ті самі 45 запитів на прогін."""
     for i in range(100):
         add(db, ria_url(36000000 + i), source="domria", external_id=str(36000000 + i))
     net = FakeNet({f"domria:{36000000 + i}": (200, ria_page(36000000 + i)) for i in range(100)})
     stats = verify.verify_batch(http=net)
     tiers = stats["tiers"]["dom.ria.com"]
-    assert tiers.get("random") == 20 and tiers.get("sweep") == 25, tiers
+    assert tiers.get("random") == 24 and tiers.get("sweep") == 21, tiers
 
 
 def test_a_lun_copy_of_an_olx_ad_is_not_an_olx_canary(db, frozen):
@@ -184,3 +184,133 @@ def test_night_m3_blind_order_is_a_new_uniform_permutation_each_night(db):
     next_night = plan._m3_keys(u, cfg, queue.TIER_M3_BLIND, 7, "2026-10-10")
     assert len(first) == 40 and sorted(first) == sorted(next_night)
     assert first == again and first != next_night
+
+
+# --- Рецензія D56 (три незалежні рецензенти, 08.10) ---------------------------------------------
+
+
+def _olx_run(random_removed: int, sweep_removed: int):
+    out = [_oc("olx.ua", "olx", "canary", i, False) for i in range(4)]
+    out += [_oc("olx.ua", "olx", "random", 100 + i, i < random_removed) for i in range(30)]
+    out += [_oc("olx.ua", "olx", "sweep", 1000 + i, i < sweep_removed) for i in range(420)]
+    return out
+
+
+def test_a_broken_signature_in_the_sweep_trips_even_if_random_checks_look_calm():
+    """Приклад рецензента: OLX — 11 з 30 випадкових (Вілсон ще не певен), 380 з 420 обходу
+    «знято». У пулі підказаних (97%) обхід знімав би сотні живих; у пулі обходу з межею
+    OLX 15% — тримаємо з першого прогону. Звичайна частка обходу OLX (2%) — ні."""
+    from realty.liveness import fuse
+
+    cfg = configfiles.load("liveness")
+    trips = fuse.evaluate(_olx_run(11, 380), cfg)
+    assert [(t.source, t.reason) for t in trips] == [("olx", "sweep_share")]
+    assert fuse.evaluate(_olx_run(1, 9), cfg) == []
+
+
+def test_the_rows_of_one_key_are_one_check_not_several():
+    """Ключ із рядком DOM.RIA і копією LUN — одна відповідь сайту. Рахуємо ключ, а не рядки:
+    інакше 8 «знято» з 24 ключів (33%) стали б 16 з 48 і Вілсон хибно «певнішав»."""
+    from realty.liveness import fuse
+
+    cfg = configfiles.load("liveness")
+    run = [_oc("dom.ria.com", "domria", "canary", i, False) for i in range(4)]
+    for i in range(24):
+        oc = _oc("dom.ria.com", "domria", "random", 500 + i, i < 8)
+        oc.item.rows.append(SimpleNamespace(source="lun", is_active=True, last_seen=NOW))
+        run.append(oc)
+    report: dict = {}
+    assert fuse.evaluate(run, cfg, report=report) == []
+    pool = next(p for p in report["pools"] if p["scope"] == "host" and p["pool"] == "random")
+    assert (pool["checked"], pool["removed"]) == (28, 8)
+
+
+def test_the_window_adds_only_the_newest_checks_that_are_missing():
+    """lun: 2 з 2 випадкових «знято» + 2 живі контрольні; у вікні — 6 свіжих «знято» (поломка
+    почалась) і 100 давніх «живе». Добираємо лише 16 найсвіжіших → 8 з 20 — тримаємо; усе
+    вікно (8 з 110) розмило б поломку."""
+    from datetime import timedelta
+
+    from realty.liveness import fuse
+
+    cfg = configfiles.load("liveness")
+    run = [_oc("lun.ua", "lun", "canary", i, False) for i in range(2)]
+    run += [_oc("lun.ua", "lun", "random", 10 + i, True) for i in range(2)]
+    window = [(NOW - timedelta(hours=1 + i / 10), 1) for i in range(6)]
+    window += [(NOW - timedelta(hours=5 + i / 10), 0) for i in range(100)]
+    prior = {("source", "lun", "random"): window, ("host", "lun", "random"): window}
+    trips = fuse.evaluate(run, cfg, prior=prior)
+    assert [t.source for t in trips] == ["lun"] and trips[0].checked == 20
+
+
+def _genuine_canaries(db, start, archived: int, deleted_at):
+    for i in range(4):
+        add(db, ria_url(start + i), source="domria", external_id=str(start + i),
+            last_seen=datetime(2026, 10, 8, 1, 0))
+    for i in range(30):
+        add(db, ria_url(start + 100 + i), source="domria", external_id=str(start + 100 + i),
+            last_seen=datetime(2026, 9, 1))
+    pages = {f"domria:{start + i}": (200, ria_page(start + i, archived=i < archived,
+                                                   deleted_ts=_ts(deleted_at)))
+             for i in range(4)}
+    pages.update({f"domria:{start + 100 + i}": (200, ria_page(start + 100 + i))
+                  for i in range(30)})
+    return FakeNet(pages)
+
+
+def test_two_genuine_canary_removals_in_one_run_hold_the_source(db, frozen):
+    """Справжнє зняття контрольного — не більше fuse.canary_genuine_max (1) на хост за
+    прогін: два одразу схожі на зламаний стан сторінки, а не на збіг — тримаємо."""
+    from realty.liveness import fuse
+
+    net = _genuine_canaries(db, 36400000, 2, datetime(2026, 10, 8, 2, 0))
+    verify.verify_batch(http=net)
+    assert fuse.held_sources() == {"domria"}
+
+
+def test_a_removal_date_in_the_future_is_not_a_genuine_removal(db, frozen):
+    from realty.liveness import fuse
+
+    net = _genuine_canaries(db, 36500000, 1, datetime(2027, 1, 1, 0, 0))
+    verify.verify_batch(http=net)
+    assert fuse.held_sources() == {"domria"}
+
+
+def test_a_key_with_an_already_removed_row_is_not_drawn_as_random(db):
+    """«Знято» на змішаному ключі (рядок уже знято, копія ще актуальна) — здебільшого
+    справжнє: такий ключ у випадкові не береться, щоб не здувати частку."""
+    import random
+
+    from realty.liveness import queue
+    from realty.night import plan
+
+    for i in range(40):
+        add(db, ria_url(36600000 + i), source="domria", external_id=str(36600000 + i))
+    add(db, ria_url(36609999), source="domria", external_id="old", is_active=False)
+    add(db, ria_url(36609999), source="lun", external_id="lun-copy")
+    cfg = configfiles.load("liveness")
+    with db() as s:
+        u = queue.universe(s, cfg, now=NOW, history_since=plan.EPOCH)
+    for seed in range(20):
+        drawn = queue.random_keys(u, cfg, random.Random(seed))["dom.ria.com"]
+        assert len(drawn) == 24 and "domria:36609999" not in drawn
+
+
+def test_night_canaries_go_into_every_batch():
+    """Вночі прогін — 15-хвилинний пакет: після повної порції на початку — по одному
+    контрольному через кожні ~batch × 60 / pace запитів (рішення власника 08.10)."""
+    from realty.night import plan
+
+    ncfg = configfiles.load("night")
+    assert plan.night_batches(ncfg) == 7                     # 01:10–02:47 = 97 хв / 15
+    items = [SimpleNamespace(tier="canary") for _ in range(4 + 6)]
+    items += [SimpleNamespace(tier="onetime_blind") for _ in range(2000)]
+    hp = plan.HostPlan(host="olx.ua", pace=3.0, items=list(items))
+    plan.spread_canaries(hp, 4, 1, 15)
+    tiers = [i.tier for i in hp.items]
+    assert tiers[:4] == ["canary"] * 4 and len(tiers) == len(items)
+    step = 15 * 60 // 3                                      # 300 запитів на пакет
+    body = tiers[4:]
+    for b in range(6):
+        assert "canary" in body[b * (step + 1):(b + 1) * (step + 1)], b
+    assert hp.tiers["canary"] == 10
