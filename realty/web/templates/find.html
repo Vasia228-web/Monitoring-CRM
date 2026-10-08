@@ -62,8 +62,7 @@
         {%- if i.listings %} · {{ i.listings }} {{ i.listings | plural('оголошення', 'оголошення', 'оголошень') }}{% endif %}
       </span>
       {% for f in o.found %}
-        <span class="st">{{ sites.get(f.source, f.source) }}:
-          {% if f.status == 'removed' %}{{ msg.status_removed }}{% if f.removed_at %} {{ f.removed_at.strftime('%d.%m.%Y') }}{% endif %}{% elif f.status == 'manual_off' %}{{ msg.status_manual_off }}{% else %}{{ msg.status_active }}{% endif %}
+        <span class="st">{{ sites.get(f.source, f.source) }}: {% if f.status == 'removed' %}{{ msg.status_removed }}{% if f.removed_at %} {{ f.removed_at.strftime('%d.%m.%Y') }}{% endif %}{% elif f.status == 'manual_off' %}{{ msg.status_manual_off }}{% else %}{{ msg.status_active }}{% endif %}
           {%- if f.quality == 'quarantine' %}; {{ msg.status_quarantine }}{% if f.quality_reason %} ({{ f.quality_reason[:160] }}){% endif %}{% elif f.quality == 'pending' %}; {{ msg.status_pending }}{% endif %}
         </span>
       {% endfor %}

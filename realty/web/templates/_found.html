@@ -18,8 +18,7 @@
   <b>{{ fh.msg.found_banner }}</b>: {{ fh.site }} · {{ fh.id }}
   <ul>
   {%- for f in fh.found %}
-    <li>{{ fh.sites.get(f.source, f.source) }} —
-      {% if f.status == 'removed' %}{{ fh.msg.status_removed }}{% if f.removed_at %} {{ f.removed_at.strftime('%d.%m.%Y') }}{% endif %}{% elif f.status == 'manual_off' %}{{ fh.msg.status_manual_off }}{% else %}{{ fh.msg.status_active }}{% endif %}
+    <li>{{ fh.sites.get(f.source, f.source) }} — {% if f.status == 'removed' %}{{ fh.msg.status_removed }}{% if f.removed_at %} {{ f.removed_at.strftime('%d.%m.%Y') }}{% endif %}{% elif f.status == 'manual_off' %}{{ fh.msg.status_manual_off }}{% else %}{{ fh.msg.status_active }}{% endif %}
       {%- if f.quality == 'quarantine' %}; {{ fh.msg.status_quarantine }}{% if f.quality_reason %}: {{ f.quality_reason[:200] }}{% endif %}{% elif f.quality == 'pending' %}; {{ fh.msg.status_pending }}{% endif %}
       {%- if f.unconfirmed %}{% set um = liveness_marker(f.url) %}{% if um %}; <span title="{{ um.hint }}">{{ um.label }}</span>{% endif %}{% endif %}</li>
   {%- endfor %}

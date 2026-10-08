@@ -98,6 +98,15 @@ def parse_input(text: str, request: Request | None = None):
     if t.startswith("/") and not t.startswith("//"):
         return links.parse("http://localhost" + t.split()[0])
     got = links.parse(t)
+    if isinstance(got, links.NotALink) and got.reason == "not_listing" and " " not in t:
+        # Зайвий слеш у кінці адреси («…-34616500.html/»): спільний розбір (links.toml)
+        # приймає його лише там, де сайт сам так пише; тут — ще одна спроба без нього.
+        # site_key збережених адрес це не зачіпає.
+        bare = re.sub(r"/+(?=$|[?#])", "", t, count=1)
+        if bare != t:
+            again = links.parse(bare)
+            if isinstance(again, links.Link):
+                got = again
     if request is not None and isinstance(got, links.NotALink) \
             and got.reason == "unsupported_host":
         m = _URL_HEAD.match(t)
@@ -163,6 +172,12 @@ def _target(request: Request, text: str) -> str:
 @router.post("/find")
 async def find_submit(request: Request):
     """Форма верхньої панелі → 303 на квартиру, вибір або причину (PRG)."""
+    try:
+        size = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        size = 0
+    if size > 65536:                       # не форма з поля пошуку — не читаємо
+        return RedirectResponse("/find?err=unrecognized", status_code=303)
     raw = await request.body()
     form = parse_qs(raw[:65536].decode("utf-8", errors="replace"), keep_blank_values=True)
     text = (form.get("q") or [""])[0]
