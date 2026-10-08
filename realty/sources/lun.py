@@ -17,6 +17,7 @@ from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import classify_condition, classify_market, in_ivano_frankivsk, parse_date
 from ..places import extract as place_extract
+from ..seller import evidence as seller_evidence
 from . import rieltor
 from .base import BaseSource
 
@@ -125,6 +126,12 @@ class LunSource(BaseSource):
             self._geo_types_cache = cached
         return cached
 
+    def _seller(self, d: dict, rows: dict[str, str]) -> dict | None:
+        cfg = seller_evidence.config()
+        if cfg is None:
+            return None
+        return seller_evidence.from_feed_item(d, cfg.lun, deref=lambda v: deref(v, rows))
+
     def enrich(self, rec: dict, html: str) -> dict:
         """Рівень 2: добір із картки на сайті-першоджерелі.
 
@@ -139,11 +146,9 @@ class LunSource(BaseSource):
             return rec
         filled = False
         for field, value in found.items():
-            if field == "place_raw":
-                # Докази місця — лише нові ключі (як FILL_ONLY_JSON у pipeline).
-                merged = dict(rec.get("place_raw") or {})
-                merged.update({k: v for k, v in value.items() if k not in merged})
-                rec["place_raw"] = merged
+            if field in ("place_raw", "seller_evidence"):
+                # Докази місця й продавця — лише нові ключі (як FILL_ONLY_JSON у pipeline).
+                rec[field] = seller_evidence.merge_new(rec.get(field), value)
                 continue
             if rec.get(field) in (None, "", MarketType.UNKNOWN, Condition.UNKNOWN):
                 rec[field] = value
@@ -227,6 +232,9 @@ class LunSource(BaseSource):
             # село. district лишається poi.name, як і було (сирі поля не змінюємо).
             "place_raw": place_extract.from_lun_item(
                 d, self._geo_types(), lambda v: deref(v, rows)) or None,
+            # Докази типу продавця (Блок 3, E11, D60): лише булеві й коди з білого
+            # списку config/seller.toml [lun] — без телефонів, імен, аватарів.
+            "seller_evidence": self._seller(d, rows),
             # Телефони й контакти навмисно не зберігаємо.
             "raw": {
                 "id": d.get("id"), "price": d.get("price"), "priceSqm": d.get("priceSqm"),

@@ -20,6 +20,7 @@ from ..normalize import (
     classify_condition, classify_market, in_ivano_frankivsk, parse_area, parse_date, parse_price,
     parse_rooms,
 )
+from ..seller import evidence as seller_evidence
 from .base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -80,15 +81,9 @@ def parse_detail(html: str) -> dict:
     """Витягує поля зі сторінки оголошення OLX. Повертає лише знайдене."""
     soup = BeautifulSoup(html, "lxml")
 
-    params: dict[str, str] = {}
-    box = soup.select_one(DETAIL["params"])
-    if box:
-        for node in box.find_all(["p", "li", "span"]):
-            if node.find(["p", "li", "span"]):
-                continue  # беремо лише листові вузли, щоб не злипались пари
-            m = _PARAM_RE.match(node.get_text(" ", strip=True))
-            if m:
-                params.setdefault(m.group(1).strip().lower(), m.group(2).strip())
+    # Лише листові вузли, щоб не злипались пари; голі тексти без двокрапки — чип
+    # «Приватна особа»/«Бізнес» і прапорці (Блок 3, E11, D60).
+    params, bare = seller_evidence.olx_leaves(soup.select_one(DETAIL["params"]), _PARAM_RE)
 
     def text_of(key: str) -> str | None:
         el = soup.select_one(DETAIL[key])
@@ -154,8 +149,37 @@ def parse_detail(html: str) -> dict:
 
     from ..places import extract as place_extract
     out["place_raw"] = place_extract.from_olx_params(params, date.today().isoformat())
+    out.update(_seller(soup, params, bare))
 
     return {k: v for k, v in out.items() if v is not None}
+
+
+def _seller(soup, params: dict, bare: list[str]) -> dict:
+    """Докази типу продавця зі сторінки оголошення (Блок 3, E11, D60): чип, «Тип
+    угоди», прапорці, непрозорий id профілю — config/seller.toml [olx]."""
+    cfg = seller_evidence.config()
+    if cfg is None:
+        return {}
+    return seller_evidence.from_olx_detail(soup, params, bare, cfg)
+
+
+def page_evidence(html: str) -> dict | None:
+    """Лише докази Блоків 3/4 зі сторінки оголошення — для нічної смуги рендерів (E11,
+    D60): {"place_raw": …, "seller_evidence": …, "seller_profile": …}; None — це не
+    сторінка оголошення (немає ні контейнера параметрів, ні заголовка: капча, помилка,
+    «оголошення більше не доступне»)."""
+    from datetime import date
+
+    from ..places import extract as place_extract
+
+    soup = BeautifulSoup(html, "lxml")
+    box = soup.select_one(DETAIL["params"])
+    if box is None and soup.select_one(DETAIL["title"]) is None:
+        return None
+    params, bare = seller_evidence.olx_leaves(box, _PARAM_RE)
+    out = {"place_raw": place_extract.from_olx_params(params, date.today().isoformat())}
+    out.update(_seller(soup, params, bare))
+    return out
 
 
 class OlxSource(BaseSource):
@@ -168,12 +192,14 @@ class OlxSource(BaseSource):
             return rec
         filled = []
         for field, value in found.items():
-            if field == "place_raw":
-                # Докази місця — лише нові ключі (FILL_ONLY_JSON); «збагаченим зі сторінки»
-                # запис від них не стає (Блок 4, E10, D57).
-                merged = dict(rec.get("place_raw") or {})
-                merged.update({k: v for k, v in value.items() if k not in merged})
-                rec["place_raw"] = merged
+            if field in ("place_raw", "seller_evidence"):
+                # Докази місця й продавця — лише нові ключі (FILL_ONLY_JSON); «збагаченим
+                # зі сторінки» запис від них не стає (Блоки 3/4, E10–E11, D57, D60).
+                rec[field] = seller_evidence.merge_new(rec.get(field), value)
+                continue
+            if field == "seller_profile":
+                if not rec.get(field):
+                    rec[field] = value
                 continue
             current = rec.get(field)
             if current in (None, "", MarketType.UNKNOWN, Condition.UNKNOWN):

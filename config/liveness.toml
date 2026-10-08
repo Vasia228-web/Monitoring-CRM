@@ -228,6 +228,13 @@ ria_seller = { ria_offer = "realty.characteristics_values.1437", ria_agency_type
 # listings.seller_profile = префікс + id користувача DOM.RIA (як identity.seller).
 ria_profile = "realty.user_id"
 ria_profile_prefix = "ria:"
+# Уночі ключ, якому бракує доказів Блоків 3/4 (rieltor: роль і агенція —
+# seller_evidence.rieltor_detail_at, блок ЖК — place_raw.rieltor_checked_at), смуга
+# хоста питає GET замість HEAD: класифікація та сама — лише за кодом (410 «знято»), тіло
+# (до стелі, байт) — лише гачкам доказів, у базу не йде (інтеграція, конфлікт 4: «для
+# rieltor у M3 замість HEAD робимо GET»; окрема фаза D Блоку 4 стає непотрібною; E11,
+# D60). Картка rieltor ~245 КБ (Етап 0). Крок циклу — як і досі HEAD.
+body_hosts = { "rieltor.ua" = 1000000 }
 
 [olx]
 # Перевірка існування OLX за id (адреса лише з ID → канонічна з тим самим ID).

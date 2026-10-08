@@ -21,6 +21,7 @@ from ..normalize import (
     parse_rooms,
 )
 from ..places import extract as place_extract
+from ..seller import evidence as seller_evidence
 from .base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -55,6 +56,13 @@ def parse_detail(html: str) -> dict:
     if condition is not Condition.UNKNOWN:
         out["condition"] = condition
     return out
+
+
+def _seller(attributes: dict) -> dict | None:
+    cfg = seller_evidence.config()
+    if cfg is None:
+        return None
+    return seller_evidence.from_feed_item(attributes, cfg.flombu)
 
 
 def _city_by_coords() -> bool:
@@ -225,6 +233,9 @@ class FlombuSource(BaseSource):
             # Франківськ» районом не є; D57).
             "district": g.get("sublocality1") or _village(g.get("locality")) or None,
             "place_raw": place_extract.from_flombu_location(g) or None,
+            # Докази типу продавця (Блок 3, E11, D60): ownerType і комісія агента з білого
+            # списку config/seller.toml [flombu]; ownerPhoneId (похідний від телефону) — ні.
+            "seller_evidence": _seller(a),
             "published_at": parse_date(a.get("publishedAtHumanVal")),
             "market_type": classify_market(title, accents),
             "condition": classify_condition(title, accents),

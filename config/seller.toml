@@ -1,0 +1,123 @@
+# Блок 3 промту 11 — тип продавця. Поки що ЛИШЕ ДОКАЗИ (крок E11, D60).
+#
+# Схема — realty/configfiles.py (SellerConfig). Значень за замовчуванням у коді
+# немає: кожен ключ обов'язковий (`cli.py config check`).
+#
+# Що тут: які сирі докази типу продавця зберігати з того, що система й так бачить, —
+# об'єкт стрічки LUN і flombu (звичайний збір і нічний спільний прохід стрічки),
+# сторінка оголошення OLX (сторінки деталей циклу й нічна смуга рендерів), вкладки
+# пошуку OLX «Приватні»/«Бізнес», картка rieltor.ua (добір LUN у циклі й нічний GET
+# перевірки актуальності). DOM.RIA — config/liveness.toml [capture] (стан сторінки, E8).
+# Класи, правила, пороги точності, фільтр — наступні кроки Блоку 3 (E12–E13) разом із
+# кодом, що їх читатиме.
+#
+# Пишеться ЛИШЕ туди, де порожньо: listings.seller_evidence — нові ключі (наявні не
+# переписуються), seller_profile — якщо NULL (FILL_ONLY_JSON, D52). Імена, телефони,
+# аватари, адреси профілів і агенцій, пошта — ніколи: схема не пропускає шляхів через
+# такі поля (phones, viberPhone, name, avatar, url, ownerPhoneId…), а рядкові значення
+# ще й проходять privacy (номер — не зберігається).
+#
+# Походження: «план Блоку 3» — проєкт b3-seller (Етап 0, 07.10; лежить поза git, його
+# числа переписано в журнал у D60); «Етап 0, D45» — живі заміри; «розрахунок, D60».
+
+[lun]
+# Поля payload стрічки LUN (план Блоку 3: «isOwner, rieltorContact.contactType/agency/
+# activeOffers, phonesInfo[].isAgency приходять безкоштовно в стрічці; беремо лише
+# булеві й коди, без телефонів та імен»). Шлях: «a.b» — скаляр; «a?» — лише
+# наявність (true/false); «a[].b» — чи є хоч один елемент списку a з істинним b.
+# Зразок Етапу 0 (24 об'єкти, усі rieltor.ua): isOwner false, contactType «rieltor»,
+# agency у rieltorContact, activeOffers 14, commissionRate 3, commissionType «%».
+fields = { lun_is_owner = "isOwner", lun_exclusive = "isExclusive", lun_has_agency = "agency?", lun_contact_type = "rieltorContact.contactType", lun_contact_verified = "rieltorContact.isVerified", lun_contact_has_agency = "rieltorContact.agency?", lun_active_offers = "rieltorContact.activeOffers", lun_phone_is_agency = "phonesInfo[].isAgency", lun_without_commission = "withoutCommission", lun_commission_rate = "commissionRate", lun_commission_type = "commissionType" }
+checked_key = "lun_checked_at"
+
+[flombu]
+# Атрибути JSON:API flombu (Етап 0: ownerType «agent» у 25 з 25 активних;
+# agentCommission true, agentCommissionType «negotiable»). ownerPhoneId — похідний від
+# телефону: НЕ береться (схема забороняє).
+fields = { flombu_owner_type = "ownerType", flombu_agent_commission = "agentCommission", flombu_commission_type = "agentCommissionType" }
+checked_key = "flombu_checked_at"
+
+[olx]
+# Сторінка оголошення OLX (Етап 0, D45: чип «Бізнес» на 184 зі 191 сторінки,
+# «Приватна особа» — на 7; посилання на профіль /uk/list/user/<slug>/ або
+# <магазин>.olx.ua — на 191 зі 191). Чип — листовий вузол контейнера параметрів БЕЗ
+# двокрапки; trader-title — ім'я для показу, не тип (11 «Приватна особа» при чипі
+# «Бізнес») — не читається ніколи. Контейнер параметрів — той самий, що читає збір
+# (realty/sources/olx.py DETAIL["params"]).
+chip_key = "olx_chip"
+chip_values = { "Приватна особа" = "private", "Бізнес" = "business" }
+# Інші листові вузли без двокрапки → логічний ключ доказу (true, якщо є).
+flag_values = { "Без комісії" = "olx_no_commission" }
+# «Тип угоди» → коди списком (план Блоку 3: «Від забудовника» ставлять і агенції,
+# мішаючи з «Переуступкою» — це не ознака забудовника, лише доказ для правил E12).
+deal_key = "olx_deal"
+deal_param = "тип угоди"
+deal_values = { "Від забудовника" = "from_developer", "Розстрочка від забудовника" = "developer_installment", "Переуступка" = "assignment" }
+profile_selector = '[data-testid="user-profile-link"]'
+# Ключ профілю → listings.seller_profile: префікс + хеш slug-а ([profile]), сам slug
+# чи піддомен магазину не зберігається.
+profile_patterns = { "olx:u:" = '/list/user/([A-Za-z0-9_-]+)/', "olx:shop:" = '^https?://([a-z0-9-]+)\.olx\.ua/?' }
+# Дата сторінки деталей: «дивились» (порожній чип — це «OLX не показав»).
+checked_key = "olx_detail_at"
+
+[olx_tabs]
+# Вкладки пошуку OLX «Приватні»/«Бізнес» (план Блоку 3: у ~30 разів дешевші за
+# сторінки деталей; дають лише «Бізнес/Приватна», без профілю). Параметр живою пробою
+# ще НЕ підтверджено (план Блоку 3, крок 3.0) — тож кожна сторінка вкладки перевіряє,
+# що на ній АКТИВНА саме ця вкладка (`labels`, `active_selector`; probes/_olx.html:
+# кнопки «Всі оголошення» / «Бізнес» / «Приватні» з data-is-active); інакше членства
+# не пишемо, а нічний звіт каже «параметр вкладок не спрацював».
+param = "search[private_business]"
+values = { private = "private", business = "business" }
+labels = { private = "Приватні", business = "Бізнес" }
+active_selector = '[data-testid="top-listing-filters"] button[data-is-active="true"]'
+card_selector = '[data-cy="l-card"]'
+# Просувані картки (search_reason=search|promoted; probes/_olx.html — 3 з 52) у
+# членство не беремо: невідомо, чи поважає їх фільтр вкладки (розрахунок, D60).
+skip_card_reasons = ["promoted"]
+tab_key = "olx_tab"
+tab_at_key = "olx_tab_at"
+# Зрізи вкладки «Бізнес», щоб кожен вмістився в 25 сторінок видачі (OLX обриває
+# пагінацію на 25-й, ~1 100 оголошень; probes/p_olx_slices.py): кімнати × ціна, $
+# (план Блоку 3). Назви параметрів — як у probes/p_olx_slices.py і фільтрі OLX;
+# живою пробою не підтверджено: зріз, перша сторінка якого — ті самі картки, що й у
+# попереднього, означає «фільтр не діє» — обхід «Бізнес» зупиняється (звіт ночі).
+rooms_param = "search[filter_enum_number_of_rooms][0]"
+rooms = ["one", "two", "three", "four"]
+price_from_param = "search[filter_float_price:from]"
+price_to_param = "search[filter_float_price:to]"
+price_bands_usd = [[0, 40000], [40000, 55000], [55000, 70000], [70000, 90000], [90000, 120000], [120000, 0]]
+# Мітка вкладки (seller_evidence.olx_tab) пишеться лише якщо на оголошеннях, де відомі
+# і вкладка, і чип сторінки деталей, збіг ≥ 98% при n ≥ 50 (план Блоку 3); членство,
+# старіше за стільки діб, не рахується (вкладки «Бізнес» — раз на тиждень + доба).
+chip_min_agreement = 0.98
+chip_min_n = 50
+member_max_age_days = 8
+
+[rieltor]
+# Картка rieltor.ua (Етап 0: .offer-view-rieltor-position — «Рієлтор» 50 з 51,
+# «Власник» 1; посилання агенції .offer-view-rieltor-agency-link — 46 з 51).
+role_selector = ".offer-view-rieltor-position"
+role_key = "rieltor_role"
+role_values = ["Рієлтор", "Власник", "Агентство", "Забудовник"]
+role_other = "other"
+agency_selector = ".offer-view-rieltor-agency-link"
+has_agency_key = "rieltor_has_agency"
+# Агенція — непрозорий id (хеш піддомену; піддомен агенції буває номером телефону —
+# D52: тоді лише наявність).
+agency_key = "rieltor_agency"
+agency_prefix = "rieltor:ag:"
+checked_key = "rieltor_detail_at"
+
+[profile]
+# Непрозорий id профілю = префікс + blake2b(slug), 8 байт = 16 hex (розрахунок, D60:
+# зіткнення серед ~10 тис. профілів практично неможливе). Slug, у якому понад 6 цифр,
+# схожий на номер телефону — не зберігаємо зовсім.
+hash_bytes = 8
+max_digits = 6
+
+[coverage]
+# Покриття доказами (/api/status/night, щоденне зведення): група «джерело>сімейство
+# сайту» → ключі seller_evidence; «є докази» — хоч один із ключів, кожен ще й окремо.
+groups = { "domria>domria" = ["ria_offer"], "olx>olx" = ["olx_detail_at", "olx_tab"], "lun>olx" = ["olx_detail_at", "lun_checked_at"], "lun>rieltor" = ["rieltor_detail_at", "lun_checked_at"], "lun>domria" = ["ria_offer", "lun_checked_at"], "lun>lun" = ["lun_checked_at"], "flombu>flombu" = ["flombu_checked_at"] }
+labels = { "domria>domria" = "DOM.RIA", "olx>olx" = "OLX", "lun>olx" = "LUN→OLX", "lun>rieltor" = "LUN→rieltor", "lun>domria" = "LUN→DOM.RIA", "lun>lun" = "LUN (власні)", "flombu>flombu" = "flombu" }
