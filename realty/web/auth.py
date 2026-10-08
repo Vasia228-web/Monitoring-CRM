@@ -24,6 +24,7 @@ import base64
 import hmac
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote, urlsplit
@@ -44,8 +45,22 @@ COOKIE = "realty_session"
 # Шляхи без входу: перевірка живучості, robots, іконка (браузер просить її без
 # пароля), сама сторінка входу.
 OPEN_PATHS = {"/healthz", "/robots.txt", "/favicon.ico", "/login"}
-# Лише для власника: стан системи, запуск збору, керування блокуваннями.
-OWNER_ONLY = ("/status", "/api/status", "/api/auth", "/api/dedup")
+# Лише для власника: стан системи, запуск збору, керування блокуваннями; документація
+# API (вона показує й маршрути власника — рішення власника 08.10, D55 п. 5; хвиля W3,
+# D58). Swagger UI — під /api/docs разом зі своїм oauth2-redirect (app.py).
+OWNER_ONLY = ("/status", "/api/status", "/api/auth", "/api/dedup",
+              "/openapi.json", "/api/docs", "/redoc")
+# Лише для власника всередині СПІЛЬНИХ префіксів: ручне «активне/неактивне»
+# (POST /api/listings/{id}/status) живе під /api/listings, решту якого бачить і друг
+# (D55 п. 5). Шлях — уже розкодований (scope["path"]), як і для маршрутизатора.
+OWNER_ONLY_RE = (re.compile(r"/api/listings/[^/]+/status/?"),)
+
+
+def owner_only(path: str) -> bool:
+    """Шлях лише для власника: префікс OWNER_ONLY або ВЕСЬ шлях збігається з OWNER_ONLY_RE."""
+    return path.startswith(OWNER_ONLY) or any(rx.fullmatch(path) for rx in OWNER_ONLY_RE)
+
+
 # Звідки дозволено вірити заголовку CF-Connecting-IP: лише локальний тунель.
 TRUSTED_PROXIES = {"127.0.0.1", "::1"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -280,7 +295,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         if user is None:
             return _unauthorized(request)
-        if path.startswith(OWNER_ONLY) and role != ROLE_OWNER:
+        if owner_only(path) and role != ROLE_OWNER:
             return _forbidden(request, "Ця сторінка доступна лише власнику.")
         # Запит, що змінює дані, з куки — лише з самого сайту. Чужа сторінка
         # може змусити браузер надіслати форму, але не підробить Origin.

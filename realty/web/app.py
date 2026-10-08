@@ -134,7 +134,10 @@ def _warm_analytics() -> None:
         cache.get(s)
 
 
+# Документація API — лише власнику (auth.OWNER_ONLY; D55 п. 5, D58): oauth2-redirect
+# Swagger UI — під тим самим префіксом /api/docs, а не окремим /docs/….
 app = FastAPI(title="Нерухомість Івано-Франківська", docs_url="/api/docs",
+              swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
               lifespan=lifespan)
 
 # Кеш сторінок SQLite для з'єднань сайту (config/speed.toml, sqlite.cache_kb).
