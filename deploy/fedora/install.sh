@@ -129,6 +129,13 @@ systemctl --user disable --now realty-identity.timer 2>/dev/null || true
 systemctl --user stop realty-identity.service 2>/dev/null || true
 rm -f "$UNITS/realty-identity.service" "$UNITS/realty-identity.timer"
 systemctl --user daemon-reload
+# Хвиля W3 (D58): шаблон realty-alert@ (OnFailure служб) вмикати не треба — його
+# запускає systemd. Контрольна вибірка — щосереди 10:20, лише там, де вже йде збір
+# (увімкнений таймер циклу); на машині без бази таймер не вмикаємо.
+if systemctl --user is-enabled --quiet realty-cycle.timer 2>/dev/null; then
+  systemctl --user enable --now realty-liveness-sample.timer
+  echo "   контрольна вибірка: realty-liveness-sample.timer (щосереди 10:20)"
+fi
 
 if [ "${1:-}" = "--enable" ]; then
   if [ -f data/COLLECTOR_OFF ]; then
@@ -136,7 +143,8 @@ if [ "${1:-}" = "--enable" ]; then
     exit 1
   fi
   systemctl --user enable --now realty-web.service realty-tunnel.service \
-    realty-cycle.timer realty-backup.timer realty-watchdog.timer realty-night.timer realty-dedup-sample.timer
+    realty-cycle.timer realty-backup.timer realty-watchdog.timer realty-night.timer realty-dedup-sample.timer \
+    realty-liveness-sample.timer
   systemctl --user list-timers 'realty-*' --no-pager
 fi
 echo "Готово."

@@ -17,6 +17,8 @@
   python cli.py liveness plan          # яруси перевірки актуальності (без мережі)
   python cli.py liveness fuse status   # запобіжник; fuse clear --source domria — зняти
   python cli.py liveness report        # підсумки останньої ночі (по хостах, до/після)
+  python cli.py liveness sample --dry-run  # контрольна вибірка: план (без мережі й запису)
+  python cli.py liveness sample --report   # звіт останньої контрольної вибірки
   python cli.py liveness report --status --liquidity  # зведення /status і строк продажу
   python cli.py night --dry-run        # план ночі: ключі × темп = тривалість по хостах
   python cli.py night --budget-min 100 # нічний диригент (таймер realty-night, 01:10 і 04:10)
@@ -461,6 +463,24 @@ def cmd_liveness(args: argparse.Namespace) -> int:
     init_db()
     if args.action == "run":
         return cmd_verify(args)
+    if args.action == "sample":
+        # Контрольна вибірка Блоку 1 (D55 п. 7, D58): стану оголошень не змінює.
+        from realty.liveness import sample
+
+        if args.report:
+            rows = sample.runs(limit=args.last)
+            if not rows:
+                print("контрольної вибірки ще не було (cli.py liveness sample)")
+                return 0
+            for d in reversed(rows):
+                print(sample.render(d))
+            return 0
+        import signal
+
+        # SIGTERM (systemd TimeoutStartSec) — як SystemExit: рядок прогону закривається
+        # «failed», замок циклу звільняється.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+        return sample.run(per_source=args.per_source, dry_run=args.dry_run)
     if args.action == "fuse":
         from realty.liveness import fuse
 
@@ -1048,10 +1068,10 @@ def main() -> int:
 
     lv = sub.add_parser("liveness", help="перевірка актуальності (Блок 1): прогін, "
                                          "запобіжник, зведення, план")
-    lv.add_argument("action", choices=("run", "fuse", "report", "plan"),
+    lv.add_argument("action", choices=("run", "fuse", "report", "plan", "sample"),
                     help="run — як verify; fuse — стан чи зняття запобіжника; report — "
                          "підсумки ночі (--status — зведення /status); plan — яруси черги "
-                         "без мережі")
+                         "без мережі; sample — контрольна вибірка (--report — звіт)")
     lv.add_argument("fuse_action", nargs="?", default="status", choices=("status", "clear"))
     lv.add_argument("--source", help="fuse clear: джерело (domria, olx, lun, …)")
     lv.add_argument("--limit", type=int, default=None, help="run: стеля на кожен сайт")
@@ -1065,6 +1085,12 @@ def main() -> int:
     lv.add_argument("--night", type=int, help="report: номер нічного вікна (ops.night_runs)")
     lv.add_argument("--last", type=int, default=1, help="report: скільки останніх вікон")
     lv.add_argument("--json", action="store_true", help="report: сирі числа")
+    lv.add_argument("--per-source", type=int, default=None,
+                    help="sample: випадкових на джерело (типово — config/sample.toml)")
+    lv.add_argument("--dry-run", action="store_true",
+                    help="sample: лише план вибірки — без мережі, замка й запису")
+    lv.add_argument("--report", action="store_true",
+                    help="sample: звіт останнього прогону (--last N — кількох)")
     lv.set_defaults(func=cmd_liveness)
 
     nt = sub.add_parser("night", help="нічний диригент: перевірка актуальності, M2/M3, дозбір "

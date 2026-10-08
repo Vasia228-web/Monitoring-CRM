@@ -489,7 +489,7 @@ def test_alert_unit_template_and_on_failure_hooks():
     assert p["Service"]["ExecStart"].endswith("cli.py alert unit-failed %i")
     assert "OnFailure" not in p["Unit"]                     # без петлі
     for name in ("realty-cycle.service", "realty-night.service", "realty-backup.service",
-                 "realty-web.service"):
+                 "realty-web.service", "realty-liveness-sample.service"):
         q = configparser.ConfigParser(strict=False, interpolation=None)
         q.optionxform = str
         q.read(units / name, encoding="utf-8")

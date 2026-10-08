@@ -1,0 +1,27 @@
+[Unit]
+Description=Realty: контрольна вибірка перевірки актуальності (100 випадкових на джерело, без зміни стану)
+# Упала (failed) — критична тривога одразу (realty-alert@, хвиля W3, D58).
+OnFailure=realty-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+# D55 п. 7, D58: той самий підпис і темп хостів, що й крок циклу, під замком циклу
+# (чекає ≤ 30 хв, далі — відмова з попередженням); стану оголошень не змінює — лише
+# ops.liveness_sample_*; «знято» — підказка звичайній перевірці через запобіжник.
+ExecStart=%h/realty/.venv/bin/python cli.py liveness sample
+# 30 хв очікування замка + 60 хв мережевої стелі (config/sample.toml) + запас: 10:20 +
+# 1 год 40 хв = 12:00 — до циклу 12:05 замок звільниться разом із процесом.
+TimeoutStartSec=1h40min
+KillMode=control-group
+# Поступається сайту, як процес перевірки realty-lookup@ (HEAD/GET без браузера; ті
+# самі налаштування, що їх install.sh пробує без root).
+Nice=10
+CPUWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+OOMScoreAdjust=500
+MemoryHigh=700M
+MemoryMax=1000M
