@@ -245,15 +245,19 @@ class NightRenderer:
                                 exc_info=True)
         else:
             try:
-                with Watchdog(CLOSE_TIMEOUT_S, self._driver_pid,
-                              label="закриття нічного браузера"):
+                dog = Watchdog(CLOSE_TIMEOUT_S, self._driver_pid,
+                               label="закриття нічного браузера")
+                with dog:
                     for obj, meth in ((self._ctx, "close"), (self._browser, "close"),
                                       (self._pw, "stop")):
-                        if obj is not None:
-                            try:
-                                getattr(obj, meth)()
-                            except Exception:            # noqa: BLE001
-                                pass
+                        # Закриття зависло й сторож убив драйвер: далі — лише stop()
+                        # (інші виклики на мертвому драйвері крутяться вічно).
+                        if obj is None or (dog.fired and meth != "stop"):
+                            continue
+                        try:
+                            getattr(obj, meth)()
+                        except Exception:                # noqa: BLE001
+                            pass
             except Exception:                            # noqa: BLE001
                 pass
         self._pw = self._browser = self._ctx = None
