@@ -183,6 +183,30 @@ def view(row, *, zhk_words: bool | None = None) -> View:
 # --- Для збирачів -----------------------------------------------------------------------------
 
 
+def has_phone(text: str) -> bool:
+    """Чи є в тексті номер телефону (privacy.find — той самий пошук, що для описів).
+    Значення place_raw — вільний текст продавця («Назва ЖК» OLX, блок ЖК rieltor): слухачі
+    ORM чистять лише опис і заголовок, тож номер у назві ЖК інакше ліг би в базу як є
+    (рецензія E11, 08.10). Сумнів (пошук упав) — теж «є»."""
+    from .. import privacy
+
+    try:
+        return bool(privacy.find(text)[1])
+    except Exception:                                  # noqa: BLE001 — сумнів = не беремо
+        return True
+
+
+def _clean_text(value, limit: int = 120) -> str | None:
+    """Рядок для place_raw: обрізаний, без номера телефону; номер — None (значення не
+    пишемо зовсім: ні замаскованим, ні хешем)."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or has_phone(text):                    # увесь текст: номер не обрізаний
+        return None
+    return text[:limit]
+
+
 def from_lun_item(d: dict, types, deref=None, today: str | None = None) -> dict:
     """place_raw з об'єкта стрічки LUN: geoEntities потрібних типів [{type, id, name}] і
     позначка «прохід стрічки з geoEntities був» (lun_geo_checked_at) — навіть без них:
@@ -196,9 +220,10 @@ def from_lun_item(d: dict, types, deref=None, today: str | None = None) -> dict:
         name = g.get("name")
         if deref is not None:
             name = deref(name)
-        if not isinstance(name, str) or not name.strip():
+        name = _clean_text(name)
+        if name is None:
             continue
-        out.append({"type": g.get("type"), "id": g.get("geoId"), "name": name.strip()[:120]})
+        out.append({"type": g.get("type"), "id": g.get("geoId"), "name": name})
     res = {"lun_geo_checked_at": today or date.today().isoformat()}
     if out:
         res["lun_geo"] = out
@@ -206,11 +231,16 @@ def from_lun_item(d: dict, types, deref=None, today: str | None = None) -> dict:
 
 
 def from_olx_params(params: dict, today: str) -> dict:
-    """place_raw зі сторінки OLX: параметр «Назва ЖК» (вільний текст продавця)."""
+    """place_raw зі сторінки OLX: параметр «Назва ЖК» (вільний текст продавця). Номер
+    телефону в назві — нічого (і позначки «сторінку бачили» теж: інакше порожній ЖК
+    читався б як «OLX ЖК не показав»; рецензія E11, 08.10)."""
     name = (params.get("назва жк") or "").strip()
     out = {"olx_checked_at": today}
     if name:
-        out["olx_zhk"] = name[:120]
+        clean = _clean_text(name)
+        if clean is None:
+            return {}
+        out["olx_zhk"] = clean
     return out
 
 
@@ -221,7 +251,10 @@ def from_rieltor_soup(soup, today: str) -> dict:
     if el is not None:
         name = el.get_text(" ", strip=True)
         if name:
-            out["rieltor_zhk"] = name[:120]
+            clean = _clean_text(name)
+            if clean is None:                          # номер у назві — як у from_olx_params
+                return {}
+            out["rieltor_zhk"] = clean
     return out
 
 
@@ -229,9 +262,9 @@ def from_flombu_location(g: dict) -> dict:
     """place_raw з estateRecordLocation flombu: населений пункт (район flombu не дає)."""
     out = {}
     for src, dst in (("locality", "flombu_locality"), ("sublocality1", "flombu_sublocality")):
-        value = (g.get(src) or "").strip() if isinstance(g.get(src), str) else ""
+        value = _clean_text(g.get(src))
         if value:
-            out[dst] = value[:120]
+            out[dst] = value
     return out
 
 
@@ -241,9 +274,9 @@ def from_domria_card(d: dict) -> dict:
     did = _int(d.get("district_id"))
     if did:
         out["ria_district_id"] = did
-    name = d.get("district_name_uk") or d.get("district_name")
-    if isinstance(name, str) and name.strip():
-        out["ria_district"] = name.strip()[:120]
+    name = _clean_text(d.get("district_name_uk") or d.get("district_name"))
+    if name:
+        out["ria_district"] = name
     nid = _int(d.get("newbuild_id") or d.get("user_newbuild_id"))
     if nid:
         out["ria_newbuild_id"] = nid

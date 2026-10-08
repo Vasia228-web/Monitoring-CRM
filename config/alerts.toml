@@ -51,6 +51,7 @@ night-missing = "critical"           # за 26 год жодного нічно�
 night-skipped = "critical"           # два вікна поспіль пропущено (цикл не звільнив замок)
 night-hold = "critical"              # хост чекає рішення (блокування дві ночі поспіль)
 night-blocked = "warning"            # смугу одного хоста зупинили блокування цієї ночі
+night-captcha = "warning"            # капча зупинила рендери OLX до кінця вікна (Блок 1 триває; рецензія E11)
 night-late = "warning"               # замок звільнено пізніше межі
 # --- зведення квартир, райони й ЖК (Блок 4) ---
 dedup-suspicious = "warning"

@@ -983,10 +983,17 @@ class NightOlxRender:
     min_mem_available_mb: int = field(**_limits(min=0))
     block_resources: tuple[str, ...] = field(**_limits(
         choices=("image", "media", "font", "stylesheet", "other")))
+    # Прапорці Chromium; кешу на диску бути не має (сторінка містить ім'я продавця) —
+    # схема вимагає --disk-cache-size (рецензія E11, 08.10).
     launch_args: tuple[str, ...]
-    # Сторінка 200 без змісту, але з таким текстом — капча/відмова: рахується як
-    # блокування (у «5 поспіль»), а не як «оголошення без чипа».
+    # Сторінка 200 без змісту, але з такою ознакою — капча/відмова: рендер не вдався, а
+    # не «оголошення без чипа». Ознаки — конкретні (сторінка-виклик), не слово «captcha»
+    # (буває у скриптах звичайних сторінок; рецензія E11, 08.10).
     captcha_markers: tuple[str, ...]
+    # Стільки капч поспіль — рендери стоять до кінця ВІКНА (попередження night-captcha у
+    # зведенні). Капча не йде в блокування смуги: перевірки Блоку 1 olx.ua не стоять і
+    # утримання хоста через капчу не буває (рецензія E11, 08.10).
+    captcha_stop_after: int = field(**_limits(min=1, max=20))
     # Невдалий рендер ключа (не 200, сторінка без змісту) — повтор не раніше ніж через
     # стільки годин (і точно не цієї ночі).
     failed_retry_hours: float = field(**_limits(min=12))
@@ -1001,8 +1008,17 @@ class NightOlxRender:
         for arg in self.launch_args:
             if not arg.startswith("--"):
                 out.append(f"launch_args: {arg!r} — прапорець Chromium «--…»")
+            if arg.startswith(("--user-data-dir", "--disk-cache-dir")):
+                out.append(f"launch_args: {arg!r} — каталог профілю й кешу задає код "
+                           f"(night/render.py: стирається на старті й закритті)")
+        if not any(a.startswith("--disk-cache-size=") for a in self.launch_args):
+            out.append("launch_args: бракує --disk-cache-size=… (кеш сторінок OLX з "
+                       "іменами продавців не має лишатися на диску)")
         if any(not m.strip() for m in self.captcha_markers):
             out.append("captcha_markers: порожній рядок")
+        out += [f"captcha_markers: {m!r} — надто загальна ознака (буває у скриптах "
+                f"звичайних сторінок)" for m in self.captcha_markers
+                if m.strip().lower() in ("captcha", "recaptcha", "robot", "access denied")]
         return out
 
 

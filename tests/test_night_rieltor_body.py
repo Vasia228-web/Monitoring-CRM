@@ -163,6 +163,39 @@ def test_evidence_from_the_night_get_lands_only_where_empty(db):
     assert after.price_usd == before.price_usd
 
 
+def test_a_complex_name_with_a_phone_never_reaches_the_database(db):
+    """Рецензія E11 (08.10): блок ЖК картки rieltor — текст продавця; номер у ньому — назву
+    не пишемо зовсім (і позначки «картку бачили» для місця теж), ні в захопленні смуги, ні
+    в базі. Доказ продавця (роль) — пишеться як завжди."""
+    from realty.liveness import apply as lv_apply, capture, engine, existence
+    from night_kit import scope_of
+
+    cfg = policy.load()
+    cap = cfg.capture.body_hosts["rieltor.ua"]
+    html = rieltor_html(13200041, zhk=f"ЖК Паркова Алея, тел. {PHONE}")
+    summary, _net, recs = _run([_item(13200041, cap)], {"rieltor:13200041": (200, html)})
+    got = recs[0]["capture"]
+    assert got["seller_evidence"]["rieltor_role"] == "Рієлтор"
+    line = json.dumps(recs, ensure_ascii=False)
+    assert PHONE not in line and "000 00 01" not in line and "Паркова" not in line
+    lid = add(db, rieltor_url(13200041), source="lun", external_id="ph1")
+    with db() as s:
+        row = next(r for r in queue.load_rows(s, where=None) if r.id == lid)
+    item = queue.WorkItem(key="rieltor:13200041", host="rieltor.ua", url=rieltor_url(13200041),
+                          tier="onetime_blind", rows=(row,), body_cap=cap)
+    net = engine.CountingFetcher(FakeNet({"rieltor:13200041": (200, html)}),
+                                 engine.LaneStats(host="rieltor.ua"))
+    oc, _ = engine.check_one(item, net, cfg=cfg, ctx=existence.Context(cfg=cfg, now=NOW,
+                                                                       snapshots={}),
+                             hooks=capture.default_hooks(cfg), delay=3.0, now_fn=lambda: NOW)
+    lv_apply.apply_outcomes([oc], cfg=cfg, scope=scope_of(db))
+    after = get(db, lid)
+    assert after.seller_evidence["rieltor_role"] == "Рієлтор"
+    text = json.dumps([after.place_raw, after.seller_evidence], ensure_ascii=False)
+    assert PHONE not in text and "Паркова" not in text
+    assert not (after.place_raw or {}).get("rieltor_checked_at")
+
+
 def test_every_body_host_has_an_extractor():
     from realty.liveness import capture
 

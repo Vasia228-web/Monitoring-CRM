@@ -64,14 +64,15 @@ def olx_detail_html(*, chip: str = "Приватна особа", deal: str | No
 
 
 def rieltor_html(n: int = 13100001, *, role: str = "Рієлтор",
-                 agency: str | None = "https://tstagencia.rieltor.ua/") -> str:
+                 agency: str | None = "https://tstagencia.rieltor.ua/",
+                 zhk: str = "ЖК Паркова Алея") -> str:
     ag = (f'<a class="offer-view-rieltor-agency-link" href="{agency}">Прогрес</a>'
           if agency else "")
     return (f"<html><head><title>Оголошення №{n} — продаж квартири</title></head><body>"
             f'<div class="offer-view-section-text">Опис. Тел. {PHONE}</div>'
             f'<div class="offer-view-rieltor-name">{NAME}</div>'
             f'<div class="offer-view-rieltor-position">{role}</div>{ag}'
-            '<div class="ldb__complex"><div class="ldb__complex-name">ЖК Паркова Алея</div></div>'
+            f'<div class="ldb__complex"><div class="ldb__complex-name">{zhk}</div></div>'
             "</body></html>")
 
 

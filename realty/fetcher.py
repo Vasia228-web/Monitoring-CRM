@@ -417,6 +417,7 @@ class BrowserFetcher:
         self.cache = DiskCache()
         self.op_timeout = op_timeout
         self.dead = False
+        self._dog: Watchdog | None = None
         self._pw = None
         self._browser = None
         self._ctx = None
@@ -433,6 +434,7 @@ class BrowserFetcher:
         if self.dead:
             raise DeadlineExceeded(f"браузер уже зупинено після тайм-ауту ({what})")
         dog = Watchdog(self.op_timeout, self._driver_pid, label=self.label or "браузер")
+        self._dog = dog
         try:
             with dog:
                 yield
@@ -446,6 +448,13 @@ class BrowserFetcher:
             # Операція встигла повернутись у ту ж мить, коли сторож спрацював:
             # браузер однаково вже вбитий.
             self.dead = True
+
+    def _killed(self) -> bool:
+        """Сторож уже вбив драйвер (або браузер мертвий): будь-який виклик Playwright після
+        цього — і page.close() у finally — крутиться вічно на 100% процесора в циклі
+        очікування мертвого диспетчера (рецензія E11, 08.10; перевірено на справжньому
+        Chromium). `dead` ставить лише except у _guarded — ПІСЛЯ finally сторінки."""
+        return self.dead or (self._dog is not None and self._dog.fired)
 
     def _ensure(self):
         if self._ctx is not None:
@@ -514,7 +523,7 @@ class BrowserFetcher:
             page.wait_for_timeout(settle_ms)
             return page.content()
         finally:
-            if not self.dead:
+            if not self._killed():
                 try:
                     page.close()
                 except Exception:
@@ -538,7 +547,8 @@ class BrowserFetcher:
                 except Exception:
                     code = 0
                 finally:
-                    page.close()
+                    if not self._killed():
+                        page.close()
         except Exception:
             code = 0
         ops.record_request(self.label, ok=0 < code < 400,

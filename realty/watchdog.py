@@ -453,7 +453,8 @@ def check_night(now: datetime) -> list[Alert]:
                          .order_by(ops.NightRun.id)).all()
         holds = s.scalars(select(ops.NightHold).where(ops.NightHold.state == "held")).all()
         rows = [(r.id, r.status, r.window, r.night_date, r.message, r.lanes,
-                 r.lock_released_at, r.release_lock_at, r.started_at) for r in runs]
+                 r.lock_released_at, r.release_lock_at, r.started_at, r.evidence)
+                for r in runs]
         hold_rows = [(h.host, h.since, h.reason) for h in holds]
         missing_since = now - timedelta(hours=NIGHT_MISSING_HOURS)
         cycles = s.scalar(select(func.count()).select_from(ops.CycleRecord)
@@ -475,7 +476,8 @@ def check_night(now: datetime) -> list[Alert]:
             "🌙⏳ два нічні вікна поспіль пропущено: цикл не звільнив замок до "
             "stop_requests − lock.min_work_minutes. Чому цикл такий довгий — journalctl "
             "--user -u realty-cycle -n 80.")))
-    for rid, status, window, night_date, message, lanes, released, release_by, started in rows:
+    for (rid, status, window, night_date, message, lanes, released, release_by, started,
+         evidence) in rows:
         when = f"ніч {night_date or '—'}, вікно {window or '—'}"
         if status == "backup_failed":
             alerts.append(Alert("night-backup", (
@@ -510,8 +512,21 @@ def check_night(now: datetime) -> list[Alert]:
                                                          "evidence_requests"))
                 alerts.append(Alert(f"night-blocked:{host}", (
                     f"🌙🚧 {when}: смугу {host} зупинили блокування ({blocked} із "
-                    f"{total} запитів — 401/403/429/капча) — до кінця ночі цей сайт "
+                    f"{total} запитів — 401/403/429) — до кінця ночі цей сайт "
                     f"не перевіряємо. Повториться наступної ночі — хост чекатиме рішення.")))
+        try:
+            ev = json.loads(evidence or "{}")
+        except ValueError:
+            ev = {}
+        ev = ev if isinstance(ev, dict) else {}
+        for host, rep in (ev.get("lanes") or {}).items():
+            if isinstance(rep, dict) and rep.get("stopped") == "captcha":
+                # Капча зупиняє лише рендери вікна (рецензія E11, 08.10): перевірки Блоку 1
+                # тривають, утримання хоста немає — попередження в зведення.
+                alerts.append(Alert(f"night-captcha:{host}", (
+                    f"🌙🧩 {when}: рендери {host} зупинено капчею ({int(rep.get('captcha') or 0)} "
+                    f"сторінок-викликів із {int(rep.get('renders') or 0)} рендерів) — до "
+                    f"кінця вікна сторінок деталей не беремо; перевірки Блоку 1 тривають.")))
     for host, held_since, reason in hold_rows:
         alerts.append(Alert(f"night-hold:{host}", (
             f"🌙✋ {host}: нічна смуга чекає рішення з {held_since:%d.%m %H:%M} UTC — "
@@ -881,7 +896,7 @@ ALERT_KEYS = (
     "liveness-sample-removed", "liveness-sample-skipped", "liveness-canary-genuine",
     "liveness-no-canary",
     "night-missing", "night-skipped", "night-backup", "night-failed", "night-late",
-    "night-blocked", "night-hold",
+    "night-blocked", "night-hold", "night-captcha",
     "places-failed", "places-would-change",
     "watchdog",
 )

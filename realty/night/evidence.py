@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 
 OLX_TABS_STATE = "olx:tabs"
 OLX_FAILED_STATE = "olx:detail_failed"
+OLX_RENDERED_STATE = "olx:rendered_tonight"
 # Стільки помилок рендера поспіль (код 0: мережа, браузер) — рендери стоять до кінця
 # вікна (не блокування сайту: тривоги немає, у звіті — «render_errors»).
 MAX_RENDER_ERRORS = 5
@@ -170,6 +171,33 @@ def _iso_dt(text):
         return None
 
 
+def remember_rendered(night_start: str | None, keys) -> None:
+    """Ключі, чию сторінку деталей рендерили цієї ночі, — у ops.night_state (рецензія E11,
+    08.10): рендер не ставить last_attempt рядкам (це поле Блоку 1), тож без цього вікно 2
+    могло б питати той самий ключ удруге (HEAD контрольних/прострочених чи рендер). Стан
+    однієї ночі: інша `night_start` — список починається заново."""
+    if not night_start or not keys:
+        return
+    st = state_get(OLX_RENDERED_STATE)
+    old = set(st.get("keys") or ()) if st.get("night_start") == night_start else set()
+    state_put(OLX_RENDERED_STATE, {"night_start": night_start,
+                                   "keys": sorted(old | set(keys))})
+
+
+def rendered_tonight(night_start: datetime | None) -> set[str]:
+    """Ключі, сторінку яких рендерили від `night_start` (старт першого вікна цієї ночі)."""
+    if night_start is None:
+        return set()
+    try:
+        st = state_get(OLX_RENDERED_STATE)
+    except Exception:                                  # noqa: BLE001 — лише уточнення плану
+        log.warning("ніч: стан рендерів OLX не читається", exc_info=True)
+        return set()
+    if st.get("night_start") != night_start.isoformat(timespec="seconds"):
+        return set()
+    return set(st.get("keys") or ())
+
+
 def failed_keys(rcfg, now: datetime) -> dict[str, str]:
     """Ключі, рендер яких не вдався не давніше за failed_retry_hours (ключ → коли)."""
     cut = now - timedelta(hours=rcfg.failed_retry_hours)
@@ -205,6 +233,7 @@ def olx_detail_queue(session, lcfg, ncfg, scfg, *, now: datetime, night_start: d
         groups[r[1]].append(r)
     failed = failed_keys(ncfg.olx_render, now)
     private = private_members(scfg, now)
+    rendered = rendered_tonight(night_start)
     counts = Counter()
     cand = []
     for key, rs in groups.items():
@@ -214,7 +243,8 @@ def olx_detail_queue(session, lcfg, ncfg, scfg, *, now: datetime, night_start: d
         if key in exclude:
             counts["in_block1"] += 1
             continue
-        if night_start is not None and any(r[7] is not None and r[7] >= night_start for r in rs):
+        if night_start is not None and (key in rendered or any(
+                r[7] is not None and r[7] >= night_start for r in rs)):
             counts["tried_tonight"] += 1
             continue
         if key in failed:
@@ -324,7 +354,8 @@ def plan_olx(session, lcfg, ncfg, scfg, *, now: datetime, night_start: datetime 
 
 def is_captcha(html: str | None, rcfg) -> bool:
     """Сторінка 200 без змісту (ні карток видачі, ні параметрів оголошення), але з ознакою
-    капчі/відмови — блокування, а не «оголошення без чипа»."""
+    капчі/відмови — рендер не вдався, а не «оголошення без чипа» (лічиться окремо від
+    блокувань: captcha_stop_after поспіль — рендери стоять до кінця вікна)."""
     if not html:
         return False
     if ('data-cy="l-card"' in html or "ad-parameters-container" in html
@@ -356,20 +387,22 @@ def record_tab(keys: list[str], tab: str, now: datetime) -> dict:
 
 
 class _Stopped(Exception):
-    """Рендери цього вікна скінчились (стеля, дедлайн, пам'ять, блокування, помилки)."""
+    """Рендери цього вікна скінчились (стеля, дедлайн, пам'ять, блокування, капча,
+    помилки)."""
 
 
 class OlxJobs:
     """Вкладки й сторінки деталей OLX у смузі olx.ua — після перевірок Блоку 1.
 
     `gate` — ворота смуги (night.lane.EvidenceGate): пауза старт-до-старту з усіма
-    запитами смуги, дедлайн із запасом на рендер, 401/403/429 і капча — у ті самі
-    «5 поспіль» і частку блокувань (смуга стоїть до кінця ночі → тривога сторожа
-    night-blocked)."""
+    запитами смуги, дедлайн із запасом на рендер (і на перезапуск браузера), 401/403/429
+    — у ті самі «5 поспіль» і частку блокувань (смуга стоїть до кінця ночі → тривога
+    сторожа night-blocked). Капча — окремо: captcha_stop_after поспіль — рендери стоять
+    до кінця вікна (попередження night-captcha), Блок 1 і наступні вікна — як були."""
 
     def __init__(self, spec: dict, gate, *, renderer, scope, scfg, ncfg, now_fn=None,
                  mem_fn=None) -> None:
-        from .render import mem_available_mb
+        from .render import render_headroom_mb
 
         self.spec = spec
         self.gate = gate
@@ -378,43 +411,66 @@ class OlxJobs:
         self.scfg = scfg
         self.rcfg = ncfg.olx_render
         self.now_fn = now_fn or utcnow
-        self.mem_fn = mem_fn or mem_available_mb
+        self.mem_fn = mem_fn or render_headroom_mb
         self.renders = 0
         self.errors_in_row = 0
+        self.captcha_in_row = 0
         self.private_now: set[str] = set()
+        # Ключі, сторінку яких цього вікна справді рендерили (запит пішов) — у стан ночі:
+        # вікно 2 не питає їх ні рендером, ні HEAD Блоку 1 (один запит на ключ за ніч).
+        self.rendered_keys: set[str] = set()
         self.report: dict = {"renders": 0, "blocked": 0, "stopped": None,
                              "tabs": {}, "detail": {}}
 
     # --- один рендер ---------------------------------------------------------------
 
-    def _render(self, url: str):
+    def _margin(self) -> float:
+        """Запас до stop_requests, за який рендер уже не починаємо: deadline_margin плюс
+        (пере)запуск браузера, якщо він буде перед цим рендером (рецензія E11, 08.10:
+        запуск під сторожем render_timeout_seconds не входив у запас, і рендер із
+        перезапуском міг перейти stop_requests + kill_grace)."""
+        allowance = getattr(self.renderer, "launch_allowance", None)
+        extra = float(allowance()) if callable(allowance) else 0.0
+        return self.rcfg.deadline_margin_seconds + extra
+
+    def _render(self, url: str, key: str | None = None):
         from ..fetcher import BLOCKING_CODES
         from ..identity_backfill import Stop
 
         if self.renders >= self.rcfg.max_per_window:
             raise _Stopped("cap")
-        if self.gate.stopped(margin=self.rcfg.deadline_margin_seconds):
+        margin = self._margin()
+        if self.gate.stopped(margin=margin):
             raise _Stopped(self.gate.why())
         mem = self.mem_fn()
         if mem is not None and mem < self.rcfg.min_mem_available_mb:
             self.report["mem_available_mb"] = mem
             raise _Stopped("memory")
         try:
-            self.gate.wait(margin=self.rcfg.deadline_margin_seconds)
+            self.gate.wait(margin=margin)
         except Stop:
             raise _Stopped(self.gate.why()) from None
         res = self.renderer.render(url)
         self.renders += 1
         self.report["renders"] += 1
+        if key is not None:
+            self.rendered_keys.add(key)
         captcha = res.code == 200 and is_captcha(res.html, self.rcfg)
-        code = 403 if captcha else res.code
-        if code in BLOCKING_CODES:
+        if res.code in BLOCKING_CODES:
             self.report["blocked"] += 1
-            if captcha:
-                self.report["captcha"] = self.report.get("captcha", 0) + 1
-        self.gate.observe(code)
+        # Капча — окремо від блокувань (рецензія E11, 08.10): у «5 поспіль» і частку смуги
+        # не йде (інакше друга така ніч поставила б на утримання й перевірки Блоку 1
+        # olx.ua), а зупиняє лише рендери цього вікна — captcha_stop_after поспіль.
+        self.gate.observe(res.code)
         if self.gate.blocked():
             raise _Stopped("blocks")
+        if captcha:
+            self.report["captcha"] = self.report.get("captcha", 0) + 1
+            self.captcha_in_row += 1
+            if self.captcha_in_row >= self.rcfg.captcha_stop_after:
+                raise _Stopped("captcha")
+        else:
+            self.captcha_in_row = 0
         self.errors_in_row = self.errors_in_row + 1 if res.code == 0 else 0
         if self.errors_in_row >= MAX_RENDER_ERRORS:
             raise _Stopped("render_errors")
@@ -515,7 +571,7 @@ class OlxJobs:
         entries = sorted(entries, key=lambda e: 0 if e["key"] in self.private_now else 1)
         try:
             for entry in entries:
-                res, captcha = self._render(entry["url"])
+                res, captcha = self._render(entry["url"], entry["key"])
                 rep["rendered"] += 1
                 ok = False
                 if res.code == 200 and not captcha:
@@ -544,6 +600,7 @@ class OlxJobs:
             cut = self.now_fn() - timedelta(hours=self.rcfg.failed_retry_hours)
             state_put(OLX_FAILED_STATE, {k: v for k, v in failed.items()
                                          if (t := _iso_dt(v)) is not None and t >= cut})
+            remember_rendered(self.spec.get("night_start"), self.rendered_keys)
             rep["fields"] = dict(fields)
             if codes:
                 rep["codes"] = dict(codes)
@@ -722,6 +779,9 @@ def attach(session, lcfg, ncfg, scfg, plan, *, now: datetime,
             spec["olx_tabs"] = due_tabs
         if info.get("olx_detail"):
             spec["olx_detail"] = info["olx_detail"]
+        if spec and night_start is not None:
+            # Смуга пише відрендерені ключі в стан ЦІЄЇ ночі (remember_rendered).
+            spec["night_start"] = night_start.isoformat(timespec="seconds")
         hp.evidence = {"est_renders": info["est_renders"] if spec else 0,
                        "detail": info.get("detail_counts") or {},
                        "tabs": {k: {"due": v.get("due"),
