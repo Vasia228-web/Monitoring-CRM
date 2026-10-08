@@ -169,9 +169,9 @@ min_missing_active = 50
 cooldown_hours = 24
 cooldown_low_gain_days = 7
 low_gain = 200
-# Стеля сторінок: LUN 260 (план Блоку 3: night.lun_pass_max_pages; SOURCES.full_pages —
-# 240), flombu 40 (SOURCES.full_pages; API — ~34 сторінки міста, Етап 0).
-max_pages = { lun = 260, flombu = 40 }
+# Стеля сторінок: LUN 320 (SOURCES.full_pages; 08.10 стрічка LUN перевищила 240 сторінок —
+# D61), flombu 40 (SOURCES.full_pages; API — ~34 сторінки міста, Етап 0).
+max_pages = { lun = 320, flombu = 40 }
 # Незавершений прохід продовжуємо з наступної сторінки, якщо він почався не давніше
 # за 3 доби; старіший — заново (стрічка зсувається; розрахунок, D60).
 resume_max_age_hours = 72
