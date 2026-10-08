@@ -307,6 +307,19 @@ def section_backups(ctx: Ctx) -> list[str] | None:
     return out
 
 
+def section_integrity(ctx: Ctx) -> list[str] | None:
+    """Щоденна перевірка цілісності бази (watchdog.check_db_integrity) — один рядок."""
+    st = ctx.state.get("_integrity") or {}
+    results = st.get("results") or {}
+    at = _iso(st.get("at"))
+    if not results or at is None or at < ctx.since:
+        return None
+    names = {"ok": "ok", "interrupted": "НЕ ВСТИГЛА (стеля)", "missing": "файлу немає"}
+    parts = [f"{name} {names.get(r.get('result'), 'ПОМИЛКА')} ({r.get('seconds', 0):.1f} с)"
+             for name, r in sorted(results.items())]
+    return [f"🧪 Цілісність бази ({ctx.hm(at)}): " + "; ".join(parts)]
+
+
 def section_sample(ctx: Ctx) -> list[str] | None:
     """(5) Контрольна вибірка, якщо прогін був у вікні зведення."""
     from .liveness import sample
@@ -341,6 +354,7 @@ SECTIONS: list[tuple[str, Section]] = [
     ("ніч", section_night),
     ("цикли", section_cycles),
     ("бекапи", section_backups),
+    ("цілісність бази", section_integrity),
     ("контрольна вибірка", section_sample),
     ("райони й ЖК", section_places),
 ]

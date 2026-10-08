@@ -405,6 +405,15 @@ def test_digest_night_section_uses_evidence_summary_when_present(env, cfg, monke
     assert "OLX 120 із 400" in "\n".join(digest.section_night(ctx))
 
 
+def test_digest_shows_the_daily_integrity_result(env, cfg):
+    state = {"_integrity": {"date": "2026-10-09", "at": (NOW - timedelta(hours=4)).isoformat(),
+                            "results": {"realty": {"result": "ok", "seconds": 1.32},
+                                        "ops": {"result": "interrupted", "seconds": 120.0}}}}
+    text = digest.build(NOW, state, cfg)
+    assert "🧪 Цілісність бази" in text and "realty ok (1.3 с)" in text
+    assert "ops НЕ ВСТИГЛА" in text
+
+
 def test_register_adds_a_section(monkeypatch):
     monkeypatch.setattr(digest, "SECTIONS", list(digest.SECTIONS))
     digest.register("тест", lambda ctx: ["рядок"], before="цикли")

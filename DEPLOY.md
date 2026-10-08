@@ -11,9 +11,11 @@
 | `realty-tunnel.service` | Cloudflare Tunnel назовні; без `AUTH_*` не стартує |
 | `realty-cycle.timer` | цикл кожні 3 год (00:05, 03:05…); пропущений — після старту |
 | `realty-backup.timer` | бекап о 04:30 з перевіркою відновлення й копією поза машиною |
-| `realty-watchdog.timer` | сторож кожні 30 хв: тиша, падіння джерел, блокування, бекап |
+| `realty-watchdog.timer` | сторож кожні 30 хв: критичне — одразу («🚨 КРИТИЧНО»), попередження — у щоденне зведення «📋» о 08:40 (`config/alerts.toml`, D58); ще й сайт (/healthz), цілісність бази (07:40) |
 | `realty-night.timer` | нічний диригент 01:10 і 04:10 (`cli.py night`, D53): бекап на старті, перевірка актуальності M2/M3 смугами хостів, дозбір identity; замість `realty-identity.timer` |
 | `realty-lookup@.service` | шаблон: перевірка квартири, яку щойно відкрили (запускає сайт) |
+| `realty-alert@.service` | шаблон: критична тривога «служба впала» — `OnFailure=` у cycle, night, backup, web, liveness-sample (D58; вмикати не треба) |
+| `realty-liveness-sample.timer` | контрольна вибірка Блоку 1 щосереди 10:20 (`cli.py liveness sample`, D58): 100 випадкових актуальних на джерело + контрольні, під замком циклу, стану не змінює |
 
 Порядок першого розгортання:
 
@@ -106,6 +108,21 @@ systemctl --user list-timers 'realty-*'            # realty-identity є, realty-
 збір: нові оголошення, події ціни, last_seen — D43), тому ці два доданки — не помилка;
 будь-що понад них звіт показує як «НЕЗВІРЕНО».
 
+Тривоги на два рівні, права друга, контрольна вибірка (хвиля W3, D58) — між циклами,
+звичайним порядком вище (`config check` перевіряє нові `alerts.toml` і `sample.toml`;
+`db migrate --dry-run` покаже нові таблиці ops.db `liveness_sample_runs/_checks` — їх
+створює init_ops() першого ж процесу). `install.sh` копіює `realty-alert@.service` і
+`realty-liveness-sample.*`, додає `OnFailure=` у юніти й сам вмикає таймер вибірки, якщо
+таймер циклу ввімкнений. Перезапуск realty-web — права друга (документація API й ручна
+позначка актуальності лише власнику). Перевірка:
+
+```bash
+.venv/bin/python cli.py alert levels               # рівень кожної тривоги
+.venv/bin/python cli.py alert digest --dry-run     # як виглядатиме щоденне зведення
+systemctl --user list-timers 'realty-liveness-sample*'   # наступний — середа 10:20
+.venv/bin/python cli.py liveness sample --dry-run  # план вибірки (без мережі й запису)
+```
+
 Щоденне:
 
 ```bash
@@ -116,6 +133,8 @@ journalctl --user -u realty-night -n 80            # останнє нічне �
 .venv/bin/python cli.py night --dry-run            # план наступного вікна: ключі × крок
 cat ~/realty/data/public_url                       # поточна адреса ззовні
 python cli.py watchdog --test                      # перевірити канал Telegram
+.venv/bin/python cli.py alert digest --dry-run     # зведення попереджень за добу (без надсилання)
+.venv/bin/python cli.py liveness sample --report   # остання контрольна вибірка
 ```
 
 ### Бекап у хмару
