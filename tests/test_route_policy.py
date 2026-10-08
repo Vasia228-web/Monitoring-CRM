@@ -89,6 +89,7 @@ POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/status/liveness"): OWNER,                 # «Зняті оголошення» (E8, D52)
     ("POST", "/api/status/liveness-fuse"): OWNER,           # зняти запобіжник (E8, D52)
     ("GET", "/api/status/places"): OWNER,                   # «Райони й ЖК» (E10, D57)
+    ("GET", "/api/status/night"): OWNER,                    # ночі й докази Блоків 3/4 (E11, D60)
     ("POST", "/api/status/run"): OWNER,                     # запуск збору
     ("GET", "/api/auth/blocks"): OWNER,
     ("POST", "/api/auth/blocks/{ip}/unblock"): OWNER,

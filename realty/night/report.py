@@ -440,3 +440,140 @@ def plan_evidence_lines(d: dict) -> list[str]:
 TAB_LABELS_UA = {"no_members": "членства ще немає", "not_enough": "не пишемо — замало звірених",
                  "disagree": "НЕ пишемо — збіг із чипом нижчий за поріг",
                  "calibrated": "пишемо (звірку пройдено)", "error": "помилка"}
+
+
+# --- Щоденне зведення (Telegram, хвиля W3) і /api/status/night ---------------------------------
+
+
+def _n(x) -> str:
+    return f"{int(x or 0):,}".replace(",", " ")
+
+
+def _pct(a, b) -> str:
+    return f"{100 * a / b:.0f}%" if b else "—"
+
+
+PLACE_UA = {"olx_checked_at": "OLX «Назва ЖК» (сторінка)",
+            "rieltor_checked_at": "rieltor блок ЖК (картка)",
+            "lun_geo_checked_at": "LUN geoEntities (стрічка)"}
+PLACE_GROUPS = {"olx_checked_at": ("olx>olx", "lun>olx"), "rieltor_checked_at": ("lun>rieltor",),
+                "lun_geo_checked_at": ("lun>olx", "lun>rieltor", "lun>domria", "lun>lun")}
+
+
+def night_evidence(rows: list[dict]) -> dict:
+    """Підсумки дозбору доказів за вікнами однієї ночі (з ops.night_runs)."""
+    out = {"windows": [], "renders": 0, "render_blocked": 0, "detail_written": 0,
+           "detail_rendered": 0, "tab_keys": {}, "feed": {}, "body_gets": 0, "stops": [],
+           "tab_labels": None, "olx_missing": None}
+    for d in sorted(rows, key=lambda r: r["id"]):
+        out["windows"].append(f"{d.get('window') or '—'}: {STATUS_UA.get(d['status'], d['status'])}")
+        ev = d.get("evidence") or {}
+        plan = ev.get("plan") or {}
+        out["body_gets"] += int(plan.get("body_gets") or 0)
+        if plan.get("olx_detail") is not None:
+            hp = ((d.get("plan") or {}).get("hosts") or {}).get("olx.ua") or {}
+            missing = ((hp.get("evidence") or {}).get("detail") or {}).get("missing")
+            if missing is not None:
+                out["olx_missing"] = missing
+        for host, rep in (ev.get("lanes") or {}).items():
+            if not isinstance(rep, dict):
+                continue
+            out["renders"] += int(rep.get("renders") or 0)
+            out["render_blocked"] += int(rep.get("blocked") or 0)
+            det = rep.get("detail") or {}
+            out["detail_written"] += int(det.get("written") or 0)
+            out["detail_rendered"] += int(det.get("rendered") or 0)
+            for tab, t in (rep.get("tabs") or {}).items():
+                if isinstance(t, dict):
+                    out["tab_keys"][tab] = out["tab_keys"].get(tab, 0) + int(t.get("keys") or 0)
+            if rep.get("tabs", {}).get("param_failed"):
+                out["stops"].append(f"{host}: параметр вкладок OLX не спрацював")
+            if rep.get("stopped") in ("memory", "render_errors"):
+                why = "мало пам'яті" if rep["stopped"] == "memory" else "помилки браузера"
+                out["stops"].append(f"{host} (вікно {d.get('window')}): рендери зупинено — {why}")
+        for host, rec in (d.get("identity") or {}).items():
+            feed = ((rec or {}).get("report") or {}).get("feed")
+            if feed and feed.get("pages"):
+                f = out["feed"].setdefault(feed.get("source"), {"pages": 0, "rows": 0})
+                f["pages"] += int(feed.get("pages") or 0)
+                f["rows"] += sum(int(v) for v in (feed.get("updated") or {}).values())
+                f["left"] = feed.get("need_after")
+        for host, ln in (d.get("lanes") or {}).items():
+            if ln.get("stopped") in ("blocks", "block_share"):
+                out["stops"].append(f"{host} (вікно {d.get('window')}): смугу зупинили "
+                                    f"блокування (401/403/429/капча)")
+        if ev.get("tab_labels"):
+            out["tab_labels"] = ev["tab_labels"]
+    return out
+
+
+def evidence_summary(session) -> list[str]:
+    """Рядки для щоденного зведення в Telegram (хвиля W3): покриття доказами типу
+    продавця (Блок 3) і місця (Блок 4) серед актуальних оголошень і підсумки останньої
+    ночі. Простою українською; лише читання (realty.db — `session`, ops.db — сам)."""
+    from .. import configfiles
+    from . import evidence
+
+    try:
+        scfg = configfiles.load("seller")
+    except configfiles.ConfigError as e:
+        return [f"Докази типу продавця: config/seller.toml не читається — {str(e)[:150]}"]
+    lines: list[str] = []
+    cov = evidence.coverage(session, scfg)
+    if cov:
+        parts = [f"{g['label']} {_n(g['with'])} з {_n(g['total'])} ({_pct(g['with'], g['total'])})"
+                 for g in cov.values()]
+        lines.append("Докази типу продавця (актуальні оголошення з доказами): "
+                     + "; ".join(parts) + ".")
+        place = []
+        for key, groups in PLACE_GROUPS.items():
+            total = sum(cov[g]["total"] for g in groups if g in cov)
+            have = sum(cov[g]["place"].get(key, 0) for g in groups if g in cov)
+            if total:
+                place.append(f"{PLACE_UA[key]} {_n(have)} з {_n(total)} ({_pct(have, total)})")
+        if place:
+            lines.append("Докази місця (райони й ЖК): " + "; ".join(place) + ".")
+    try:
+        rows = runs(limit=8)
+    except Exception as e:                              # noqa: BLE001 — зведення не падає
+        lines.append(f"Нічні роботи: ops.db не читається ({type(e).__name__}).")
+        return lines
+    dated = [r for r in rows if r.get("night_date")]
+    if not dated:
+        lines.append("Нічних вікон ще не було.")
+        return lines
+    night = max(r["night_date"] for r in dated)
+    n = night_evidence([r for r in dated if r["night_date"] == night])
+    parts = [f"вікна {', '.join(n['windows'])}"]
+    if n["renders"]:
+        parts.append(f"рендерів OLX {_n(n['renders'])} (блокувань {_n(n['render_blocked'])}; "
+                     f"сторінок деталей {_n(n['detail_rendered'])}, з доказами "
+                     f"{_n(n['detail_written'])})")
+    if n["tab_keys"]:
+        parts.append("вкладки OLX: " + ", ".join(
+            f"«{'Приватні' if t == 'private' else 'Бізнес'}» {_n(k)} оголошень"
+            for t, k in sorted(n["tab_keys"].items())))
+    for source, f in sorted(n["feed"].items()):
+        parts.append(f"стрічка {source}: {_n(f['pages'])} сторінок, дописано в {_n(f['rows'])} "
+                     f"полів" + (f", без доказів лишилось {_n(f['left'])}" if f.get("left") is not None
+                                else ""))
+    if n["body_gets"]:
+        parts.append(f"GET rieltor замість HEAD (докази з картки) — до {_n(n['body_gets'])} ключів")
+    lines.append(f"Ніч {night}: " + "; ".join(parts) + ".")
+    labels = n["tab_labels"]
+    if labels:
+        lines.append(f"Мітки вкладок OLX: {TAB_LABELS_UA.get(labels.get('status'), labels.get('status'))}"
+                     f" (збіг із чипом {_n(labels.get('agree'))} з {_n(labels.get('n'))}"
+                     + (f", записано {_n(labels.get('applied'))}" if labels.get("applied") else "")
+                     + ").")
+    if n["olx_missing"]:
+        try:
+            cap = configfiles.load("night").olx_render.detail_per_window
+        except configfiles.ConfigError:
+            cap = 0
+        lines.append(f"Без сторінки деталей OLX ще {_n(n['olx_missing'])} ключів"
+                     + (f" — ≈ {-(-int(n['olx_missing']) // cap)} вікон по {cap}" if cap else "")
+                     + ".")
+    for stop in n["stops"]:
+        lines.append(f"Увага: {stop}.")
+    return lines

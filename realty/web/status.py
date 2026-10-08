@@ -290,6 +290,38 @@ def api_places():
     return JSONResponse({"last": commands.last_run()})
 
 
+@router.get("/api/status/night")
+def api_night():
+    """Нічні вікна й дозбір доказів Блоків 3/4 (E11, D60) — лише власник (префікс /api/status).
+
+    Читає готові рядки ops.night_runs (їх пише диригент; покриття доказами рахується в
+    кінці вікна) — без агрегацій по listings на запит (інтеграція, конфлікт 10).
+    """
+    from ..night import report as night_report
+
+    def brief(d: dict) -> dict:
+        ev = d.get("evidence") or {}
+        lanes = {h: {k: x.get(k) for k in ("requests", "blocked", "stopped", "evidence_requests",
+                                           "evidence_blocked", "identity_requests", "not_reached")}
+                 for h, x in (d.get("lanes") or {}).items()}
+        return {"id": d["id"], "night_date": d.get("night_date"), "window": d.get("window"),
+                "status": d["status"], "started_at": as_utc_iso(d.get("started_at")),
+                "finished_at": as_utc_iso(d.get("finished_at")), "message": d.get("message"),
+                "lanes": lanes, "evidence": {k: v for k, v in ev.items() if k != "coverage"}}
+
+    try:
+        rows = night_report.runs(limit=6)
+    except Exception as e:                               # noqa: BLE001 — панель не валить сайт
+        log.error("ops.night_runs не читається: %s", e)
+        return JSONResponse({"nights": [], "coverage": None, "error": str(e)[:200]})
+    last = next((d for d in rows if (d.get("evidence") or {}).get("coverage")), None)
+    return JSONResponse({
+        "nights": [brief(d) for d in rows],
+        "coverage": last["evidence"]["coverage"] if last else None,
+        "coverage_at": as_utc_iso(last.get("finished_at")) if last else None,
+        "coverage_window": last["id"] if last else None})
+
+
 @router.post("/api/status/liveness-fuse")
 def api_liveness_fuse(payload: dict = Body(default={})):
     """Зняти запобіжник джерела (лише власник; same-origin — як для будь-якого POST).
