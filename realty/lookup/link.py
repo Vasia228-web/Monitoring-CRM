@@ -84,20 +84,31 @@ def _existing(session, site_key: str) -> list:
 
 
 def _check_existing(found, *, fetcher) -> dict:
+    """Перевірка актуальності наявних рядків ключа. Перед застосуванням вердиктів —
+    ще раз замок циклу: почався цикл, поки йшли запити, — service.ApplyDeferred, нічого не
+    записано (рецензія E14, 08.10: D59 обіцяв «запис під час циклу — ніколи»)."""
     from ..liveness import service
+    from . import opened
 
     keys = sorted({f.site_key for f in found if f.site_key})
     if not keys:
         return {"outcome": "check_unchanged", "requests": 0}
-    stats = service.run(kind="explicit", keys=keys, reason="lookup", fetcher=fetcher)
+    stats = service.run(kind="explicit", keys=keys, reason="lookup", fetcher=fetcher,
+                        before_apply=lambda: opened.cycle_busy() is None)
     result = {k: int(stats.get(k) or 0) for k in ("checked", "alive", "delisted", "restored",
                                                  "unknown", "requests", "blocked")}
+    # Ключ під запобіжником (джерело чи сайт тримаються): вердикт не застосовано — так і
+    # сказати, а не «сайт не дав однозначної відповіді» (рецензія E14, 08.10).
+    held = sum(int((v or {}).get("held") or 0) for v in (stats.get("by_source") or {}).values())
+    result["held"] = held
     if result["restored"]:
         outcome = "check_restored"
     elif result["delisted"]:
         outcome = "check_delisted"
     elif result["alive"]:
         outcome = "check_alive"
+    elif held:
+        outcome = "check_held"
     elif result["blocked"]:
         outcome = "check_blocked"
     else:
@@ -221,9 +232,13 @@ def _insert(rec: dict) -> dict:
 # --- Виконання завдання -------------------------------------------------------------------
 
 
-def execute(job_id: int, *, fetcher=None) -> tuple[str, dict]:
-    """Виконати одне завдання `link`: (кінцевий стан, результат)."""
+def execute(job_id: int, *, fetcher=None, limiter=None) -> tuple[str, dict]:
+    """Виконати одне завдання `link`: (кінцевий стан, результат).
+
+    `limiter` — спільний RateLimiter прогону процесу перевірки (opened.run): паузи хостів
+    діють і МІЖ завданнями, а не лише всередині одного (рецензія E14, 08.10)."""
     from ..db import SessionLocal
+    from ..liveness import service
     from . import opened
 
     job = queue.get(job_id)
@@ -257,9 +272,18 @@ def execute(job_id: int, *, fetcher=None) -> tuple[str, dict]:
         family = site_key.split(":", 1)[0]
         with SessionLocal() as s:
             found = _existing(s, site_key)
-        fetcher = fetcher or _make_fetcher()
+        if fetcher is None:
+            fetcher = _make_fetcher()
+            if limiter is not None and hasattr(fetcher, "limiter"):
+                fetcher.limiter = limiter
         if found:
-            result = _check_existing(found, fetcher=fetcher)
+            try:
+                result = _check_existing(found, fetcher=fetcher)
+            except service.ApplyDeferred:
+                # Цикл почався, поки йшли запити: вердикти не застосовано — після циклу.
+                queue.back_to_deferred(job_id, message="цикл почався під час перевірки")
+                log.info("перевірка за посиланням %s: відкладено (цикл)", site_key)
+                return "deferred", {}
         elif not cfg.check.enabled or family not in cfg.check.families:
             result = {"outcome": "check_disabled", "requests": 0}
         elif family == "domria":

@@ -91,9 +91,15 @@ def _close_jobs(jobs: dict[int, int], job_keys: dict[int, set[str]], outcomes,
     return closed
 
 
+class ApplyDeferred(Exception):
+    """`before_apply` сказав «не зараз» (напр., почався цикл збору): вердикти мережевої
+    фази не застосовано, нічого не записано; прогін закрито станом «deferred»."""
+
+
 def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", hosts=None,
         limit_per_host: int | None = None, fetcher=None, scope=None, hooks=None,
-        now_fn=None, budget_s: float | None = None, started: float | None = None) -> dict:
+        now_fn=None, budget_s: float | None = None, started: float | None = None,
+        before_apply=None) -> dict:
     """Прогін і застосування; повертає статистику у форматі verify_batch.
 
     `started` — time.monotonic() старту процесу кроку (cli.py): стеля мережевої
@@ -144,6 +150,10 @@ def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", host
         budget = budget_s if budget_s is not None else cfg.run.budget_minutes * 60
         outcomes, lanes = engine.run_items(engine.by_host(items), fetcher=fetcher, cfg=cfg,
                                            hooks=hooks, deadline=t0 + budget, now_fn=now_fn)
+        if before_apply is not None and not before_apply():
+            # «Перевірити зараз» за посиланням: цикл почався, поки йшли запити, — запис
+            # під час циклу не робиться ніколи (рецензія E14, 08.10).
+            raise ApplyDeferred("застосування відкладено (почався цикл)")
         # Вікно для пулів, що самі не набрали min_checked: малий прогін — усі пули; крок
         # циклу — лише пул випадкових і контрольних у tiered (D56: rieltor, lun, flombu
         # набирають min_checked лише за кілька циклів).
@@ -181,6 +191,9 @@ def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", host
                       "pools": rep.fuse_pools, "canary_genuine": rep.canary_genuine},
                 report=status_report)
         return stats
+    except ApplyDeferred as e:
+        _finish(run_id, status="deferred", message=str(e)[:500])
+        raise
     except BaseException as e:
         _finish(run_id, status="failed", message=f"{type(e).__name__}: {e}"[:500])
         raise

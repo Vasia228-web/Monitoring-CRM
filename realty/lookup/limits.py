@@ -53,11 +53,14 @@ def submit(cfg, *, role: str | None, site_key: str, target: str | None,
     limit = role_limit(cfg, role)
     ops.init_ops()
     with _lock, ops.ops_session() as s:
-        prev = s.scalars(select(ops.LookupCheck)
-                         .where(ops.LookupCheck.kind == queue.KIND_LINK,
-                                ops.LookupCheck.key == key,
-                                ops.LookupCheck.created_at >= reuse_since)
-                         .order_by(ops.LookupCheck.id.desc()).limit(1)).first()
+        # Повтор — лише своє завдання (власник — будь-яке): стан чужого завдання друг не
+        # читає (GET /api/find/check/{id} — 404; рецензія E14, 08.10).
+        same = select(ops.LookupCheck).where(ops.LookupCheck.kind == queue.KIND_LINK,
+                                             ops.LookupCheck.key == key,
+                                             ops.LookupCheck.created_at >= reuse_since)
+        if role != "owner":
+            same = same.where(ops.LookupCheck.role == role)
+        prev = s.scalars(same.order_by(ops.LookupCheck.id.desc()).limit(1)).first()
         if prev is not None:
             return Submitted(prev.id, prev.state, reused=True)
         if limit <= 0:

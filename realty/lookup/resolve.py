@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -72,6 +73,7 @@ class Resolution:
     property_id: int | None = None
     options: list[Option] = field(default_factory=list)
     found: list[Found] = field(default_factory=list)
+    city: str | None = None          # місце з адреси (other_city), як написано в адресі
 
 
 def found_of(row, *, unconfirmed: bool = False) -> Found:
@@ -153,13 +155,21 @@ def _by_property(found: list[Found]) -> dict[int, list[Found]]:
     return out
 
 
+def _unplaced_code(found: list[Found]) -> str:
+    """Знайдене, але без квартири: у карантині — так і сказати (з причиною якості), а не
+    «з'явиться після кроку «дублі»» — карантинне в квартиру не зводиться (рецензія E14,
+    08.10)."""
+    return "not_placed_quarantine" if any(f.quality == QUARANTINE for f in found) \
+        else "not_placed"
+
+
 def _from_found(session, link, key: str, found: list[Found], *, missing: str) -> Resolution:
     family = key.split(":", 1)[0]
     groups = _by_property(found)
     if not found:
         return Resolution("not_found", missing, link, key, family)
     if not groups:
-        return Resolution("not_found", "not_placed", link, key, family, found=found)
+        return Resolution("not_found", _unplaced_code(found), link, key, family, found=found)
     if len(groups) == 1:
         (pid, rows), = groups.items()
         return Resolution("property", None, link, key, family, pid, found=rows)
@@ -195,7 +205,8 @@ def _candidates(session, link, *, missing: str) -> Resolution:
     if not pids:
         unplaced = [f for f in found_all if f.property_id is None]
         if unplaced:
-            return Resolution("not_found", "not_placed", link, None, link.family, found=unplaced)
+            return Resolution("not_found", _unplaced_code(unplaced), link, None, link.family,
+                              found=unplaced)
         return Resolution("not_found", missing, link, None, link.family)
     if len(pids) == 1:
         keyed = next((o for o in options if o.key), None)
@@ -234,7 +245,42 @@ def _case_lost(session, link) -> Resolution:
     return Resolution("choice", "case_lost", link, None, "olx", options=options, found=found_all)
 
 
-def resolve(session, link) -> Resolution:
+def foreign_city(link, city_cfg) -> str | None:
+    """Місце з адреси оголошення, якщо воно НЕ з переліку lookup.toml [city] (рецензія
+    E14, 08.10): DIM.RIA — slug «realty-prodaja-kvartira-<місце>-…», rieltor.ua — сегмент
+    «/<місце>/flats-sale/…» (числовий хвіст «-637» відкидається). None — місце наше або
+    адреса його не називає (картка API, rieltor без сегмента, OLX)."""
+    if city_cfg is None or not isinstance(link, links.Link):
+        return None
+    places = set(city_cfg.known_places)
+    parts = getattr(link, "parts", None) or {}
+    if link.family == "domria":
+        slug = str(parts.get("slug") or "").lower()
+        prefix = city_cfg.domria_slug_prefix
+        if not slug.startswith(prefix) or len(slug) <= len(prefix):
+            return None
+        rest = slug[len(prefix):]
+        if any(rest == p or rest.startswith(p + "-") for p in places):
+            return None
+        return rest.split("-", 1)[0][:40] or None
+    if link.family == "rieltor":
+        loc = re.sub(r"-\d+$", "", str(parts.get("loc") or "").lower())
+        if not loc or loc in places:
+            return None
+        return loc[:40]
+    return None
+
+
+def _city_cfg():
+    try:
+        from .. import configfiles
+
+        return configfiles.get("lookup").city
+    except Exception:                               # noqa: BLE001 — лише уточнення причини
+        return None
+
+
+def resolve(session, link, *, city_cfg=None) -> Resolution:
     """`links.parse(...)` → що знайдено в базі (див. докстрінг модуля)."""
     if not isinstance(link, links.Link):
         return Resolution("invalid", getattr(link, "reason", None) or "unrecognized", link,
@@ -246,8 +292,14 @@ def resolve(session, link) -> Resolution:
     if link.key is None or len(link.candidates) > 1:
         return _candidates(session, link,
                            missing="number_not_found" if link.family == "number" else "not_in_db")
-    return _from_found(session, link, link.key, find_rows(session, [link.key]),
-                       missing="not_in_db")
+    found = find_rows(session, [link.key])
+    if not found:
+        # Адреса сама каже, що місто інше (рецензія E14, 08.10): інакше «ще немає в базі» й
+        # витрачена перевірка (у друга — 10 на годину) лише щоб почути «не з міста».
+        city = foreign_city(link, city_cfg if city_cfg is not None else _city_cfg())
+        if city:
+            return Resolution("not_found", "other_city", link, link.key, link.family, city=city)
+    return _from_found(session, link, link.key, found, missing="not_in_db")
 
 
 def found_on_page(rows, hl: str | None) -> list[Found]:

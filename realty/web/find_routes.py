@@ -85,6 +85,8 @@ def _own_hosts(request: Request) -> set[str]:
 
 
 _URL_HEAD = re.compile(r"(?i)^(?:https?://)?(?P<host>[^/\s?#]+)(?P<rest>/\S*)?$")
+# Слеш у кінці адреси (не «//» схеми): перед кінцем тексту, пробілом, ?/# чи розділовим.
+_TRAILING_SLASH = re.compile(r"(?<=[^/\s:])/+(?=$|[\s?#,;.!)\]»\"'])")
 
 
 def parse_input(text: str, request: Request | None = None):
@@ -98,11 +100,13 @@ def parse_input(text: str, request: Request | None = None):
     if t.startswith("/") and not t.startswith("//"):
         return links.parse("http://localhost" + t.split()[0])
     got = links.parse(t)
-    if isinstance(got, links.NotALink) and got.reason == "not_listing" and " " not in t:
+    if isinstance(got, links.NotALink) and got.reason == "not_listing":
         # Зайвий слеш у кінці адреси («…-34616500.html/»): спільний розбір (links.toml)
         # приймає його лише там, де сайт сам так пише; тут — ще одна спроба без нього.
-        # site_key збережених адрес це не зачіпає.
-        bare = re.sub(r"/+(?=$|[?#])", "", t, count=1)
+        # І всередині тексту «Поділитися» («Глянь https://…-ID10BkYC.html/ гарна»): слеш
+        # знімається в кінці токена адреси — перед пробілом, кінцем, ?/#, розділовим
+        # знаком (рецензія E14, 08.10). site_key збережених адрес це не зачіпає.
+        bare = _TRAILING_SLASH.sub("", t)
         if bare != t:
             again = links.parse(bare)
             if isinstance(again, links.Link):
@@ -150,7 +154,7 @@ def _resolve(request: Request, text: str) -> tuple[object, rs.Resolution]:
     started = time.perf_counter()
     if isinstance(link, links.Link):
         with SessionLocal() as s:
-            res = rs.resolve(s, link)
+            res = rs.resolve(s, link, city_cfg=cfg.city)
     else:
         res = rs.resolve(None, link)
     # У журнал — лише сімейство й підсумок, ніколи не вставлений текст.
@@ -189,9 +193,10 @@ async def find_submit(request: Request):
 
 
 def _check_offer(cfg, role: str, link, res: rs.Resolution) -> dict:
-    """Чи показати «Перевірити зараз» на сторінці «не знайдено» і чому ні."""
-    if res.kind != "not_found" or res.code != "not_in_db" or not isinstance(link, links.Link) \
-            or link.key is None:
+    """Чи показати «Перевірити зараз» на сторінці «не знайдено» і чому ні. «Схоже, не з
+    Івано-Франківська» (місто з адреси) — кнопка лишається як підтвердження."""
+    if res.kind != "not_found" or res.code not in ("not_in_db", "other_city") \
+            or not isinstance(link, links.Link) or link.key is None:
         return {}
     family = link.family
     if family == "blago":
@@ -360,7 +365,17 @@ def _status(cfg, job_id: int) -> dict:
 
 
 @router.get("/api/find/check/{job_id}")
-def api_check_status(job_id: int):
-    """Стан перевірки для сторінки: queued | deferred | running | done | failed | skipped."""
-    got = _status(_cfg(), job_id)
+def api_check_status(request: Request, job_id: int):
+    """Стан перевірки для сторінки: queued | deferred | running | done | failed | skipped.
+
+    Чуже завдання (поставлене іншою роллю) — 404, як неіснуюче: друг не бачить перевірок
+    власника (рецензія E14, 08.10); власник бачить усі."""
+    cfg = _cfg()
+    role = _role(request)
+    if role != "owner":
+        job = queue.get(job_id)
+        if job is not None and (job.role or "owner") != role:
+            got = _status(cfg, -1)
+            return JSONResponse(got, status_code=404)
+    got = _status(cfg, job_id)
     return JSONResponse(got, status_code=200 if got["ok"] else 404)

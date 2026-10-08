@@ -97,8 +97,10 @@ def _zero() -> dict:
     return {k: 0 for k in RESULT_KEYS}
 
 
-def execute(job_id: int) -> tuple[str, dict]:
-    """Виконати одне завдання `opened`: (кінцевий стан, результат)."""
+def execute(job_id: int, *, limiter=None) -> tuple[str, dict]:
+    """Виконати одне завдання `opened`: (кінцевий стан, результат).
+
+    `limiter` — спільний RateLimiter прогону (run): паузи хостів між завданнями."""
     from .. import verify
     from ..db import SessionLocal
 
@@ -109,7 +111,7 @@ def execute(job_id: int) -> tuple[str, dict]:
         # «Перевірити зараз» за посиланням (Блок 5, E14, D59) — той самий процес і
         # ті самі правила замка циклу й COLLECTOR_OFF, свій адаптер сайту.
         from . import link
-        return link.execute(job_id)
+        return link.execute(job_id, limiter=limiter)
     if job.kind != queue.KIND_OPENED:
         return "foreign", {}              # невідомий вид — не наше
     if job.state not in queue.RUNNABLE:
@@ -134,7 +136,16 @@ def execute(job_id: int) -> tuple[str, dict]:
         if not ids:
             queue.finish(job_id, "skipped", result=_zero())
             return "skipped", _zero()
-        stats = verify.verify_batch(limit=len(ids), ids=ids, reason="opened")
+        http = None
+        if limiter is not None:
+            http = verify.Fetcher(delay=1.0, use_cache=False, label="verify")
+            if hasattr(http, "limiter"):
+                http.limiter = limiter
+        try:
+            stats = verify.verify_batch(limit=len(ids), ids=ids, reason="opened", http=http)
+        finally:
+            if http is not None:
+                http.close()
         result = {k: int(stats.get(k) or 0) for k in RESULT_KEYS}
         queue.finish(job_id, "done", result=result)
         log.info("перевірка при відкритті %s: %s", job.key, result)
@@ -180,19 +191,25 @@ def run(job_id: int, *, drain: bool = True, budget_s: float, timeout_s: float,
     `budget_s` — після нього нових завдань не беремо (ліміт процесу systemd —
     `timeout_s`; поточне завдання має встигнути); решту запустить сайт.
     """
+    from ..fetcher import RateLimiter
+
     lock = runner.CycleLock(DRAIN_LOCK)
     if not lock.acquire():
         return [(job_id, "drainer-active")]
     started = time.monotonic()
     done: list[tuple[int, str]] = []
     seen: set[int] = set()
+    # Один обмежувач на весь прогін: свіжий фетчер на кожне завдання починав паузи
+    # хостів з нуля, і два завдання до одного сайту йшли без паузи (рецензія E14, 08.10).
+    limiter = RateLimiter(1.0)
     try:
         queue.expire_deferred(queue.WORKER_KINDS, max_age_s=deferred_max_age_s)
+        queue.expire_stale(queue.WORKER_KINDS, timeout_s=timeout_s)
         nxt: int | None = job_id
         while True:
             if nxt is not None:
                 seen.add(nxt)
-                state, result = execute(nxt)
+                state, result = execute(nxt, limiter=limiter)
                 done.append((nxt, state))
                 if state == "done":
                     _announce(result)

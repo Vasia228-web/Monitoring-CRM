@@ -1818,7 +1818,8 @@ LOOKUP_MESSAGES = (
     "empty", "no_url", "unrecognized", "unsupported_host", "short_link", "chat_link",
     "not_listing", "not_flat", "own_not_property", "case_lost",
     "not_in_db", "check_hint", "check_unavailable", "own_missing", "number_not_found",
-    "not_placed", "multi_property", "multi_property_owner", "number_choice",
+    "not_placed", "not_placed_quarantine", "other_city", "multi_property",
+    "multi_property_owner", "number_choice",
     "need_full_link", "blago_unverifiable", "found_banner",
     "status_active", "status_removed", "status_manual_off", "status_quarantine",
     "status_pending",
@@ -1827,7 +1828,7 @@ LOOKUP_MESSAGES = (
     "check_restored", "check_unchanged", "check_alive_not_added", "check_removed",
     "check_not_found_on_source", "check_not_city", "check_not_flat", "check_blocked",
     "check_unknown", "check_failed", "check_rate_limited", "check_disabled",
-    "check_off_for_role", "check_collector_off",
+    "check_off_for_role", "check_collector_off", "check_held",
 )
 LOOKUP_ROLES = ("owner", "friend")
 
@@ -1875,6 +1876,29 @@ class LookupCheck:
 
 
 @dataclass(frozen=True)
+class LookupCity:
+    """Місце з адреси оголошення (рецензія E14, 08.10): slug DIM.RIA і сегмент місця
+    rieltor.ua називають місто. Не з цього переліку — «схоже, не з Івано-Франківська»
+    ще до запиту (кнопка перевірки лишається — як підтвердження)."""
+
+    # Транслітерації міста й сіл громади так, як їх пишуть DIM.RIA і rieltor.ua (лише
+    # малі латинські літери й дефіс; числовий хвіст rieltor «-637» відкидається).
+    known_places: tuple[str, ...] = field(**_limits(min_len=1))
+    # Початок slug квартири на продаж DIM.RIA; далі — місце. Інший початок (інший вид чи
+    # скорочений slug) — місця не читаємо.
+    domria_slug_prefix: str
+
+    def problems(self) -> list[str]:
+        import re
+
+        out = [f"known_places: {p!r} — лише a-z і дефіс" for p in self.known_places
+               if not re.fullmatch(r"[a-z]+(?:-[a-z]+)*", p)]
+        if not re.fullmatch(r"realty-[a-z-]+-", self.domria_slug_prefix):
+            out.append("domria_slug_prefix: «realty-…-» (малі літери й дефіси)")
+        return out
+
+
+@dataclass(frozen=True)
 class LookupConfig:
     """`config/lookup.toml` — пошук за посиланням і «Перевірити зараз» (Блок 5, E14, D59).
 
@@ -1884,6 +1908,7 @@ class LookupConfig:
 
     ui: LookupUi
     check: LookupCheck
+    city: LookupCity
     # Назви сайтів для людини (сімейства links.toml і «own» — наш сайт).
     sites: dict[str, str]
     messages: dict[str, str]
