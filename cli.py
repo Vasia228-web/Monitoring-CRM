@@ -223,8 +223,8 @@ def cmd_alert(args: argparse.Namespace) -> int:
         print(f"зведення надіслано, message_id={msg_id} ({len(text)} символів)")
         return 0
     print(text)
-    print(f"\n({len(text)} символів; не надіслано — --dry-run; щоденне за датою "
-          f"{(state.get('_digest') or {}).get('date') or '—'} надіслано)")
+    print(f"\n({len(text)} символів; не надіслано — --dry-run; останнє щоденне надіслано "
+          f"за дату: {(state.get('_digest') or {}).get('date') or '—'})")
     return 0
 
 

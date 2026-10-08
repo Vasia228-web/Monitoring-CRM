@@ -299,7 +299,9 @@ def section_backups(ctx: Ctx) -> list[str] | None:
         if name in _storages(last.offsite):
             out.append(f"  {STORAGE_UA.get(name, name)} — ✅ {ctx.ago(ok_at)}")
         else:
-            why = _failed_storages(last.message).get(name, "не вивантажено")
+            why = _failed_storages(last.message).get(name) or (
+                "останній бекап — без вивантаження" if last.status == "local"
+                else "в останній бекап не вивантажено")
             out.append(f"  {STORAGE_UA.get(name, name)} — ❌ {why[:90]}; останній успіх: "
                        f"{ctx.ago(ok_at) if ok_at else 'не було (з останніх 30)'}")
     return out

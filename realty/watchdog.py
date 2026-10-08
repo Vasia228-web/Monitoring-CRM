@@ -1154,8 +1154,12 @@ def _migrate_state(state: dict) -> None:
 
 def _remember_resolved(state: dict, key: str, entry: dict, now: datetime, keep_h: float) -> None:
     """Зникла тривога — у стан для зведення (обидва рівні), старші за keep_h — геть."""
-    resolved = [r for r in state.get("_resolved", [])
-                if now - datetime.fromisoformat(r["resolved"]) <= timedelta(hours=keep_h)]
+    def fresh(r) -> bool:
+        try:
+            return now - datetime.fromisoformat(r["resolved"]) <= timedelta(hours=keep_h)
+        except (KeyError, TypeError, ValueError):
+            return False                                 # зіпсований запис — геть
+    resolved = [r for r in state.get("_resolved", []) if isinstance(r, dict) and fresh(r)]
     resolved.append({"key": key, "level": entry.get("level", CRITICAL),
                      "since": entry.get("since"), "resolved": now.isoformat(),
                      "sent": entry.get("sent", 0), "text": (entry.get("text") or "")[:300]})
@@ -1178,7 +1182,11 @@ def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH, *
     _migrate_state(state)
     report = {"active": [], "sent": [], "held": [], "resolved": [], "warned": [],
               "errors": [], "outbox": [], "digest": None}
-    report["outbox"] = flush_outbox(send, report["errors"])
+    try:
+        report["outbox"] = flush_outbox(send, report["errors"])
+    except Exception as e:                                       # noqa: BLE001
+        # Черга (файл, замок) зламалась — це не має зупинити критичні тривоги нижче.
+        report["errors"].append(f"черга недоставленого: {notify._mask(str(e))[:200]}")
     cfg_error = None
     try:
         cfg = _alerts_cfg()

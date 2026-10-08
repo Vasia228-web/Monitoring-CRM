@@ -540,3 +540,18 @@ def test_canary_checks_skip_runs_without_the_new_fields(env):
     with ops.ops_session() as s:
         s.add(ops.LivenessRun(kind="cycle", status="ok", started_at=NOW, per_tier="не json"))
     assert watchdog.check_canaries(NOW) == []
+
+
+def test_broken_outbox_or_state_does_not_stop_critical_alerts(env, monkeypatch):
+    def broken(*a, **k):
+        raise OSError("диск переповнено")
+    monkeypatch.setattr(watchdog, "flush_outbox", broken)
+    env["path"].write_text(json.dumps({"_resolved": [{"key": "x", "resolved": "не дата"}, 5],
+                                       "night-late": {"since": NOW.isoformat(), "sent": 0,
+                                                      "level": "warning"}}))
+    _backup("failed", NOW - timedelta(hours=1), message="немає жодного місця поза машиною",
+            restored=0)
+    rep = env["run"](NOW)
+    assert rep["sent"] == ["backup-none"] and any("черга" in e for e in rep["errors"])
+    assert rep["resolved"] == ["night-late"]
+    assert [r["key"] for r in env["state"]()["_resolved"]] == ["night-late"]
