@@ -169,6 +169,13 @@ from .livecheck import router as livecheck_router  # noqa: E402
 
 app.include_router(livecheck_router)
 
+# Пошук за посиланням (Блок 5, крок E14, D59): поле у верхній панелі, /find,
+# «Перевірити зараз» — обидві ролі. Поле бере лише конфіг (без запиту до бази).
+from .find_routes import router as find_router, ui_config as find_ui  # noqa: E402
+
+app.include_router(find_router)
+templates.env.globals["find_ui"] = find_ui
+
 # Стиснення на origin (Блок 2, крок E5, D50): сторінка списку 124 → ~12 КБ через
 # тунель, «Аналітика» 64 → ~10,5 КБ (план Блоку 2, D48); ~5 мс процесора на
 # Fedora. Поріг і рівень — config/speed.toml [gzip]; читаються на старті (зміна —

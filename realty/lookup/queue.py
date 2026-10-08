@@ -7,6 +7,10 @@
 Стани: queued → running → done | failed | skipped. `deferred` — замок циклу
 був зайнятий: завдання чекає кінця циклу без жодного запиту до джерел, потім
 його бере процес перевірки так само, як queued (інтеграція, конфлікт 5).
+
+Види завдань: `opened` — перевірка при відкритті квартири (Блок 2, D50), `link` —
+«Перевірити зараз» за посиланням (Блок 5, E14, D59). Обидва «доїдає» той самий
+процес (opened.run), по черзі за номером.
 """
 from __future__ import annotations
 
@@ -19,12 +23,27 @@ from sqlalchemy import func, or_, select, update
 from .. import ops
 
 KIND_OPENED = "opened"
+KIND_LINK = "link"
+# Що «доїдає» процес перевірки (opened.run) і за чим стежить сайт (web/livecheck.py).
+WORKER_KINDS = (KIND_OPENED, KIND_LINK)
 FINAL = ("done", "failed", "skipped")
 RUNNABLE = ("queued", "deferred")
 
 
 def opened_key(property_id: int) -> str:
     return f"property:{int(property_id)}"
+
+
+def link_key(site_key: str) -> str:
+    """Ключ завдання «Перевірити зараз»: «link:» + ключ «сайт:id» (≤ 64 символи)."""
+    return f"link:{site_key}"
+
+
+def _kind_is(kind):
+    """Умова на вид: один (`"opened"`) або кілька (`WORKER_KINDS`)."""
+    if isinstance(kind, str):
+        return ops.LookupCheck.kind == kind
+    return ops.LookupCheck.kind.in_(tuple(kind))
 
 
 def enqueue(kind: str, key: str, property_id: int | None = None, *,
@@ -114,7 +133,7 @@ def defer(job_id: int, *, message: str | None = None) -> bool:
         return res.rowcount == 1
 
 
-def next_runnable(kind: str, *, timeout_s: float, deferred_max_age_s: float,
+def next_runnable(kind, *, timeout_s: float, deferred_max_age_s: float,
                   include_deferred: bool, exclude=()) -> int | None:
     """Найстаріше завдання виду `kind`, яке можна виконати (для «доїдання» черги).
 
@@ -129,7 +148,7 @@ def next_runnable(kind: str, *, timeout_s: float, deferred_max_age_s: float,
                       & (ops.LookupCheck.created_at
                          >= now - timedelta(seconds=deferred_max_age_s)))
     stmt = (select(ops.LookupCheck.id)
-            .where(ops.LookupCheck.kind == kind, or_(*states))
+            .where(_kind_is(kind), or_(*states))
             .order_by(ops.LookupCheck.id).limit(1))
     if exclude:
         stmt = stmt.where(ops.LookupCheck.id.notin_(list(exclude)))
@@ -138,7 +157,7 @@ def next_runnable(kind: str, *, timeout_s: float, deferred_max_age_s: float,
         return s.scalar(stmt)
 
 
-def unfinished(kind: str, *, timeout_s: float, deferred_max_age_s: float,
+def unfinished(kind, *, timeout_s: float, deferred_max_age_s: float,
                limit: int = 1000) -> list[tuple[int, int | None]]:
     """[(завдання, квартира)] виду `kind`, що ще чекають, відкладені чи виконуються.
 
@@ -149,7 +168,7 @@ def unfinished(kind: str, *, timeout_s: float, deferred_max_age_s: float,
     with ops.ops_session() as s:
         return [(i, p) for i, p in s.execute(
             select(ops.LookupCheck.id, ops.LookupCheck.property_id)
-            .where(ops.LookupCheck.kind == kind,
+            .where(_kind_is(kind),
                    _fresh(timeout_s=timeout_s, deferred_max_age_s=deferred_max_age_s))
             .order_by(ops.LookupCheck.id).limit(limit))]
 
@@ -162,20 +181,36 @@ def finish(job_id: int, state: str, *, result: dict | None = None,
     if only_if:
         stmt = stmt.where(ops.LookupCheck.state.in_(only_if))
     with ops.ops_session() as s:
+        # target (адреса запиту «Перевірити зараз») після завдання не потрібна — стерти.
         res = s.execute(stmt.values(
-            state=state, finished_at=ops._now(),
+            state=state, finished_at=ops._now(), target=None,
             result=json.dumps(result, ensure_ascii=False) if result is not None else None,
             message=(message or "")[:200] or None))
         return res.rowcount == 1
 
 
-def expire_deferred(kind: str, *, max_age_s: float) -> int:
+def back_to_deferred(job_id: int, *, message: str | None = None) -> bool:
+    """running → deferred: цикл почався, поки йшов запит, — запис після нього.
+
+    Для «Перевірити зараз» (Блок 5): відповідь сайту відкидається, завдання знову
+    чекає кінця циклу й після нього виконується заново (D59, відхилення 3).
+    """
+    ops.init_ops()
+    with ops.ops_session() as s:
+        res = s.execute(update(ops.LookupCheck)
+                        .where(ops.LookupCheck.id == job_id, ops.LookupCheck.state == "running")
+                        .values(state="deferred", started_at=None, pid=None,
+                                message=(message or "")[:200] or None))
+        return res.rowcount == 1
+
+
+def expire_deferred(kind, *, max_age_s: float) -> int:
     """Відкладені довше за `max_age_s` — закрити як skipped (їх уже ніхто не чекає)."""
     cutoff = ops._now() - timedelta(seconds=max_age_s)
     ops.init_ops()
     with ops.ops_session() as s:
         res = s.execute(update(ops.LookupCheck)
-                        .where(ops.LookupCheck.kind == kind,
+                        .where(_kind_is(kind),
                                ops.LookupCheck.state == "deferred",
                                ops.LookupCheck.created_at < cutoff)
                         .values(state="skipped", finished_at=ops._now(),
@@ -191,5 +226,6 @@ def result_of(job: ops.LookupCheck) -> dict:
 
 
 def changed_visibility(result: dict) -> bool:
-    """Чи змінила перевірка те, що бачить список: знято або повернуто хоч одне."""
-    return bool((result.get("delisted") or 0) + (result.get("restored") or 0))
+    """Чи змінила перевірка те, що бачить список: знято, повернуто або додано хоч одне."""
+    return bool((result.get("delisted") or 0) + (result.get("restored") or 0)
+                + (result.get("inserted") or 0))

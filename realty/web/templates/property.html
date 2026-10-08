@@ -20,7 +20,7 @@
     {% if property.floor %} · {{ property.floor }}{% if property.floors_total %} з {{ property.floors_total }}{% endif %} поверх{% endif %}
     · зведено з {{ sources.count }} оголош.
   </p>
-</header>
+</header>{% if find_hl %}{% include "_found.html" %}{% endif %}
 {#- Перевірка актуальності при відкритті (Блок 2, крок E5, D50): сайт сам у
     мережу не ходить — відкриття поставило завдання в чергу, а тут сторінка
     чекає результату (long-poll /api/property/{id}/liveness) і показує банер,
@@ -211,7 +211,7 @@ poll();}catch(e){}})();</script><!--/live-check-->
   {% endif %}
   <ul class="srclist">
     {% for l in sources.listings %}
-      <li>
+      <li{% if find_hl and l.url in find_hl.urls %} class="hl"{% endif %}>
         <a href="{{ l.url }}" target="_blank" rel="noopener noreferrer">{{ l.source }} →</a>
         <span class="p num">${{ l.price | round | int | money }}</span>{% set um = liveness_marker(l.url) %}{% if um %}<!--unconfirmed--><span style="color:var(--muted,#8a9099);font-style:italic;font-size:13px;margin-left:8px" title="{{ um.hint }}">{{ um.label }}</span><!--/unconfirmed-->{% endif %}
       </li>
@@ -257,7 +257,7 @@ poll();}catch(e){}})();</script><!--/live-check-->
           <tbody>
           {% for r in rows %}
             {% set idn = r.identity or {} %}
-            <tr>
+            <tr{% if find_hl and r.id in find_hl.ids %} class="hl"{% endif %}>
               <td><input type="checkbox" class="ddpick" value="{{ r.id }}" aria-label="позначити оголошення {{ r.id }}"></td>
               <td>{{ r.source }}</td>
               <td>{{ r.rooms or '—' }}</td>

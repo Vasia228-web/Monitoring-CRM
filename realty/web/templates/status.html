@@ -147,7 +147,7 @@ td a,.row a{color:var(--accent)}
       <a href="/processing">В обробці</a>
       <a href="/analytics">Аналітика</a>
     </span>
-    <span class="spacer"></span>
+    <span class="spacer"></span>{% include "_find_box.html" %}
     <span class="nav"><a href="/status" class="on">Стан системи</a>
       {% if current_role(request) %}<form method="post" action="/logout" class="logout"><button type="submit">Вийти</button></form>{% endif %}
     </span>

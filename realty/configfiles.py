@@ -1780,6 +1780,101 @@ class SellerConfig:
         return ["checked_key: позначки джерел мають різнитися"] if len(set(keys)) < 4 else []
 
 
+# Коди текстів «Пошуку за посиланням» (Блок 5, E14, D59): кожен має бути в
+# [messages] config/lookup.toml, зайвих (одруківок) — немає. Це перелік місць у
+# коді, де показується текст, а не значення.
+LOOKUP_MESSAGES = (
+    "empty", "no_url", "unrecognized", "unsupported_host", "short_link", "chat_link",
+    "not_listing", "not_flat", "own_not_property", "case_lost",
+    "not_in_db", "check_hint", "check_unavailable", "own_missing", "number_not_found",
+    "not_placed", "multi_property", "multi_property_owner", "number_choice",
+    "need_full_link", "blago_unverifiable", "found_banner",
+    "status_active", "status_removed", "status_manual_off", "status_quarantine",
+    "status_pending",
+    "check_button", "check_queued", "check_running", "check_deferred", "check_waiting_long",
+    "check_added", "check_added_quarantine", "check_exists", "check_alive", "check_delisted",
+    "check_restored", "check_unchanged", "check_alive_not_added", "check_removed",
+    "check_not_found_on_source", "check_not_city", "check_not_flat", "check_blocked",
+    "check_unknown", "check_failed", "check_rate_limited", "check_disabled",
+    "check_off_for_role", "check_collector_off",
+)
+LOOKUP_ROLES = ("owner", "friend")
+
+
+@dataclass(frozen=True)
+class LookupUi:
+    placeholder: str
+    label: str
+    button: str
+    max_input_chars: int = field(**_limits(min=64, max=8192))
+    choice_limit: int = field(**_limits(min=1, max=200))
+
+
+@dataclass(frozen=True)
+class LookupCheck:
+    enabled: bool
+    families: tuple[str, ...]
+    insert_families: tuple[str, ...]
+    per_role_per_hour: dict[str, int]
+    same_key_reuse_minutes: float = field(**_limits(min=0, max=1440))
+    poll_ms: int = field(**_limits(min=250, max=10000))
+    wait_max_s: float = field(**_limits(min=5, max=3600))
+    domria_flat_realty_type_ids: tuple[int, ...]
+    domria_sale_advert_type_ids: tuple[int, ...]
+    domria_card_max_bytes: int = field(**_limits(min=1000))
+
+    def problems(self) -> list[str]:
+        out = []
+        for fam in self.insert_families:
+            if fam not in self.families:
+                out.append(f"insert_families: «{fam}» немає в families (додати без перевірки "
+                           "не можна)")
+        if "blago" in self.families:
+            out.append("families: Благо не перевіряється (рішення власника 3, D46)")
+        missing = [r for r in LOOKUP_ROLES if r not in self.per_role_per_hour]
+        unknown = [r for r in self.per_role_per_hour if r not in LOOKUP_ROLES]
+        if missing:
+            out.append(f"per_role_per_hour: немає ролей {missing}")
+        if unknown:
+            out.append(f"per_role_per_hour: невідомі ролі {unknown} (відомі: {list(LOOKUP_ROLES)})")
+        for role, n in self.per_role_per_hour.items():
+            if type(n) is not int or n < 0:
+                out.append(f"per_role_per_hour.{role}: потрібне ціле ≥ 0, а є {n!r}")
+        return out
+
+
+@dataclass(frozen=True)
+class LookupConfig:
+    """`config/lookup.toml` — пошук за посиланням і «Перевірити зараз» (Блок 5, E14, D59).
+
+    Розбір посилань — спільний `links.toml`; тут — інтерфейс, ліміти перевірки й
+    усі тексти для людини.
+    """
+
+    ui: LookupUi
+    check: LookupCheck
+    # Назви сайтів для людини (сімейства links.toml і «own» — наш сайт).
+    sites: dict[str, str]
+    messages: dict[str, str]
+
+    def problems(self) -> list[str]:
+        out = []
+        need = ("domria", "olx", "rieltor", "lun", "flombu", "blago", "own")
+        gaps = [f for f in need if f not in self.sites]
+        if gaps:
+            out.append(f"sites: немає назв для {gaps}")
+        missing = [c for c in LOOKUP_MESSAGES if c not in self.messages]
+        unknown = sorted(c for c in self.messages if c not in LOOKUP_MESSAGES)
+        if missing:
+            out.append(f"messages: немає текстів для {missing}")
+        if unknown:
+            out.append(f"messages: невідомі коди {unknown}")
+        empty = sorted(c for c, text in self.messages.items() if not str(text).strip())
+        if empty:
+            out.append(f"messages: порожні тексти {empty}")
+        return out
+
+
 # Реєстр тем: ім'я файлу без .toml (з підтекою, якщо є) → схема.
 SCHEMAS: dict[str, type] = {
     "speed": SpeedConfig,
@@ -1794,6 +1889,7 @@ SCHEMAS: dict[str, type] = {
     "alerts": AlertsConfig,
     "sample": SampleConfig,
     "seller": SellerConfig,
+    "lookup": LookupConfig,
 }
 
 

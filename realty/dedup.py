@@ -1027,6 +1027,30 @@ def _sync_rows(session, property_ids=None, *, batch: int | None = None, wrap=Non
     return len(ups)
 
 
+def place_new_listing(session, listing_id: int) -> int:
+    """Оголошення без квартири (щойно додане «Перевірити зараз», Блок 5, E14, D59) —
+    окрема квартира з новим id, щоб її сторінку було видно одразу.
+
+    Не рішення власника (DedupDecision немає): наступна перебудова «дублі» або
+    лишить цей id (стабільні id, D40), або зведе квартиру з іншою й запише
+    переадресацію — посилання /property/<id> не зламається. Оголошення, що вже має
+    квартиру, не чіпає. Район і ЖК квартири переносяться на рядок тією самою точкою
+    синхронізації row_*, що й у «розділити/злити» (Блок 4).
+    """
+    row = session.get(Listing, listing_id)
+    if row is None:
+        raise ValueError(f"оголошення {listing_id} немає")
+    if row.property_id is not None:
+        return row.property_id
+    new_pid = _high_id(session) + 1
+    session.add(Property(id=new_pid, **_attrs([row])))
+    session.flush()
+    _move(session, [listing_id], new_pid)
+    session.expire(row, ["property_id"])
+    _sync_rows(session, [new_pid])
+    return new_pid
+
+
 def split_off(session, property_id: int, listing_ids: list[int]) -> int:
     """«Це різні квартири»: вибрані оголошення стають окремою квартирою.
 
