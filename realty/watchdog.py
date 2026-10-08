@@ -23,8 +23,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import statistics
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -229,25 +231,47 @@ def check_verify_blocks(now: datetime) -> list[Alert]:
     return alerts
 
 
-def check_backup(now: datetime) -> Alert | None:
+def check_backup(now: datetime) -> list[Alert]:
+    """Бекап на два рівні (D55 п. 6, D58).
+
+      * backup-none (критичне) — копії поза машиною немає в ЖОДНОМУ сховищі: остання
+        спроба «failed» (backup.py так і рахує: успіх — лише з копією поза машиною;
+        локальна перевірена копія на тому ж диску від смерті диска не захищає), або
+        успішного бекапу немає понад BACKUP_MAX_AGE_HOURS. Колишній ключ «backup».
+      * backup-partial (попередження) — копія поза машиною є, але не всюди (Drive упав,
+        Telegram спрацював).
+      * db-integrity:backup (критичне) — копія бази не пройшла integrity_check: бекап
+        копіює сторінки як є, тож пошкоджена саме база (запасна перевірка цілісності
+        до щоденного quick_check, D58).
+    """
     from . import backup
 
     last_try = backup.last_attempt()
     last_ok = backup.last_success_at()
+    alerts: list[Alert] = []
     if last_try is not None and last_try.status == "failed":
-        return Alert("backup", (f"💾 Бекап не вдався ({_ago(last_try.created_at, now)}): "
-                                f"{(last_try.message or 'без пояснення')[:300]}\n"
-                                f"Останній успішний: {_ago(last_ok, now)}."))
-    if last_try is not None and last_try.status == "ok" and last_try.message:
+        local = ("локальна копія є й відновлюється, але поза машиною — ніде"
+                 if last_try.restored_ok else "навіть локальної перевіреної копії немає")
+        alerts.append(Alert("backup-none", (
+            f"💾 Бекап не вдався ({_ago(last_try.created_at, now)}): "
+            f"{(last_try.message or 'без пояснення')[:300]}\n{local}.\n"
+            f"Останній успішний: {_ago(last_ok, now)}.")))
+        if "integrity_check" in (last_try.message or ""):
+            alerts.append(Alert("db-integrity:backup", (
+                f"🧨 Копія бази для бекапу не пройшла integrity_check "
+                f"({_ago(last_try.created_at, now)}): база, найімовірніше, пошкоджена. "
+                f"{(last_try.message or '')[:200]}")))
+    elif last_try is not None and last_try.status == "ok" and last_try.message:
         # Копія поза машиною є, але не всюди, куди мала піти: напр., Drive
         # упав, а Telegram спрацював. Без цієї перевірки така поломка мовчала б.
-        return Alert("backup-partial", (
+        alerts.append(Alert("backup-partial", (
             f"💾 Бекап {_ago(last_try.created_at, now)} ліг не в усі сховища: "
-            f"{last_try.message[:300]}\nКопія поза машиною є ({last_try.offsite})."))
-    if last_ok is not None and _hours(now - last_ok) > BACKUP_MAX_AGE_HOURS:
-        return Alert("backup", f"💾 Останній успішний бекап {_ago(last_ok, now)} — "
-                               f"щоденний бекап не відпрацював.")
-    return None
+            f"{last_try.message[:300]}\nКопія поза машиною є ({last_try.offsite}).")))
+    if not any(a.key == "backup-none" for a in alerts) and last_ok is not None \
+            and _hours(now - last_ok) > BACKUP_MAX_AGE_HOURS:
+        alerts.append(Alert("backup-none", f"💾 Останній успішний бекап {_ago(last_ok, now)} — "
+                                           f"щоденний бекап не відпрацював."))
+    return alerts
 
 
 def check_dedup(now: datetime) -> list[Alert]:
@@ -525,6 +549,456 @@ def check_places(now: datetime) -> list[Alert]:
     return alerts
 
 
+# --- Хвиля W3 (D58): нові перевірки ------------------------------------------------------
+# Пороги й часи — config/alerts.toml (окрім LOW_* нижче: вони — ті самі DROP_*, що й у
+# check_sources). Мережа й читання всієї бази — через атрибути модуля SITE_PROBE і
+# INTEGRITY_CHECK: тести підставляють свої (conftest), сторож у тестах не ходить на
+# 127.0.0.1:8000 і не читає всю копію бази на кожному прогоні.
+
+LOW_DAYS = 7                 # «звичайно» — медіана нових за добу за стільки попередніх діб
+
+
+def check_low_sources(now: datetime) -> list[Alert]:
+    """Джерело приносить різко менше НОВИХ оголошень, але не нуль (попередження, D58).
+
+    Не за прогоном, а за добу: DIM.RIA й OLX чесно зупиняються після першої сторінки,
+    коли новинок немає (test_early_stop_is_not_a_drop), — прогін із 20 записаними замість
+    160 — норма. Доба згладжує це: нових за останні 24 год < DROP_RATIO × медіани нових за
+    добу попередніх LOW_DAYS діб (медіана ≥ DROP_MIN_BASELINE). Нуль записаних — уже
+    критичне drop:<джерело> (check_sources), тут — лише «записує, але мало нового».
+    """
+    ops.init_ops()
+    since = now - timedelta(days=LOW_DAYS + 1)
+    with ops.ops_session() as s:
+        rows = s.execute(select(ops.RunRecord.source, ops.RunRecord.started_at,
+                                ops.RunRecord.inserted, ops.RunRecord.updated)
+                         .where(ops.RunRecord.mode == "fresh",
+                                ops.RunRecord.status != "running",
+                                ops.RunRecord.started_at >= since)).all()
+    by_source: dict[str, list[float]] = {}
+    written: dict[str, int] = {}
+    for source, started, inserted, updated in rows:
+        day = int(_hours(now - started) // 24)        # 0 — останні 24 год
+        days = by_source.setdefault(source, [0.0] * (LOW_DAYS + 1))
+        if day <= LOW_DAYS:
+            days[day] += inserted or 0
+        if day == 0:
+            written[source] = written.get(source, 0) + (inserted or 0) + (updated or 0)
+    alerts = []
+    for name in enabled_sources():
+        days = by_source.get(name)
+        if not days or not written.get(name):
+            continue                                   # нуль записаних — check_sources
+        usual = statistics.median(days[1:])
+        if usual >= DROP_MIN_BASELINE and days[0] < DROP_RATIO * usual:
+            alerts.append(Alert(f"low:{name}", (
+                f"📉 {name}: нових оголошень за добу {days[0]:.0f}, звичайно ~{usual:.0f} на "
+                f"добу (медіана {LOW_DAYS} діб). Записи йдуть, але нового майже немає — "
+                f"парсер міг частково зламатись.")))
+    return alerts
+
+
+def _alerts_cfg():
+    from . import configfiles
+
+    return configfiles.load("alerts")
+
+
+def _probe_site(url: str, timeout: float) -> tuple[bool, str]:
+    """GET /healthz: (живий?, пояснення). Без пароля — /healthz відкритий (auth.OPEN_PATHS)."""
+    import httpx
+
+    try:
+        r = httpx.get(url, timeout=timeout, follow_redirects=True)
+    except Exception as e:                                       # noqa: BLE001
+        return False, type(e).__name__
+    return (r.status_code == 200), f"HTTP {r.status_code}"
+
+
+SITE_PROBE = _probe_site
+
+
+def check_site(now: datetime, state: dict, cfg=None) -> list[Alert]:
+    """Сайт не відкривається (критичне, D55 п. 6): локально (127.0.0.1:8000/healthz) і
+    за публічною адресою (data/public_url + /healthz). Лише після `site.fail_runs` невдалих
+    запусків сторожа поспіль: перезапуск realty-web триває 13–15 с (D54)."""
+    cfg = cfg or _alerts_cfg()
+    st = state.setdefault("_site", {})
+    targets = [("site-local", cfg.site.local_url)]
+    url = public_url() if cfg.site.check_public else None
+    if url:
+        targets.append(("site-public", url.rstrip("/") + cfg.site.public_path))
+    else:
+        st.pop("site-public", None)
+    alerts = []
+    for key, target in targets:
+        ok, why = SITE_PROBE(target, cfg.site.timeout_s)
+        rec = st.setdefault(key, {"fails": 0})
+        if ok:
+            st[key] = {"fails": 0, "last_ok": now.isoformat()}
+            continue
+        rec["fails"] = int(rec.get("fails") or 0) + 1
+        rec.setdefault("first_fail", now.isoformat())
+        rec["last_error"] = why
+        if rec["fails"] >= cfg.site.fail_runs:
+            first = datetime.fromisoformat(rec["first_fail"])
+            where = "на машині (realty-web)" if key == "site-local" else "ззовні (тунель)"
+            alerts.append(Alert(key, (
+                f"🌐 Сайт не відкривається {where}: {target} — {why}; {rec['fails']} перевірок "
+                f"поспіль, з {_ago(first, now)}. Останній успіх: "
+                f"{_ago(datetime.fromisoformat(rec['last_ok']), now) if rec.get('last_ok') else 'ще не було'}.")))
+    return alerts
+
+
+def _local(now: datetime, tz: str) -> datetime:
+    """Наївний UTC (як в ops.db) → місцевий час поясу `tz` (наївний)."""
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    return now.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
+
+
+def _db_file(name: str) -> Path | None:
+    from .config import DB_URL
+
+    url = DB_URL if name == "realty" else ops.OPS_DB_URL
+    return Path(url[len("sqlite:///"):]) if url.startswith("sqlite:///") else None
+
+
+def _quick_check(path: Path | None, deadline: float) -> str:
+    """PRAGMA quick_check через з'єднання лише для читання; стеля — progress handler.
+
+    «ok» | «interrupted» (не встигли до `deadline`) | «missing» | текст проблеми."""
+    import sqlite3
+    import time
+
+    if path is None:
+        return "не SQLite"
+    if not path.exists():
+        return "missing"
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    except sqlite3.Error as e:
+        return f"{type(e).__name__}: {e}"[:300]
+    try:
+        con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
+        rows = con.execute("PRAGMA quick_check").fetchall()
+    except sqlite3.OperationalError as e:
+        if "interrupt" in str(e).lower():
+            return "interrupted"
+        return f"{type(e).__name__}: {e}"[:300]
+    except sqlite3.Error as e:
+        return f"{type(e).__name__}: {e}"[:300]
+    finally:
+        con.close()
+    values = [str(r[0]) for r in rows]
+    return "ok" if values == ["ok"] else "; ".join(values)[:300]
+
+
+INTEGRITY_CHECK = _quick_check
+
+
+def check_db_integrity(now: datetime, state: dict, cfg=None) -> list[Alert]:
+    """База пошкоджена (критичне, D55 п. 6): раз на місцеву добу після integrity.at —
+    PRAGMA quick_check realty.db і ops.db (лише читання, спільна стеля max_seconds).
+    Тривога тримається, доки наступна щоденна перевірка не скаже «ok». «Перервано»
+    (не встигли) і відсутній ops.db — не тривога, а рядок у зведенні."""
+    import time
+
+    cfg = cfg or _alerts_cfg()
+    st = state.setdefault("_integrity", {})
+    if cfg.integrity.enabled:
+        local = _local(now, cfg.digest.timezone)
+        h, m = (int(x) for x in cfg.integrity.at.split(":"))
+        today = local.date().isoformat()
+        if (local.hour, local.minute) >= (h, m) and st.get("date") != today:
+            deadline = time.monotonic() + cfg.integrity.max_seconds
+            results = {}
+            for name in cfg.integrity.databases:
+                t0 = time.monotonic()
+                res = INTEGRITY_CHECK(_db_file(name), deadline)
+                results[name] = {"result": res, "seconds": round(time.monotonic() - t0, 2)}
+            st.update(date=today, at=now.isoformat(), results=results)
+    alerts = []
+    for name, r in (st.get("results") or {}).items():
+        res = r.get("result")
+        if res in ("ok", "interrupted") or (res == "missing" and name == "ops"):
+            continue
+        alerts.append(Alert(f"db-integrity:{name}", (
+            f"🧨 База {name}: PRAGMA quick_check — {res} (перевірка "
+            f"{_ago(datetime.fromisoformat(st['at']), now)}). Нічого не виправляти "
+            f"автоматично: спершу копія й рішення власника.")))
+    return alerts
+
+
+def check_sample(now: datetime) -> list[Alert]:
+    """Контрольна вибірка Блоку 1 (`cli.py liveness sample`, D58): останній прогін.
+
+    Критичні — контрольне «знято» (як спрацювання запобіжника на canary) і «знято» понад
+    fuse.share випадкових; попередження — понад max_removed_share і пропущений прогін
+    (замок). Одне повідомлення на прогін (`once`), тривога тримається до наступного
+    прогону, але не довше за sample.toml verdict.alert_days."""
+    from . import configfiles
+    from .liveness import sample
+
+    last = sample.last_run()
+    if last is None or last["status"] == "running":
+        return []
+    alert_days = configfiles.load("sample").verdict.alert_days
+    if now - (last["finished_at"] or last["started_at"]) > timedelta(days=alert_days):
+        return []
+    once = str(last["id"])
+    alerts = []
+    if last["status"] == "lock_timeout":
+        alerts.append(Alert("liveness-sample-skipped", (
+            f"🎯 Контрольна вибірка №{last['id']} не відбулась: цикл не звільнив замок за "
+            f"{(last['lock_waited_s'] or 0) / 60:.0f} хв. Наступна — за розкладом; вручну — "
+            f"cli.py liveness sample."), once=once))
+    for source, v in sorted((last.get("verdicts") or {}).items()):
+        head = f"🎯 Контрольна вибірка №{last['id']}, {source}: "
+        if v.get("status") == "canary":
+            alerts.append(Alert(f"liveness-sample-canary:{source}", head + (
+                f"відомо живе оголошення показало «знято» ({v.get('canary_removed')} із "
+                f"{v.get('canary_checked')} контрольних) — підпис, схоже, зламався; решту "
+                f"вибірки для джерела не перевіряли."), once=once))
+        elif v.get("status") == "fuse_share":
+            alerts.append(Alert(f"liveness-sample-share:{source}", head + (
+                f"підпис зняття спрацював на >{100 * v.get('fuse_share', 0):.0f}% випадкової "
+                f"вибірки — {v.get('removed')} із {v.get('checked')} — рішення власника; "
+                f"нічого автоматично не зроблено."), once=once))
+        elif v.get("status") == "fail":
+            alerts.append(Alert(f"liveness-sample-removed:{source}", head + (
+                f"«знято» {v.get('removed')} із {v.get('checked')} випадкових "
+                f"({100 * (v.get('share') or 0):.1f}% > {100 * v.get('max_share', 0):.0f}%) — "
+                f"див. cli.py liveness sample --report (запізнення виявлення?)."), once=once))
+    return alerts
+
+
+# --- Рівні й нагальне надсилання (D58) ------------------------------------------------------
+
+CRITICAL, WARNING = "critical", "warning"
+CRITICAL_HEAD = "🚨 КРИТИЧНО — потрібна дія"
+# Усі префікси ключів, які сторож може видати (і `alert unit-failed`). Тест
+# tests/test_alerts.py звіряє цей перелік із кодом (літерали ключів у цьому файлі) і
+# вимагає ЯВНИЙ рівень кожного в config/alerts.toml — без запасного «critical».
+ALERT_KEYS = (
+    "silence", "drop", "write", "low", "blocks", "verify-blocks",
+    "backup-none", "backup-partial", "db-integrity", "site-local", "site-public",
+    "unit-failed",
+    "dedup-suspicious", "dedup-missed", "dedup-complex",
+    "liveness-fuse", "liveness-coverage", "liveness-ria-unrecognized", "liveness-repeat404",
+    "liveness-snapshot-stale", "liveness-sample-canary", "liveness-sample-share",
+    "liveness-sample-removed", "liveness-sample-skipped",
+    "night-missing", "night-skipped", "night-backup", "night-failed", "night-late",
+    "night-blocked", "night-hold",
+    "places-failed", "places-would-change",
+    "watchdog",
+)
+
+
+def level_of(key: str, levels) -> str:
+    """Рівень ключа: найдовший префікс з `levels` (ключ == префікс або «префікс:…»);
+    без збігу — critical (обережний бік: невідома тривога не ховається в зведення)."""
+    best, level = -1, CRITICAL
+    for prefix, lvl in (levels or {}).items():
+        if (key == prefix or key.startswith(prefix + ":")) and len(prefix) > best:
+            best, level = len(prefix), lvl
+    return level
+
+
+def action_for(key: str, cfg) -> str | None:
+    """Рядок «що робити» з alerts.toml [actions] за тим самим найдовшим префіксом."""
+    if cfg is None:
+        return None
+    best, text = -1, None
+    for prefix, act in cfg.actions.items():
+        if (key == prefix or key.startswith(prefix + ":")) and len(prefix) > best:
+            best, text = len(prefix), act
+    if text is None:
+        return None
+    arg = key.split(":", 1)[1] if ":" in key else ""
+    return text.replace("{arg}", arg)
+
+
+def critical_message(key: str, text: str, cfg, *, ongoing_since: str | None = None) -> str:
+    """Критичне повідомлення — інший вигляд, ніж у зведення: перший рядок CRITICAL_HEAD."""
+    prefix = (f"(досі триває, з {ongoing_since[:16].replace('T', ' ')} UTC) "
+              if ongoing_since else "")
+    lines = [CRITICAL_HEAD, _header(), prefix + text]
+    act = action_for(key, cfg)
+    if act:
+        lines.append(f"👉 Що робити: {act}")
+    return "\n".join(lines)
+
+
+# --- Черга недоставленого й впалі служби (D58) ------------------------------------------------
+
+OUTBOX_PATH = DATA_DIR / "alerts_outbox.json"
+UNITS_PATH = DATA_DIR / "unit_failures.json"
+
+
+class _LockedJson:
+    """JSON-файл під flock (кілька процесів realty-alert@ і сторож одночасно)."""
+
+    def __init__(self, path: Path, empty) -> None:
+        self.path, self.empty = path, empty
+
+    def __enter__(self):
+        import fcntl
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = open(self.path.with_suffix(".lock"), "a+")
+        fcntl.flock(self._lock, fcntl.LOCK_EX)
+        try:
+            self.data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            self.data = self.empty()
+        return self
+
+    def save(self) -> None:
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=1))
+        tmp.replace(self.path)
+
+    def __exit__(self, *exc):
+        import fcntl
+
+        fcntl.flock(self._lock, fcntl.LOCK_UN)
+        self._lock.close()
+        return False
+
+
+def queue_outbox(key: str, text: str, now: datetime, path: Path | None = None) -> None:
+    """Нагальне повідомлення не пішло (Telegram недоступний) — сторож повторить."""
+    with _LockedJson(path or OUTBOX_PATH, list) as box:
+        box.data.append({"key": key, "text": text, "at": now.isoformat()})
+        box.data = box.data[-50:]
+        box.save()
+
+
+def flush_outbox(send, errors: list, path: Path | None = None) -> list[str]:
+    """Надіслати те, що чекає в черзі; що не пішло — лишається на наступний запуск."""
+    path = path or OUTBOX_PATH
+    if not path.exists():
+        return []
+    sent, keep = [], []
+    with _LockedJson(path, list) as box:
+        for item in box.data:
+            try:
+                send(f"{item['text']}\n⏳ Надіслано із запізненням (подія "
+                     f"{str(item.get('at', ''))[:16].replace('T', ' ')} UTC).")
+                sent.append(item.get("key", "?"))
+            except Exception as e:                               # noqa: BLE001
+                keep.append(item)
+                errors.append(f"{item.get('key')} (черга): {notify._mask(str(e))[:200]}")
+        box.data = keep
+        box.save()
+    return sent
+
+
+_SECRET_ENV = re.compile(r"TOKEN|PASSWORD|PASSWD|SECRET|KEY|CHAT_ID|AUTH|COOKIE", re.I)
+_SECRET_PATTERNS = (
+    re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"),                       # токен бота Telegram
+    re.compile(r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|authorization|bearer|"
+               r"cookie|session)\b(\s*[:=]\s*|\s+)\S+"),
+    re.compile(r"[A-Za-z0-9+_-]{40,}={0,2}"),          # довгі непрозорі рядки (шляхи з «/» — ні)
+)
+
+
+def _scrub(line: str) -> str:
+    """Рядок журналу без того, що схоже на секрет (значення секретних змінних, токени)."""
+    for name, value in os.environ.items():
+        if _SECRET_ENV.search(name) and value and len(value) >= 4:
+            line = line.replace(value, "***")
+    line = _SECRET_PATTERNS[0].sub("***", line)
+    line = _SECRET_PATTERNS[1].sub(lambda m: f"{m.group(1)}=***", line)
+    line = _SECRET_PATTERNS[2].sub("***", line)
+    return notify._mask(line)[:200]
+
+
+def _journal_tail(unit: str, lines: int) -> list[str]:
+    import subprocess
+
+    if lines <= 0:
+        return []
+    try:
+        r = subprocess.run(["journalctl", "--user", "-u", unit, "-n", str(lines), "--no-pager",
+                            "-o", "cat"], capture_output=True, text=True, timeout=10)
+    except Exception:                                            # noqa: BLE001
+        return []
+    return [_scrub(x) for x in r.stdout.splitlines()[-lines:] if x.strip()]
+
+
+JOURNAL_TAIL = _journal_tail
+UNIT_RE = re.compile(r"[A-Za-z0-9@._:\\-]{1,128}")
+
+
+def unit_failed(unit: str, *, now: datetime | None = None, send=None, cfg=None,
+                path: Path | None = None, outbox: Path | None = None) -> int:
+    """`cli.py alert unit-failed <юніт>` (OnFailure=realty-alert@%n.service): критичне
+    одразу. Сам НІКОЛИ не падає: будь-яка помилка — рядок у stderr і код 1.
+
+    Служба з Restart= може падати щохвилини — повідомлення не частіше ніж раз на
+    units.repeat_minutes на службу, далі лічильник. Не надіслалось — у чергу сторожа."""
+    try:
+        now = now or ops._now()
+        send = send or notify.send_message
+        unit = unit if UNIT_RE.fullmatch(unit or "") else "невідома-служба"
+        try:
+            cfg = cfg or _alerts_cfg()
+        except Exception as e:                                   # noqa: BLE001
+            # Зламаний alerts.toml не має приглушити падіння служби: без ліміту й журналу.
+            log.error("config/alerts.toml не читається: %s", e)
+            cfg = None
+        repeat = timedelta(minutes=cfg.units.repeat_minutes) if cfg else timedelta(0)
+        with _LockedJson(path or UNITS_PATH, dict) as book:
+            rec = book.data.setdefault(unit, {"first": now.isoformat(), "count": 0,
+                                              "unsent": 0, "last_sent": None})
+            rec["count"] += 1
+            rec["unsent"] += 1
+            rec["last"] = now.isoformat()
+            last_sent = rec.get("last_sent")
+            due = last_sent is None or now - datetime.fromisoformat(last_sent) >= repeat
+            if due:
+                rec["last_sent"] = now.isoformat()
+                times, rec["unsent"] = rec["unsent"], 0
+            # Старші за тиждень записи — геть (зведення дивиться на добу).
+            for name in [n for n, r in book.data.items()
+                         if now - datetime.fromisoformat(r.get("last", r["first"]))
+                         > timedelta(days=7)]:
+                del book.data[name]
+            book.save()
+        if not due:
+            print(f"{unit}: повідомлення вже було {last_sent} — лише лічильник")
+            return 0
+        tz = cfg.digest.timezone if cfg else "Europe/Kyiv"
+        when = _local(now, tz).strftime("%d.%m %H:%M")
+        text = [f"⛔ Служба {unit} упала (systemd: failed) — {when} за місцевим часом."]
+        if times > 1:
+            text.append(f"Від попереднього повідомлення падала ще {times - 1} раз(и).")
+        tail = JOURNAL_TAIL(unit, cfg.units.log_lines if cfg else 0)
+        if tail:
+            text.append("Останні рядки журналу:")
+            text += [f"  {x}" for x in tail]
+        msg = critical_message(f"unit-failed:{unit}", "\n".join(text), cfg)
+        try:
+            send(msg)
+        except Exception as e:                                   # noqa: BLE001
+            log.error("unit-failed %s: не надіслано (%s) — у чергу сторожа", unit,
+                      notify._mask(str(e))[:200])
+            queue_outbox(f"unit-failed:{unit}", msg, now, outbox)
+            return 1
+        print(f"{unit}: критичне повідомлення надіслано")
+        return 0
+    except Exception as e:                                       # noqa: BLE001
+        try:
+            print(f"alert unit-failed: {type(e).__name__}: {notify._mask(str(e))[:200]}",
+                  file=sys.stderr)
+        except Exception:                                        # noqa: BLE001
+            pass
+        return 1
+
+
 # --- Стан і розсилка -----------------------------------------------------------------
 
 
@@ -554,47 +1028,105 @@ def _header() -> str:
 
 
 def collect(now: datetime, state: dict) -> list[Alert]:
+    """Усі перевірки. Помилка однієї — тривога «watchdog:<перевірка>», решта працюють;
+    рівень такої тривоги — з alerts.toml: перевірки, що стережуть КРИТИЧНЕ (тиша, бекап,
+    сайт, база, запобіжник, ніч), — critical, інакше впала перевірка ховала б аварію в
+    зведенні (D58)."""
     alerts: list[Alert] = []
-    for check in (lambda: check_silence(now, state), lambda: check_backup(now)):
+    for name, check in (("check_silence", lambda: [a] if (a := check_silence(now, state)) else []),
+                        ("check_backup", lambda: check_backup(now)),
+                        ("check_site", lambda: check_site(now, state)),
+                        ("check_db_integrity", lambda: check_db_integrity(now, state))):
         try:
-            if a := check():
-                alerts.append(a)
+            alerts += check()
         except Exception as e:           # сторож не має падати через одну перевірку
-            log.exception("перевірка впала")
-            alerts.append(Alert("watchdog", f"⚠️ Сторож не зміг виконати перевірку: {e}"))
-    for check in (check_sources, check_verify_blocks, check_dedup, check_liveness, check_night,
-                  check_places):
+            log.exception("перевірка %s впала", name)
+            alerts.append(Alert(f"watchdog:{name}",
+                                f"⚠️ Сторож не зміг виконати {name}: {notify._mask(str(e))[:300]}"))
+    for check in (check_sources, check_low_sources, check_verify_blocks, check_dedup,
+                  check_liveness, check_night, check_places, check_sample):
         try:
             alerts += check(now)
         except Exception as e:
             log.exception("перевірка %s впала", check.__name__)
             alerts.append(Alert(f"watchdog:{check.__name__}",
-                                f"⚠️ Сторож не зміг виконати {check.__name__}: {e}"))
+                                f"⚠️ Сторож не зміг виконати {check.__name__}: "
+                                f"{notify._mask(str(e))[:300]}"))
     return alerts
 
 
-def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH) -> dict:
-    """Одна перевірка. Повертає, що надіслано, що притримано, що відновилось."""
+# Перейменовані ключі (D58): тривога, що вже надіслана під старим ім'ям, не дає хибного
+# «✅ Відновилось», а продовжується під новим.
+RENAMED_KEYS = {"backup": "backup-none", "watchdog": "watchdog:check_silence"}
+
+
+def _migrate_state(state: dict) -> None:
+    for old, new in RENAMED_KEYS.items():
+        if old in state and new not in state:
+            state[new] = state.pop(old)
+
+
+def _remember_resolved(state: dict, key: str, entry: dict, now: datetime, keep_h: float) -> None:
+    """Зникла тривога — у стан для зведення (обидва рівні), старші за keep_h — геть."""
+    resolved = [r for r in state.get("_resolved", [])
+                if now - datetime.fromisoformat(r["resolved"]) <= timedelta(hours=keep_h)]
+    resolved.append({"key": key, "level": entry.get("level", CRITICAL),
+                     "since": entry.get("since"), "resolved": now.isoformat(),
+                     "sent": entry.get("sent", 0), "text": (entry.get("text") or "")[:300]})
+    state["_resolved"] = resolved[-200:]
+
+
+def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH, *,
+        digest: bool = False) -> dict:
+    """Одна перевірка. Повертає, що надіслано, що притримано, що відновилось.
+
+    Рівні (D55 п. 6, D58): critical — одразу, як і досі (повтор раз на REPEAT_HOURS,
+    «✅ Відновилось»), але з першим рядком CRITICAL_HEAD і «що робити»; warning — лише
+    стан (з коли, коли востаннє, текст; зникле — у `_resolved`) для щоденного зведення.
+    `digest=True` (`cli.py watchdog`, таймер) — ще й зведення, якщо настав його час
+    (realty/digest.py); тести й ручні виклики без нього зведення не шлють.
+    """
     now = now or ops._now()
     send = send or notify.send_message
     state = load_state(state_path)
+    _migrate_state(state)
+    report = {"active": [], "sent": [], "held": [], "resolved": [], "warned": [],
+              "errors": [], "outbox": [], "digest": None}
+    report["outbox"] = flush_outbox(send, report["errors"])
+    cfg_error = None
+    try:
+        cfg = _alerts_cfg()
+    except Exception as e:                                       # noqa: BLE001
+        # Без рівнів — усе критичне (обережний бік: нічого не ховається в зведення).
+        cfg, cfg_error = None, notify._mask(str(e))[:300]
     alerts = collect(now, state)
-    report = {"active": [a.key for a in alerts], "sent": [], "held": [], "resolved": [],
-              "errors": []}
+    if cfg is None:
+        alerts.append(Alert("watchdog:alerts-config", (
+            f"⚠️ config/alerts.toml не читається — усі тривоги надсилаю одразу як критичні, "
+            f"зведення не буде: {cfg_error}")))
+    report["active"] = [a.key for a in alerts]
+    levels = cfg.levels if cfg is not None else {}
 
     for a in alerts:
+        level = level_of(a.key, levels)
         st = state.setdefault(a.key, {"since": now.isoformat(), "last_sent": None, "sent": 0})
+        st["text"] = a.text
+        st["level"] = level
+        st["last_seen"] = now.isoformat()
+        if level == WARNING:
+            # Попередження — у зведення: стан є, повідомлення немає.
+            report["warned"].append(a.key)
+            continue
         last = st.get("last_sent")
         due = last is None or _hours(now - datetime.fromisoformat(last)) >= REPEAT_HOURS
         if a.once is not None:
             due = st.get("once") != a.once
-        st["text"] = a.text
         if not due:
             report["held"].append(a.key)
             continue
-        prefix = "" if st["sent"] == 0 else f"(досі триває, з {st['since'][:16].replace('T', ' ')} UTC) "
         try:
-            send(f"{_header()}\n{prefix}{a.text}")
+            send(critical_message(a.key, a.text, cfg,
+                                  ongoing_since=st["since"] if st["sent"] else None))
             st["last_sent"] = now.isoformat()
             st["sent"] += 1
             if a.once is not None:
@@ -602,10 +1134,11 @@ def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH) -
             report["sent"].append(a.key)
         except Exception as e:
             # Не відмічаємо як надіслане — наступний запуск спробує ще раз.
-            report["errors"].append(f"{a.key}: {e}")
-            log.error("не вдалось надіслати %s: %s", a.key, e)
+            report["errors"].append(f"{a.key}: {notify._mask(str(e))[:200]}")
+            log.error("не вдалось надіслати %s: %s", a.key, notify._mask(str(e))[:200])
 
     active = {a.key for a in alerts}
+    keep_h = cfg.digest.keep_resolved_hours if cfg is not None else 72
     for key in [k for k in state if not k.startswith("_") and k not in active]:
         entry = state[key]
         if entry.get("sent"):
@@ -613,10 +1146,22 @@ def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH) -
                 send(f"{_header()}\n✅ Відновилось: {key} "
                      f"(тривога з {entry['since'][:16].replace('T', ' ')} UTC).")
             except Exception as e:
-                report["errors"].append(f"{key} (відновлення): {e}")
+                report["errors"].append(f"{key} (відновлення): {notify._mask(str(e))[:200]}")
                 continue
+        _remember_resolved(state, key, entry, now, keep_h)
         del state[key]
         report["resolved"].append(key)
+
+    if digest and cfg is not None:
+        from . import digest as digest_mod
+
+        try:
+            report["digest"] = digest_mod.maybe_send(now, state, cfg, send)
+        except Exception as e:                                   # noqa: BLE001
+            log.exception("зведення не зібрано")
+            report["errors"].append(f"зведення: {notify._mask(str(e))[:200]}")
+        if report["digest"] and report["digest"].get("error"):
+            report["errors"].append(f"зведення: {report['digest']['error']}")
 
     save_state(state, state_path)
     return report

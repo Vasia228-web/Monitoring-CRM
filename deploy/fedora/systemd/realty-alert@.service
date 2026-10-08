@@ -1,0 +1,16 @@
+[Unit]
+Description=Realty: критична тривога — служба %i упала
+# Шаблон для OnFailure=realty-alert@%n.service у realty-cycle, realty-night,
+# realty-backup, realty-web, realty-liveness-sample (хвиля W3, D58): «нічна робота
+# впала», «бекап упав» — критичне одразу (D55 п. 6). Повідомлення — не частіше ніж раз на
+# alerts.toml units.repeat_minutes на службу; не надіслалось — у чергу сторожа.
+# OnFailure тут НЕМАЄ навмисно: тривога про тривогу дала б петлю.
+CollectMode=inactive-or-failed
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/realty/.venv/bin/python cli.py alert unit-failed %i
+TimeoutStartSec=2min

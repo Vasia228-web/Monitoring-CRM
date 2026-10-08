@@ -4,6 +4,8 @@
   python cli.py cycle                  # регулярний цикл із лімітами часу (для розкладу)
   python cli.py backup                 # бекап бази з перевіркою відновлення
   python cli.py watchdog               # сигнал тиші: Telegram, якщо системі погано
+  python cli.py alert digest --dry-run # щоденне зведення попереджень (без надсилання)
+  python cli.py alert levels           # рівень кожної тривоги (config/alerts.toml)
   python cli.py tunnel                 # доступ ззовні через Cloudflare Tunnel
   python cli.py scrape                 # зібрати з усіх джерел
   python cli.py scrape --sources olx,lun --pages 3
@@ -178,13 +180,50 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
         msg_id = watchdog.test_message()
         print(f"тестове повідомлення прийняте Telegram, message_id={msg_id}")
         return 0
-    rep = watchdog.run()
+    # Таймер сторожа — ще й щоденне зведення, коли настав його час (D58).
+    rep = watchdog.run(digest=True)
     print(f"активні: {rep['active'] or '—'}")
     print(f"надіслано: {rep['sent'] or '—'}   притримано: {rep['held'] or '—'}   "
           f"відновилось: {rep['resolved'] or '—'}")
+    print(f"попередження (у зведення): {rep['warned'] or '—'}"
+          + (f"   із черги: {rep['outbox']}" if rep["outbox"] else "")
+          + (f"   зведення: {rep['digest']}" if rep["digest"] else ""))
     for e in rep["errors"]:
         print(f"  ! {e}")
     return 1 if rep["errors"] else 0
+
+
+def cmd_alert(args: argparse.Namespace) -> int:
+    """Тривоги на два рівні (D58): впала служба (OnFailure), щоденне зведення, рівні."""
+    from realty import watchdog
+
+    if args.action == "unit-failed":
+        # Викликає realty-alert@%n.service; сам ніколи не падає (watchdog.unit_failed).
+        return watchdog.unit_failed(args.unit or "")
+    from realty import configfiles
+
+    cfg = configfiles.load("alerts")
+    if args.action == "levels":
+        for key in watchdog.ALERT_KEYS:
+            print(f"  {watchdog.level_of(key, cfg.levels):<9} {key}")
+        return 0
+    from realty import digest, notify, ops
+
+    state = watchdog.load_state()
+    now = ops._now()
+    text = digest.build(now, state, cfg)
+    if args.send:
+        if not notify.configured():
+            print("Telegram не налаштовано: задайте TELEGRAM_BOT_TOKEN і TELEGRAM_CHAT_ID у .env")
+            return 2
+        # Ручне надсилання розкладу щоденного не змінює (стан не пишеться).
+        msg_id = notify.send_message(text)
+        print(f"зведення надіслано, message_id={msg_id} ({len(text)} символів)")
+        return 0
+    print(text)
+    print(f"\n({len(text)} символів; не надіслано — --dry-run; щоденне за датою "
+          f"{(state.get('_digest') or {}).get('date') or '—'} надіслано)")
+    return 0
 
 
 def cmd_tunnel(args: argparse.Namespace) -> int:
@@ -955,6 +994,17 @@ def main() -> int:
     wd.add_argument("--test", action="store_true",
                     help="надіслати тестове повідомлення тим самим шляхом, що й тривогу")
     wd.set_defaults(func=cmd_watchdog)
+
+    al = sub.add_parser("alert", help="тривоги на два рівні: впала служба, щоденне зведення")
+    al.add_argument("action", choices=("unit-failed", "digest", "levels"),
+                    help="unit-failed ЮНІТ — критичне одразу (OnFailure=realty-alert@%%n); "
+                         "digest — щоденне зведення; levels — рівень кожної тривоги")
+    al.add_argument("unit", nargs="?", help="unit-failed: юніт systemd, що впав")
+    al_mode = al.add_mutually_exclusive_group()
+    al_mode.add_argument("--dry-run", action="store_true",
+                         help="digest: надрукувати, не надсилати (типово)")
+    al_mode.add_argument("--send", action="store_true", help="digest: надіслати зараз")
+    al.set_defaults(func=cmd_alert)
 
     tn = sub.add_parser("tunnel", help="доступ ззовні через Cloudflare Tunnel")
     tn.add_argument("--plan", action="store_true", help="лише показати, що буде запущено")

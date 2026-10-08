@@ -1,5 +1,7 @@
 [Unit]
 Description=Realty: нічний диригент — перевірка актуальності, M2/M3, дозбір (не паралельно зі збором)
+# Упала (failed) — критична тривога одразу (realty-alert@, хвиля W3, D58).
+OnFailure=realty-alert@%n.service
 
 [Service]
 Type=oneshot

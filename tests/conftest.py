@@ -114,6 +114,18 @@ _opened.DRAIN_LOCK = _TMP / "lookup.lock"
 _opened.CYCLE_LOCK = _TMP / "cycle.lock"
 _opened.DISABLED_FLAG = _TMP / "COLLECTOR_OFF"
 
+# Сторож (хвиля W3, D58): у тестах він не ходить на 127.0.0.1:8000 (там може працювати
+# сайт розробника — результат залежав би від машини) і не читає всю копію бази
+# PRAGMA quick_check на кожному watchdog.run. Тести цих перевірок підставляють свої.
+# Черга недоставленого й журнал впалих служб — у тимчасовій теці, а не в data/.
+from realty import watchdog as _watchdog  # noqa: E402
+
+_watchdog.SITE_PROBE = lambda url, timeout: (True, "HTTP 200 (тест)")
+_watchdog.INTEGRITY_CHECK = lambda path, deadline: "ok"
+_watchdog.OUTBOX_PATH = _TMP / "alerts_outbox.json"
+_watchdog.UNITS_PATH = _TMP / "unit_failures.json"
+_watchdog.JOURNAL_TAIL = lambda unit, lines: []
+
 
 @pytest.fixture(autouse=True)
 def _fresh_livecheck():
