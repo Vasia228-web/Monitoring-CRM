@@ -22,7 +22,9 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from liveness_kit import FakeNet, add, clean_fuse, db, get, olx_url, rieltor_url  # noqa: E402,F401
+from liveness_kit import (  # noqa: E402,F401
+    FakeNet, add, clean_fuse, db, get, olx_url, ria_page, ria_url, rieltor_url,
+)
 from night_kit import (  # noqa: E402,F401
     FakeClock, TimedNet, VirtualLauncher, clean_night, local_epoch, night_env, scope_of, utc_of,
 )
@@ -63,13 +65,18 @@ def _answered(db, lid, hours_ago=2):
         s.commit()
 
 
+RID = 34_900_001
+
+
 def _night(db, tmp_path, *, backup_age_hours=5):
     from realty.night import evidence
     from realty.night.conductor import Conductor
 
     lcfg, ncfg = policy.load(), configfiles.load("night")
     master = FakeClock(T0)
-    timed = TimedNet(FakeNet(default=200))
+    page = ria_page(RID, extra_realty={"characteristics_values": {"1437": 1434},
+                                       "user_id": 900777})
+    timed = TimedNet(FakeNet({f"domria:{RID}": (200, page)}, default=200))
     renderers: list[FakeRenderer] = []
 
     def ev_factory(clock):
@@ -92,6 +99,8 @@ def _seed(db):
     lid = add(db, olx_url("10Ev001"), source="olx", external_id="10Ev001")
     _answered(db, lid)
     rl = add(db, rieltor_url(13400001), source="lun", external_id="r1")
+    # DOM.RIA: докази продавця — з того самого GET перевірки (гачок стану, E8), і вночі теж.
+    add(db, ria_url(RID), source="domria", external_id=str(RID))
     return lid, rl
 
 
@@ -114,6 +123,11 @@ def test_night_collects_evidence_after_block1_and_records_coverage(db, tmp_path)
     rendered = sum(len(r.log) for r in renderers)                   # рендерить лише olx.ua
     assert lanes["olx.ua"]["evidence_requests"] == rendered >= 2
     assert get(db, lid).seller_evidence["olx_chip"] == "private"
+    with db() as s:
+        from realty.models import Listing
+
+        ria = s.query(Listing).filter(Listing.external_id == str(RID)).one()
+        assert ria.seller_evidence["ria_offer"] == 1434 and ria.seller_profile == "ria:900777"
     methods = {u: m for _h, _t, u, m in timed.log}
     assert methods[rieltor_url(13400001)] == "GET"                  # M3 rieltor — з тілом
     text = report.render_run(row)
