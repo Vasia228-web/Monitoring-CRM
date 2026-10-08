@@ -14,7 +14,8 @@
      хостами, послідовно всередині; темп — policy.pace(mode="night").
   5. Раз на lanes.batch_minutes — нові результати смуг ОДНИМ пакетом: запобіжник
      оцінює пакет як прогін (пул, що сам не набрав fuse.min_checked, — разом із
-     перевірками за fuse.window_hours, як малі прогони E8), далі запис ≤
+     перевірками за fuse.window_hours, як малі прогони E8; у tiered пул випадкових і
+     контрольних — за fuse.random_window_hours, D56), далі запис ≤
      run.apply_batch_rows рядків на транзакцію (liveness.apply), held.json для смуг,
      покоління кешу «lists». Убитий процес нічого не губить: застосоване — у базі.
   6. stop_requests — смуги самі перестають видавати запити; через
@@ -532,7 +533,7 @@ class Conductor:
             before = self._totals(s)
             self.plan = plan = night_plan.build(
                 s, self.lcfg, self.ncfg, now=env.utcnow(), held=held,
-                attempted_since=_utc_naive(began), skip_hosts=skip)
+                attempted_since=_utc_naive(began), skip_hosts=skip, night=win.night_date)
         onetime = sum(n for hp in plan.lanes.values() for t, n in hp.tiers.items()
                       if t in ONETIME_TIERS)
         rec.update(plan={"hosts": plan.as_dict(), "held": sorted(held),
@@ -734,9 +735,7 @@ class Conductor:
             return
         started = time.perf_counter()
         with self.env.session_scope() as s:
-            prior = fuse.window_counts(s, self.lcfg,
-                                       since=fuse.window_since(self.lcfg, self.env.utcnow()),
-                                       cleared=fuse.cleared_at())
+            prior = fuse.prior_counts(s, self.lcfg, self.env.utcnow(), cycle=False)
         error = None
         try:
             rep = lv_apply.apply_outcomes(outcomes, cfg=self.lcfg, scope=self.env.session_scope,
@@ -770,7 +769,8 @@ class Conductor:
             "removed": rep.delisted, "returned": rep.restored, "repaired": rep.repaired,
             "unknown": rep.unknown, "not_found": rep.not_found, "held_rows": rep.held,
             "stale_rows": rep.stale, "captured": rep.captured, "trips": rep.trips,
-            "held_sources": rep.held_sources, "transactions": rep.batches,
+            "held_sources": rep.held_sources, "canary_genuine": rep.canary_genuine,
+            "transactions": rep.batches,
             "longest_txn_s": rep.longest_batch_s,
             "retried": retried, "pending": len(self.pending), "error": error,
             "mem_available_mb": _mem_available_mb(),
@@ -962,7 +962,8 @@ def dry_run(*, ncfg=None, lcfg=None, now: float | None = None, scope=None) -> di
     env = Env(scope=scope)
     with env.session_scope() as s:
         p = night_plan.build(s, lcfg, ncfg, now=utcnow(), held=held,
-                             attempted_since=_utc_naive(c._night_began(win)), skip_hosts=skip)
+                             attempted_since=_utc_naive(c._night_began(win)), skip_hosts=skip,
+                             night=win.night_date)
     onetime = sum(n for hp in p.lanes.values() for t, n in hp.tiers.items()
                   if t in ONETIME_TIERS)
     due, last_ok = default_backup_due(ncfg.backup.max_age_hours)

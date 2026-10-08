@@ -4,8 +4,13 @@
 (копіям LUN теж). Яруси одного прогону, по порядку, кожен зі стелею з
 config/liveness.toml (`hosts.*`):
 
-  1. canary    — контрольні «відомо живі» (свіжі в стрічці, не зниклі з переліку,
-                 остання перевірка не «знято»): на них стоїть запобіжник;
+  1. canary    — контрольні «відомо живі» (свіжі у ВЛАСНІЙ стрічці сайту —
+                 hosts.*.canary_sources, не зниклі з переліку, остання перевірка не
+                 «знято»): на них стоїть запобіжник;
+     random    — `random_per_run` актуальних ключів, рівномірно випадково (із зерном)
+                 з усіх, крім узятих контрольними, утриманих запобіжником і тих, що
+                 чекають ярусу held: на них (і контрольних) стоїть 20% запобіжника
+                 (D56); порція — з `sweep_per_run`;
   2. підказані (спільна стеля `hinted_cap_per_run`):
      opened    — квартири, відкриті під час циклу (відкладені завдання черги
                  ops.lookup_checks) і відкриті нещодавно без перевірки після того;
@@ -22,8 +27,10 @@ config/liveness.toml (`hosts.*`):
                  живих і частка повернень на /status);
   4. sweep     — сліпий обхід ключів, яким настав строк (востаннє перевірені новим
                  підписом давніше за recheck_days хоста або ніколи), у порядку
-                 `_order()`; після незрозумілих відповідей — графік
-                 run.unknown_backoff_hours замість вічного кінця черги.
+                 `_order()` (навмисно — найімовірніше зняті першими, тому в tiered він
+                 у пулі підказаних, D56), по `sweep_per_run` мінус узяті випадкові;
+                 після незрозумілих відповідей — графік run.unknown_backoff_hours
+                 замість вічного кінця черги.
 
 Тут лише читання бази; мережа — engine.py, запис — apply.py.
 """
@@ -42,8 +49,9 @@ from . import policy as pol
 TIER_CANARY, TIER_OPENED, TIER_REPEAT404 = "canary", "opened", "repeat404"
 TIER_ABSENT, TIER_RESEEN, TIER_HELD = "absent", "reseen", "held"
 TIER_SAMPLE, TIER_SWEEP = "rm_sample", "sweep"
+TIER_RANDOM = "random"
 HINTED_TIERS = (TIER_OPENED, TIER_REPEAT404, TIER_ABSENT, TIER_RESEEN, TIER_HELD)
-PLAN_ORDER = (TIER_CANARY, *HINTED_TIERS, TIER_SAMPLE, TIER_SWEEP)
+PLAN_ORDER = (TIER_CANARY, TIER_RANDOM, *HINTED_TIERS, TIER_SAMPLE, TIER_SWEEP)
 # Нічні яруси (диригент `cli.py night`, E9, D53; realty/night/plan.py). Назви — у
 # check_events.reason (≤16) і в причині події returned (план Блоку 1: «onetime_reseen
 # або legacy_404»):
@@ -51,7 +59,7 @@ PLAN_ORDER = (TIER_CANARY, *HINTED_TIERS, TIER_SAMPLE, TIER_SWEEP)
 #   legacy_404     — M2: зняті старим кодом за ОДНИМ 404 (до рішення власника 1);
 #   onetime_hinted — M3: актуальні ключі без жодної відповіді новим підписом, зниклі з
 #                    повного переліку (absent_since);
-#   onetime_blind  — M3: решта таких ключів, випадково із зерном;
+#   onetime_blind  — M3: решта таких ключів, рівномірно випадково (зерно — ніч, D56);
 #   overdue        — догін, коли прострочених ключів хоста понад alerts.coverage_overdue_share.
 TIER_M2_RESEEN, TIER_M2_LEGACY404 = "onetime_reseen", "legacy_404"
 TIER_M3_HINTED, TIER_M3_BLIND = "onetime_hinted", "onetime_blind"
@@ -65,10 +73,13 @@ TIER_OVERDUE = "overdue"
 #                 рядки ключа — у пулі підказаних).
 TIER_HELD_RETURN = "held_return"
 NIGHT_TIERS = (TIER_M2_RESEEN, TIER_M2_LEGACY404, TIER_M3_HINTED, TIER_M3_BLIND, TIER_OVERDUE)
-# Яруси для запобіжника (fuse._pool): сліпі — без підказки, що ключ знято; ті, що
-# перевіряють уже ЗНЯТІ рядки (живі повертаються), — у tiered зняті рядки поза
-# частками, ще актуальні рядки їхніх ключів — у пулі підказаних.
-BLIND_TIERS = (TIER_SWEEP, TIER_CANARY, TIER_M3_BLIND, TIER_OVERDUE)
+# Яруси для запобіжника (fuse._pool): у tiered межа `share` — лише для РІВНОМІРНО
+# випадкових (random циклу, нічний M3 onetime_blind) і контрольних (рішення власника,
+# D55); сліпий обхід sweep і догін overdue навмисно йдуть від найімовірніше знятих
+# (`_order`, 08.10: 38% «знято» в sweep DOM.RIA проти 13% у рівномірній вибірці) — вони
+# в пулі підказаних (D56). Ті, що перевіряють уже ЗНЯТІ рядки (живі повертаються), — у
+# tiered зняті рядки поза частками, ще актуальні рядки їхніх ключів — у пулі підказаних.
+RANDOM_POOL_TIERS = (TIER_CANARY, TIER_RANDOM, TIER_M3_BLIND)
 REMOVED_TARGET_TIERS = (TIER_SAMPLE, TIER_M2_RESEEN, TIER_M2_LEGACY404, TIER_HELD_RETURN)
 
 # Скільки днів на ринку вважаємо «давно». Свіже оголошення майже напевно ще
@@ -424,8 +435,18 @@ def key_held(u: Universe, cfg, key: str, held) -> bool:
                            or all(r.source in held for r in u.groups[key]))
 
 
+def own_feed_seen(cfg, host: str, rows) -> datetime | None:
+    """Остання поява ключа у ВЛАСНІЙ стрічці сайту (рядки джерел
+    hosts.*.canary_sources): копія в чужій стрічці «живе» не доводить — 08.10 рядок
+    LUN, що вказував на OLX, зробив контрольним уже зняте оголошення (D56)."""
+    own = cfg.hosts[host].canary_sources
+    return max((r.last_seen for r in rows if r.source in own and r.last_seen), default=None)
+
+
 def canary_keys(u: Universe, cfg) -> list[str]:
-    """Контрольні: усі рядки актуальні, свіжі в стрічці, не зниклі, останнє — не «знято».
+    """Контрольні: усі рядки актуальні, свіжі у власній стрічці сайту (рядок джерела з
+    hosts.*.canary_sources — не давніше run.canary_fresh_hours), не зниклі, останнє —
+    не «знято».
 
     Порядок — найдавніша спроба першою (контроль обходить різні ключі)."""
     fresh_after = u.now - timedelta(hours=cfg.run.canary_fresh_hours)
@@ -436,7 +457,8 @@ def canary_keys(u: Universe, cfg) -> list[str]:
             continue
         if any(r.absent_since for r in rs):
             continue
-        if not any(r.last_seen and r.last_seen >= fresh_after for r in rs):
+        seen = own_feed_seen(cfg, u.key_host[k], rs)
+        if seen is None or seen < fresh_after:
             continue
         h = u.hist(k)
         latest = h.latest if h else None
@@ -444,6 +466,43 @@ def canary_keys(u: Universe, cfg) -> list[str]:
             continue
         out.append(k)
     out.sort(key=lambda k: (max((r.last_attempt or datetime.min) for r in u.groups[k]), k))
+    return out
+
+
+def random_keys(u: Universe, cfg, rng: random.Random, *, held=(), exclude=()
+                ) -> dict[str, list[str]]:
+    """Ярус random (D56): по хостах — `random_per_run` актуальних ключів, рівномірно
+    випадково без повторів (`rng`; кандидати впорядковані, тож вибір залежить лише від
+    зерна, а не від `_order` чи порядку рядків у базі). Не беруться: `exclude` (уже
+    взяті — контрольні), ключі під запобіжником (`key_held`, як у сліпому обході) і ті,
+    що чекають ярусу held (незастосоване «знято» після зняття запобіжника: власник,
+    відпускаючи, схвалив саме ці вердикти, і в частці вони не рахуються, E8).
+
+    Випадкові — СЛІПІ: без підказки, що ключ знято, і без обходу графіків повторів.
+    Тому не беруться й ключі, які веде підказаний ярус чи графік: зниклі з переліку
+    (absent_since — ярус absent; інакше в «випадкових» опинилась би купа справді знятих
+    і запобіжник тримав би за справжні зняття), з останнім вердиктом «не знайдено»
+    (серія 404 — ярус repeat404 зі своїм інтервалом) і на паузі після незрозумілих
+    відповідей (run.unknown_backoff_hours)."""
+    pending = set(unapplied_removal_keys(u, cfg, held))
+    pool: dict[str, list[str]] = defaultdict(list)
+    for k in u.active_keys:
+        if k in exclude or k in pending or (held and key_held(u, cfg, k, held)):
+            continue
+        rs = u.groups[k]
+        if any(r.absent_since for r in rs):
+            continue
+        h = u.hist(k)
+        if h and h.latest and h.latest[1] == "not_found":
+            continue
+        if not _backoff_ok(cfg, rs, u.now):
+            continue
+        pool[u.key_host[k]].append(k)
+    out: dict[str, list[str]] = {}
+    for host in sorted(pool):
+        n = cfg.hosts[host].random_per_run
+        keys = sorted(pool[host])
+        out[host] = rng.sample(keys, min(n, len(keys))) if n > 0 else []
     return out
 
 
@@ -600,9 +659,23 @@ def plan_run(session, cfg, *, now: datetime | None = None, hosts=None,
     hist = u.hist
     active_keys = u.active_keys
 
-    # 1. Контрольні: усі рядки актуальні, свіжі в стрічці, не зниклі, останнє — не «знято».
+    # 1. Контрольні: усі рядки актуальні, свіжі у власній стрічці, не зниклі, останнє —
+    # не «знято».
     if want(TIER_CANARY):
         fill(TIER_CANARY, by_host(canary_keys(u, cfg)), lambda h: cfg.hosts[h].canaries_per_run)
+
+    # 1b. Випадкові — одразу після контрольних (з усіх актуальних, а не з того, що
+    # лишили підказані): на них і контрольних стоїть 20% запобіжника (D56).
+    # Ручна стеля (`--limit`) — випадкових стільки ж ЧАСТКОЮ, як у звичайному прогоні
+    # (random_per_run / sweep_per_run від стелі): інакше випадкові з'їдали б усю стелю.
+    def random_cap(h: str) -> int:
+        spec = cfg.hosts[h]
+        if limit_per_host is None:
+            return spec.random_per_run
+        return limit_per_host * spec.random_per_run // max(spec.sweep_per_run, 1)
+
+    if want(TIER_RANDOM):
+        fill(TIER_RANDOM, random_keys(u, cfg, rng, held=held, exclude=taken), random_cap)
 
     hinted_left = {h: cfg.hosts[h].hinted_cap_per_run for h in picked}
 
@@ -711,11 +784,12 @@ def plan_run(session, cfg, *, now: datetime | None = None, hosts=None,
     if want(TIER_SAMPLE):
         fill(TIER_SAMPLE, removed, lambda h: cfg.hosts[h].removed_sample_per_run)
 
-    # 4. Сліпий обхід: ключі, яким настав строк, у порядку _order().
+    # 4. Сліпий обхід: ключі, яким настав строк, у порядку _order(); порція —
+    # sweep_per_run мінус узяті випадкові (D56: запитів на прогін не більшає).
     if want(TIER_SWEEP):
         fill(TIER_SWEEP, by_host(due_keys(u, cfg, session, held=held, exclude=taken)),
              lambda h: limit_per_host if limit_per_host is not None
-             else cfg.hosts[h].sweep_per_run)
+             else max(0, cfg.hosts[h].sweep_per_run - counts[h].get(TIER_RANDOM, 0)))
 
     for host, items in picked.items():
         items.sort(key=lambda i: PLAN_ORDER.index(i.tier))

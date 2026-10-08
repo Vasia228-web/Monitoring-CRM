@@ -87,6 +87,8 @@ def test_budgets_and_delays_come_from_config(db, tmp_path, monkeypatch):
     text = path.read_text(encoding="utf-8")
     text = text.replace("delay = 2.0\npace_source = \"olx\"", "delay = 0.5\npace_source = \"olx\"")
     text = text.replace("sweep_per_run = 450", "sweep_per_run = 7")
+    # Випадкові (D56) беруться з порції обходу — тут без них, щоб порція була видна.
+    text = text.replace("random_per_run = 30", "random_per_run = 0")
     path.write_text(text, encoding="utf-8")
     monkeypatch.setenv(configfiles.ENV_DIR, str(cfg_dir))
     for i in range(20):

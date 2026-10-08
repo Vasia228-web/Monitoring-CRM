@@ -282,11 +282,17 @@ class LivenessRemovedSample:
 class LivenessFuse:
     mode: str = field(**_limits(choices=("literal", "tiered")))
     share: float = field(**_limits(min=0, max=1))
+    # Лише tiered, пул випадкових і контрольних (D56): wilson95 — тримати, коли нижня
+    # межа 95% інтервалу Вілсона частки «знято» понад `share`; raw — сама частка.
+    share_test: str = field(**_limits(choices=("wilson95", "raw")))
     min_checked: int = field(**_limits(min=1))
     hinted_share: float = field(**_limits(min=0, max=1))
     hinted_min_checked: int = field(**_limits(min=1))
     canary_trip_min: int = field(**_limits(min=1))
     window_hours: float = field(**_limits(min=0))
+    # Лише tiered: пул випадкових і контрольних, що в прогоні не набрав min_checked, —
+    # разом із такими перевірками за стільки годин (і в кроці циклу, D56).
+    random_window_hours: float = field(**_limits(min=0))
 
 
 @dataclass(frozen=True)
@@ -413,14 +419,25 @@ class LivenessHost:
     existence: tuple[str, ...]
     recheck_days: float = field(**_limits(min=0))
     sweep_per_run: int = field(**_limits(min=0))
+    # Випадкові ключі на прогін (ярус random, D56) — З порції sweep_per_run: сліпий
+    # обхід бере sweep_per_run мінус узяті випадкові, запитів на прогін не більшає.
+    random_per_run: int = field(**_limits(min=0))
     hinted_cap_per_run: int = field(**_limits(min=0))
     removed_sample_per_run: int = field(**_limits(min=0))
     canaries_per_run: int = field(**_limits(min=0))
+    # Чия стрічка робить ключ контрольним (D56): свіжа поява лише в рядку цих джерел
+    # (власний збирач сайту; rieltor — lun), а не будь-якої копії ключа.
+    canary_sources: tuple[str, ...]
 
     def problems(self) -> list[str]:
         out: list[str] = []
         if not self.family.strip():
             out.append("family: порожньо")
+        if self.random_per_run > self.sweep_per_run:
+            out.append(f"random_per_run: {self.random_per_run} — понад sweep_per_run "
+                       f"({self.sweep_per_run}): випадкові беруться з порції сліпого обходу")
+        if self.checkable and self.canaries_per_run > 0 and not self.canary_sources:
+            out.append("canary_sources: порожньо, а canaries_per_run > 0 — контрольних не буде")
         # НЕДОТОРКАНЕ ПРАВИЛО (рішення власника 1, D46): один 404 — «не знайдено».
         if 404 in self.removed_statuses:
             out.append("removed_statuses: 404 не може бути явним сигналом «знято» — лише "
@@ -477,11 +494,17 @@ class LivenessConfig:
     hosts: dict[str, LivenessHost]
 
     def problems(self) -> list[str]:
+        from .config import SOURCES
+
         out: list[str] = []
         families: dict[str, str] = {}
         for host, spec in self.hosts.items():
             if host != host.strip().lower() or host.startswith(("www.", "m.")):
                 out.append(f"hosts.{host}: хост — малими літерами, без www./m.")
+            unknown = [s for s in spec.canary_sources if s not in SOURCES]
+            if unknown:
+                out.append(f"hosts.{host}.canary_sources: невідомі джерела {unknown} "
+                           f"(відомі: {', '.join(sorted(SOURCES))})")
             if spec.family in families:
                 out.append(f"hosts.{host}: сімейство «{spec.family}» уже має хост "
                            f"{families[spec.family]}")

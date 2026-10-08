@@ -25,8 +25,12 @@
                     перевіряємо знову;
   onetime_hinted  — M3: актуальні ключі без ЖОДНОЇ відповіді новим підписом, зниклі з
                     повного переліку (absent_since), — давніші першими;
-  onetime_blind   — M3: решта таких ключів, випадково із зерном (той самий порядок
-                    щоночі — до кого черга не дійшла, ті наступного вікна першими);
+  onetime_blind   — M3: решта таких ключів, рівномірно випадково (D56): зерно —
+                    onetime_seed і ніч (обидва вікна ночі — той самий порядок, до кого
+                    черга не дійшла в першому, ті в другому першими; наступна ніч —
+                    новий порядок). Прохід одноразовий і однаково дійде до всіх ключів:
+                    порядок впливає лише на зміщення оцінки частки «знято», а M3 у
+                    tiered — у пулі 20% запобіжника разом із контрольними;
   rm_sample       — вибірка знятих за removed_sample.window_days (порція — night.toml);
   overdue         — догін: лише якщо прострочених ключів хоста (немає зрозумілої
                     перевірки новим підписом за 2 × recheck_days) понад
@@ -139,13 +143,26 @@ def overdue_share(u: queue.Universe, cfg, host: str) -> float | None:
     return round(late / len(keys), 4)
 
 
+def night_key(now: datetime, attempted_since: datetime | None = None,
+              night: str | None = None) -> str:
+    """Ключ ночі для зерна M3: місцева дата ночі (windows.Window.night_date), інакше —
+    старт першого вікна ночі (той самий для обох вікон), інакше — дата `now`."""
+    if night:
+        return night
+    if attempted_since is not None:
+        return attempted_since.isoformat(timespec="minutes")
+    return now.date().isoformat()
+
+
 def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
           attempted_since: datetime | None = None, skip_hosts: dict | None = None,
-          hosts=None) -> NightPlan:
+          hosts=None, night: str | None = None) -> NightPlan:
     """План ночі. `now` — UTC без зони (як у базі); `held` — джерела й сайти під
     запобіжником; `attempted_since` — старт першого вікна цієї ночі (UTC): ключі, які
-    відтоді вже пробували, не беруться; `skip_hosts` — {хост: чому без смуги}."""
+    відтоді вже пробували, не беруться; `skip_hosts` — {хост: чому без смуги};
+    `night` — місцева дата ночі (зерно порядку M3, `night_key`)."""
     held = set(held)
+    nkey = night_key(now, attempted_since, night)
     skip_hosts = dict(skip_hosts or {})
     order = [j for j in ncfg.jobs.order if j != "identity"]
     u = queue.universe(session, lcfg, now=now, hosts=hosts, history_since=EPOCH)
@@ -222,7 +239,7 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
         elif job in (queue.TIER_M2_LEGACY404, queue.TIER_M2_RESEEN):
             fill(job, m2(job))
         elif job in (queue.TIER_M3_HINTED, queue.TIER_M3_BLIND):
-            fill(job, _m3_keys(u, lcfg, job, ncfg.jobs.onetime_seed))
+            fill(job, _m3_keys(u, lcfg, job, ncfg.jobs.onetime_seed, nkey))
         elif job == queue.TIER_SAMPLE:
             rng = random.Random(f"{ncfg.jobs.onetime_seed}:{now.date().isoformat()}")
             sample = queue.removed_sample_keys(u, lcfg, rng, exclude=taken)
@@ -274,9 +291,11 @@ def _m2_keys(u: queue.Universe, cfg, tier: str, legacy: set[int], by_404: set[in
     return [k for _, k in out]
 
 
-def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int) -> list[str]:
+def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int, night: str) -> list[str]:
     """Ключі M3: актуальні без жодної відповіді новим підписом; hinted — зниклі з
-    переліку (давніші першими), blind — решта, випадково із зерном (по хостах)."""
+    переліку (давніші першими), blind — решта, рівномірно випадкова перестановка (по
+    хостах) із зерном onetime_seed + ніч + хост: від `_order` чи порядку рядків у базі
+    не залежить (кандидати спершу впорядковано за ключем), щоночі — нова (D56)."""
     hinted, blind = [], defaultdict(list)
     for key in u.active_keys:
         if _answered(u.hist(key)):
@@ -294,6 +313,6 @@ def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int) -> list[str]:
     out = []
     for host in sorted(blind):
         keys = sorted(blind[host])
-        random.Random(f"{seed}:{host}").shuffle(keys)
+        random.Random(f"{seed}:{night}:{host}").shuffle(keys)
         out += keys
     return out

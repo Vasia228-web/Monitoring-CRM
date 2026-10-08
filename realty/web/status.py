@@ -267,8 +267,10 @@ def api_liveness():
         cfg = configfiles.get("liveness")
         body["fuse_mode"] = cfg.fuse.mode
         body["fuse_rule"] = {"share": cfg.fuse.share, "min_checked": cfg.fuse.min_checked,
+                             "share_test": cfg.fuse.share_test,
                              "hinted_share": cfg.fuse.hinted_share,
-                             "canary_trip_min": cfg.fuse.canary_trip_min}
+                             "canary_trip_min": cfg.fuse.canary_trip_min,
+                             "random_window_hours": cfg.fuse.random_window_hours}
     except configfiles.ConfigError as e:
         log.error("config/liveness.toml не читається: %s", e)
         body["fuse_mode"] = None
