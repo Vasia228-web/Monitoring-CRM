@@ -1,0 +1,25 @@
+{#- Поле пошуку за посиланням у верхній панелі (Блок 5, E14, D59): кожна сторінка, обидві
+    ролі. Лише конфіг із пам'яті процесу (find_ui) — жодного запиту до бази. Текст
+    надсилається POST-ом (тіло не потрапляє ні в журнал, ні в історію браузера), далі
+    сервер переходить 303 на квартиру. Блок позначений <!--find-box-->: порівняння
+    сторінок «до/після» (scripts/page_equality.py) його вирізає. -#}
+{%- set fui = find_ui() -%}
+{%- if fui -%}
+<!--find-box--><style>
+form.find{display:flex;gap:6px;align-items:center;flex:0 1 360px;min-width:0;margin:0}
+form.find input{flex:1 1 auto;min-width:0;width:100%;font:inherit;font-size:14px;color:var(--ink);
+  background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px;
+  box-shadow:var(--shadow)}
+form.find input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+form.find button{font:inherit;font-size:13.5px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--line);background:var(--card);color:var(--ink-2);white-space:nowrap}
+form.find button:hover{border-color:var(--accent);color:var(--accent)}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (max-width:820px){
+  form.find{order:10;flex:1 1 100%}
+  /* 16 px — менше iOS збільшує сторінку при натисканні на поле. */
+  form.find input{font-size:16px;padding:9px 12px}
+  form.find button{padding:9px 14px}
+}
+</style><form class="find" method="post" action="/find" role="search" autocomplete="off"><label class="vh" for="find-q">{{ fui.label }}</label><input id="find-q" type="search" name="q" required maxlength="{{ fui.max_input_chars }}" placeholder="{{ fui.placeholder }}" title="{{ fui.label }}" inputmode="url" enterkeyhint="search" autocapitalize="none" autocorrect="off" spellcheck="false"><button type="submit">{{ fui.button }}</button></form><!--/find-box-->
+{%- endif -%}

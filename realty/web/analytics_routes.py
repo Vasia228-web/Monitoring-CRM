@@ -199,7 +199,8 @@ def _analyse(session, property_id: int, cfg) -> dict | None:
 
 
 @router.get("/property/{property_id}", response_class=HTMLResponse)
-def property_page(request: Request, property_id: int, verify: str = Query("1")):
+def property_page(request: Request, property_id: int, verify: str = Query("1"),
+                  hl: str = Query("")):
     """Аналітика однієї квартири — головна відповідь «краща чи гірша за ринок».
 
     GET нічого не пише й у мережу не ходить (Блок 2, крок E5): перегляд — у
@@ -229,6 +230,11 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
                 status_code=404)
         # Оголошення потрібні шаблону для кнопки «взяти в обробку».
         data["rows"] = property_rows(s, property_id)
+        # Пошук за посиланням (Блок 5, E14, D59): ?hl=<ключ «сайт:id»> — плашка зі станом
+        # знайденого оголошення й підсвічування; з тих самих рядків, без нового запиту.
+        from .find_routes import found_context
+        data["find_hl"] = found_context(data["rows"], hl,
+                                        getattr(request.state, "role", None))
         from . import speedcache
         from .app import places_ready
 

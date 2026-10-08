@@ -1,0 +1,28 @@
+{#- Плашка «Знайдено за посиланням» (Блок 5, E14, D59): стан знайденого оголошення простими
+    словами — активне, знято дд.мм.рррр, у карантині з причиною, актуальність не
+    підтверджена (Благо). Лише з ?hl=<ключ «сайт:id»>; знайдені рядки нижче підсвічені.
+    Позначено <!--find-hl-->: порівняння сторінок «до/після» його вирізає. -#}
+{%- set fh = find_hl -%}
+<!--find-hl--><style>
+.found{margin:14px 0 4px;padding:12px 14px;border-radius:10px;background:var(--accent-soft);
+  border:1px solid var(--accent);font-size:14px;line-height:1.55;scroll-margin-top:12px}
+.found ul{margin:6px 0 0;padding-left:18px}
+.found .fcheck{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:8px}
+.found .fbtn{font:inherit;font-size:13.5px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--accent);background:var(--accent);color:#fff}
+.found .fbtn:disabled{opacity:.55;cursor:progress}
+.found .fmsg a{color:var(--accent)}
+.srclist li.hl,.fixtbl tr.hl td{background:var(--accent-soft)}
+.srclist li.hl{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+</style><div class="found" id="found" role="status">
+  <b>{{ fh.msg.found_banner }}</b>: {{ fh.site }} · {{ fh.id }}
+  <ul>
+  {%- for f in fh.found %}
+    <li>{{ fh.sites.get(f.source, f.source) }} —
+      {% if f.status == 'removed' %}{{ fh.msg.status_removed }}{% if f.removed_at %} {{ f.removed_at.strftime('%d.%m.%Y') }}{% endif %}{% elif f.status == 'manual_off' %}{{ fh.msg.status_manual_off }}{% else %}{{ fh.msg.status_active }}{% endif %}
+      {%- if f.quality == 'quarantine' %}; {{ fh.msg.status_quarantine }}{% if f.quality_reason %}: {{ f.quality_reason[:200] }}{% endif %}{% elif f.quality == 'pending' %}; {{ fh.msg.status_pending }}{% endif %}
+      {%- if f.unconfirmed %}{% set um = liveness_marker(f.url) %}{% if um %}; <span title="{{ um.hint }}">{{ um.label }}</span>{% endif %}{% endif %}</li>
+  {%- endfor %}
+  </ul>
+  {% if fh.check_q %}{% with check_q=fh.check_q, msg=fh.msg, check_cfg=fh.check_cfg %}{% include "_find_check.html" %}{% endwith %}{% endif %}
+</div><!--/find-hl-->

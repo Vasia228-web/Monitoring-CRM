@@ -74,6 +74,12 @@ POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/property/{property_id}/liveness"): FRIEND,
     # «Райони й ЖК» (Блок 4, E10, D57): розподіл за районами й ЖК — обидві ролі.
     ("GET", "/places"): FRIEND,
+    # Пошук за посиланням і «Перевірити зараз» (Блок 5, E14, D59): обидві ролі (D47 п. 9),
+    # перевірка — з лімітом на роль у config/lookup.toml; стан перевірки — лише читання.
+    ("POST", "/find"): FRIEND,
+    ("GET", "/find"): FRIEND,
+    ("POST", "/api/find/check"): FRIEND,
+    ("GET", "/api/find/check/{job_id}"): FRIEND,
     # Документація API — за входом, як і все, що не відкрите явно.
     ("GET", "/openapi.json"): FRIEND,
     ("GET", "/api/docs"): FRIEND,
@@ -101,7 +107,7 @@ OWNER_U, OWNER_PW = "vasia", "пароль власника 1"
 FRIEND_U, FRIEND_PW = "druh", "druh-pass-2"
 SITE = "https://mojkvartiry.test"
 SAMPLE_PARAMS = {"property_id": "1", "listing_id": "1", "decision_id": "1",
-                 "ip": "203.0.113.250"}
+                 "ip": "203.0.113.250", "job_id": "1"}
 
 
 # Позначки «методу» для маршрутів, яких AuthMiddleware не бачить: класифікувати

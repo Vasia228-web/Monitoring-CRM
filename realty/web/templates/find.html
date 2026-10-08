@@ -1,0 +1,80 @@
+{% extends "_layout.html" %}
+{#- Пошук за посиланням (Блок 5, E14, D59): вибір між квартирами або причина «не знайдено».
+    Сюди приходять лише ключ «сайт:id», канонічна адреса чи код причини — не сирий
+    вставлений текст. Усі тексти — config/lookup.toml [messages]. -#}
+{% block title %}Пошук за посиланням · Нерухомість Івано-Франківська{% endblock %}
+{% block head %}
+<style>
+.fwrap{max-width:780px}
+.frec{font-size:14px;color:var(--ink-2);margin:0 0 10px}
+.frec b{color:var(--ink);font-weight:600}
+.fwhy{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+  margin:0 0 16px;box-shadow:var(--shadow);font-size:14.5px;line-height:1.55}
+.fwhy p{margin:0 0 6px}.fwhy p:last-child{margin:0}
+.fopts{list-style:none;padding:0;margin:0 0 16px;display:grid;gap:10px}
+.fopts li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+  box-shadow:var(--shadow)}
+.fopts a.go{font-weight:600;color:var(--accent);text-decoration:none;font-size:15px}
+.fopts a.go:hover{text-decoration:underline}
+.fopts .meta{display:block;color:var(--ink-2);font-size:13.5px;margin-top:3px;overflow-wrap:anywhere}
+.fopts .st{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
+.fcheck{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:8px}
+.fcheck .fbtn{font:inherit;font-size:14px;padding:8px 14px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--accent);background:var(--accent);color:#fff}
+.fcheck .fbtn:disabled{opacity:.55;cursor:progress}
+.fcheck .fmsg{font-size:14px;color:var(--ink-2)}
+.fcheck .fmsg a{color:var(--accent)}
+.fhelp{font-size:13px;color:var(--muted);margin-top:20px;line-height:1.6}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fwrap">
+<header style="margin-bottom:18px"><h1>Пошук за посиланням</h1></header>
+
+{% if recognized %}
+  <p class="frec">Впізнали: <b>{{ recognized.site }}</b> · {{ recognized.id }}</p>
+{% endif %}
+
+<div class="fwhy" role="status">
+  <p>{{ msg[res.code] if res.code in msg else msg.unrecognized }}</p>
+  {% if res.kind == 'choice' and res.code == 'multi_property' and is_owner %}<p>{{ msg.multi_property_owner }}</p>{% endif %}
+  {% if res.code == 'not_in_db' %}
+    {% if offer.q %}<p>{{ msg.check_hint }}</p>
+    {% elif offer.why %}<p>{{ msg[offer.why] }}</p>{% endif %}
+  {% endif %}
+  {% if offer.q %}{% with check_q=offer.q %}{% include "_find_check.html" %}{% endwith %}{% endif %}
+</div>
+
+{% if options %}
+  <ul class="fopts">
+  {% for o in options %}
+    {% set i = o.info %}
+    <li>
+      <a class="go" href="/property/{{ o.property_id }}{% if o.key %}?hl={{ o.key | urlencode }}#found{% endif %}">Квартира №{{ o.property_id }} →</a>
+      {% if o.via %}<span class="st">{% if o.via[0] == 'own' %}номер квартири на нашому сайті{% else %}{{ sites.get(o.via[0], o.via[0]) }}, оголошення {{ o.via[1] }}{% endif %}</span>{% endif %}
+      <span class="meta">
+        {%- if i.rooms %}{{ i.rooms }}-кімн.{% endif %}
+        {%- if i.area %} · {{ i.area | round(1) }} м²{% endif %}
+        {%- if i.price %} · ${{ i.price | round | int | money }}{% endif %}
+        {%- if i.address %} · {{ i.address }}{% endif %}
+        {%- if i.district %} · {{ i.district }}{% endif %}
+        {%- if i.listings %} · {{ i.listings }} {{ i.listings | plural('оголошення', 'оголошення', 'оголошень') }}{% endif %}
+      </span>
+      {% for f in o.found %}
+        <span class="st">{{ sites.get(f.source, f.source) }}:
+          {% if f.status == 'removed' %}{{ msg.status_removed }}{% if f.removed_at %} {{ f.removed_at.strftime('%d.%m.%Y') }}{% endif %}{% elif f.status == 'manual_off' %}{{ msg.status_manual_off }}{% else %}{{ msg.status_active }}{% endif %}
+          {%- if f.quality == 'quarantine' %}; {{ msg.status_quarantine }}{% if f.quality_reason %} ({{ f.quality_reason[:160] }}){% endif %}{% elif f.quality == 'pending' %}; {{ msg.status_pending }}{% endif %}
+        </span>
+      {% endfor %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% if more %}<p class="fhelp">Ще {{ more }} — уточніть посилання.</p>{% endif %}
+{% endif %}
+
+<p class="fhelp">Вставте у поле вгорі посилання на оголошення з DIM.RIA, OLX, ЛУН, rieltor.ua,
+  flombu чи Благо (з телефона — «Поділитися» → «Копіювати»), посилання на квартиру на нашому
+  сайті, її номер (№123) або id оголошення.</p>
+</div>
+{% endblock %}

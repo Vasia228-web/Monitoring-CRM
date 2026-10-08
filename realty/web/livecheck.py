@@ -176,6 +176,15 @@ class LiveCheck:
         self.start()
         self._wake.set()
 
+    def watch(self, job_id: int) -> None:
+        """Завдання «Перевірити зараз» (Блок 5, E14, D59) — під той самий нагляд:
+        запуск процесу перевірки (зараз або після циклу) і скидання кешів списку,
+        якщо перевірка додала, зняла чи повернула оголошення. Без вводу-виводу."""
+        with self._lock:
+            self._watch.setdefault(int(job_id), None)
+        self.start()
+        self._wake.set()
+
     def join(self, timeout: float | None = 10) -> bool:
         """Дочекатися, поки всі запити розіслано (тести)."""
         return self._idle.wait(timeout)
@@ -309,7 +318,7 @@ class LiveCheck:
             # Перший оберт після старту сайту: завдання, поставлені до перезапуску
             # (відкладені на цикл чи не взяті), — під той самий нагляд.
             cfg = _cfg()
-            leftovers = queue.unfinished(queue.KIND_OPENED, timeout_s=cfg.job_timeout_s,
+            leftovers = queue.unfinished(queue.WORKER_KINDS, timeout_s=cfg.job_timeout_s,
                                          deferred_max_age_s=opened.DEFERRED_MAX_AGE_S)
             with self._lock:
                 for job_id, pid in leftovers:
@@ -331,7 +340,7 @@ class LiveCheck:
         cfg = _cfg()
         if opened.collector_off() or opened.cycle_busy() is not None:
             return
-        nxt = queue.next_runnable(queue.KIND_OPENED, timeout_s=cfg.job_timeout_s,
+        nxt = queue.next_runnable(queue.WORKER_KINDS, timeout_s=cfg.job_timeout_s,
                                   deferred_max_age_s=opened.DEFERRED_MAX_AGE_S,
                                   include_deferred=True)
         if nxt is not None:

@@ -105,8 +105,13 @@ def execute(job_id: int) -> tuple[str, dict]:
     job = queue.get(job_id)
     if job is None:
         return "missing", {}
+    if job.kind == queue.KIND_LINK:
+        # «Перевірити зараз» за посиланням (Блок 5, E14, D59) — той самий процес і
+        # ті самі правила замка циклу й COLLECTOR_OFF, свій адаптер сайту.
+        from . import link
+        return link.execute(job_id)
     if job.kind != queue.KIND_OPENED:
-        return "foreign", {}              # чуже завдання (Блок 5) — не наше
+        return "foreign", {}              # невідомий вид — не наше
     if job.state not in queue.RUNNABLE:
         return "taken", {}
     if collector_off():
@@ -182,7 +187,7 @@ def run(job_id: int, *, drain: bool = True, budget_s: float, timeout_s: float,
     done: list[tuple[int, str]] = []
     seen: set[int] = set()
     try:
-        queue.expire_deferred(queue.KIND_OPENED, max_age_s=deferred_max_age_s)
+        queue.expire_deferred(queue.WORKER_KINDS, max_age_s=deferred_max_age_s)
         nxt: int | None = job_id
         while True:
             if nxt is not None:
@@ -193,14 +198,14 @@ def run(job_id: int, *, drain: bool = True, budget_s: float, timeout_s: float,
                     _announce(result)
                 if not drain or time.monotonic() - started >= budget_s:
                     break
-            nxt = queue.next_runnable(queue.KIND_OPENED, timeout_s=timeout_s,
+            nxt = queue.next_runnable(queue.WORKER_KINDS, timeout_s=timeout_s,
                                       deferred_max_age_s=deferred_max_age_s,
                                       include_deferred=cycle_busy() is None, exclude=seen)
             if nxt is not None:
                 continue
             # Черга порожня: відпустити замок і глянути ще раз (див. докстрінг).
             lock.release()
-            nxt = queue.next_runnable(queue.KIND_OPENED, timeout_s=timeout_s,
+            nxt = queue.next_runnable(queue.WORKER_KINDS, timeout_s=timeout_s,
                                       deferred_max_age_s=deferred_max_age_s,
                                       include_deferred=cycle_busy() is None, exclude=seen)
             if nxt is None or not lock.acquire():

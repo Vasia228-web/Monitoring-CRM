@@ -306,6 +306,12 @@ class LookupCheck(OpsBase):
     pid: Mapped[int | None] = mapped_column(Integer)
     message: Mapped[str | None] = mapped_column(String(200))
     result: Mapped[str | None] = mapped_column(Text)             # JSON: checked/delisted/…
+    # Блок 5 (E14, D59), завдання kind="link" («Перевірити зараз»): роль, що
+    # поставила (ліміт на роль за годину), і канонічна адреса запиту — без query,
+    # без піддомену агенції (з config/links.toml fetch_url); стирається, щойно
+    # завдання закрито. Сирого вставленого тексту тут немає ніколи.
+    role: Mapped[str | None] = mapped_column(String(8))
+    target: Mapped[str | None] = mapped_column(String(512))
 
 
 class LivenessRun(OpsBase):

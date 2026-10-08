@@ -274,7 +274,7 @@ tr.taken td{background:var(--accent-soft)}
       <a href="{{ carry('/analytics', f) }}" class="{{ 'on' if page == 'analytics' }}">Аналітика</a>
       <a href="{{ carry('/places', f) }}" class="{{ 'on' if page == 'places' }}">Райони й ЖК</a>
     </span>
-    <span class="spacer"></span>
+    <span class="spacer"></span>{% include "_find_box.html" %}
     {% set role = current_role(request) %}
     <span class="nav">
       {# «Стан системи» — лише власнику: там запуск збору й блокування входів. #}

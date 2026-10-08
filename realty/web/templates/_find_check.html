@@ -1,0 +1,16 @@
+{#- Кнопка «Перевірити зараз» (Блок 5, E14, D59). `check_q` — ключ «сайт:id» або
+    канонічна адреса (без query); `msg` — тексти config/lookup.toml; `check_cfg` — [check].
+    Сайт лише ставить завдання в чергу; результат — опитуванням /api/find/check/<job>.
+    Тексти — лише через textContent; посилання — лише на /property/… цього сайту. -#}
+<span class="fcheck" data-q="{{ check_q }}" data-poll="{{ check_cfg.poll_ms|int }}" data-wait="{{ (check_cfg.wait_max_s * 1000)|int }}" data-long="{{ msg.check_waiting_long }}" data-fail="{{ msg.check_failed }}">
+  <button type="button" class="fbtn">{{ msg.check_button }}</button>
+  <span class="fmsg" role="status" aria-live="polite"></span>
+</span>
+<script>(function(){try{
+var box=document.currentScript.previousElementSibling,btn=box.querySelector("button"),out=box.querySelector(".fmsg");
+var poll=+box.dataset.poll||1500,cap=+box.dataset.wait||180000,t0=0;
+function say(d){out.textContent=(d&&d.text)||box.dataset.fail;var u=d&&d.property_url;if(u&&u.indexOf("/property/")===0){var a=document.createElement("a");a.href=u;a.textContent=" Відкрити квартиру →";out.appendChild(a);}}
+function watch(job){fetch("/api/find/check/"+encodeURIComponent(job),{cache:"no-store",headers:{"Accept":"application/json"}}).then(function(r){return r.json();}).then(function(d){say(d);if(!d.final){if(Date.now()-t0<cap)setTimeout(function(){watch(job);},poll);else out.textContent=box.dataset.long;}}).catch(function(){out.textContent=box.dataset.fail;});}
+btn.addEventListener("click",function(){btn.disabled=true;t0=Date.now();
+fetch("/api/find/check",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify({q:box.dataset.q})}).then(function(r){return r.json().then(function(d){return [r.status,d];});}).then(function(x){var st=x[0],d=x[1];say(d);if(st===202&&d.job&&!d.final)setTimeout(function(){watch(d.job);},poll);}).catch(function(){out.textContent=box.dataset.fail;});});
+}catch(e){}})();</script>
