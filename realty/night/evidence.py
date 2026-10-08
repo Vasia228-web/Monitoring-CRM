@@ -256,8 +256,13 @@ def olx_tabs_plan(ncfg, scfg, *, now: datetime, night_start: datetime | None,
     sweep = st.get("business") or {}
     done_at, started_at = _iso_dt(sweep.get("finished_at")), _iso_dt(sweep.get("started_at"))
     parts = partitions(scfg)
+    ignored_at = _iso_dt(sweep.get("filter_ignored_at"))
     if done_at is not None and now - done_at < every:
         remaining: list = []
+    elif ignored_at is not None and now - ignored_at < every:
+        # Фільтр зрізів не діяв (той самий перший екран) — нове коло лише через тиждень,
+        # а не щовікна по два рендери-повтори.
+        remaining = []
     elif started_at is not None and done_at is None and now - started_at < every:
         done = set(sweep.get("done") or ())
         remaining = [p for p in parts if _part_id(p) not in done]

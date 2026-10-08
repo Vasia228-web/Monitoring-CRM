@@ -479,9 +479,14 @@ def check_night(now: datetime) -> list[Alert]:
             lane_info = {}
         for host, d in lane_info.items():
             if d.get("stopped") in ("blocks", "block_share"):
+                # Запити смуги — перевірки, дозбір identity і рендери доказів (E11, D60).
+                blocked = sum(int(d.get(k) or 0) for k in ("blocked", "identity_blocked",
+                                                           "evidence_blocked"))
+                total = sum(int(d.get(k) or 0) for k in ("requests", "identity_requests",
+                                                         "evidence_requests"))
                 alerts.append(Alert(f"night-blocked:{host}", (
-                    f"🌙🚧 {when}: смугу {host} зупинили блокування ({d.get('blocked')} із "
-                    f"{d.get('requests')} запитів — 401/403/429) — до кінця ночі цей сайт "
+                    f"🌙🚧 {when}: смугу {host} зупинили блокування ({blocked} із "
+                    f"{total} запитів — 401/403/429/капча) — до кінця ночі цей сайт "
                     f"не перевіряємо. Повториться наступної ночі — хост чекатиме рішення.")))
     for host, held_since, reason in hold_rows:
         alerts.append(Alert(f"night-hold:{host}", (

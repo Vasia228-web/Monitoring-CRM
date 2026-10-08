@@ -187,6 +187,10 @@ def test_business_partitions_that_ignore_the_filter_stop_the_sweep(db):
     assert len(rnd.log) == 2 and ev["tabs"]["business"]["filter_ignored"]
     st = evidence.state_get(evidence.OLX_TABS_STATE)["business"]
     assert st["filter_ignored_at"] and not st.get("finished_at")
+    # Наступне вікно не палить рендери на ті самі повтори — нове коло через тиждень.
+    later = datetime.fromisoformat(st["filter_ignored_at"]) + timedelta(hours=3)
+    plan = evidence.olx_tabs_plan(ncfg, scfg, now=later, night_start=later, active_keys=10)
+    assert not plan["business"]["due"]
 
 
 def test_five_captchas_in_a_row_stop_the_lane_and_the_watchdog_alerts(db):
@@ -206,7 +210,8 @@ def test_five_captchas_in_a_row_stop_the_lane_and_the_watchdog_alerts(db):
                            lanes=json.dumps({"olx.ua": {k: v for k, v in summary.items()
                                                         if k != "t"}})))
     alerts = watchdog.check_night(utc_of(time.time()))
-    assert any(a.key == "night-blocked:olx.ua" for a in alerts)
+    alert = next(a for a in alerts if a.key == "night-blocked:olx.ua")
+    assert "5 із 5 запитів" in alert.text                     # рендери — у тих самих числах
 
 
 def test_no_render_starts_within_the_deadline_margin_or_with_low_memory(db):
