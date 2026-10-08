@@ -186,8 +186,8 @@ class FlombuSource(BaseSource):
         else:
             # Стеля сторінок: повний, лише якщо сайт сам сказав, що сторінок не більше.
             if page is not None and (total is None or page < total):
-                self.enum_incomplete(f"стеля {self.cfg.max_pages} сторінок, а сайт каже "
-                                     f"{total if total is not None else 'невідомо скільки'}")
+                self.cap_reached(self.cfg.max_pages, "сайт каже сторінок: "
+                                 f"{total if total is not None else 'невідомо скільки'}")
 
     def _parse(self, item: dict, geo: dict) -> dict:
         a = item.get("attributes") or {}

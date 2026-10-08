@@ -209,8 +209,7 @@ class LunSource(BaseSource):
                 break
         else:
             # Дійшли до стелі сторінок, а остання ще мала об'єкти: далі не дивились.
-            self.enum_incomplete(f"стеля {self.cfg.max_pages} сторінок, а сторінки ще не "
-                                 f"скінчились")
+            self.cap_reached(self.cfg.max_pages, "сторінки ще не скінчились")
 
     def _parse(self, d: dict, rows: dict[str, str] | None = None) -> dict:
         rows = rows or {}

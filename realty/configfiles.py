@@ -1511,6 +1511,13 @@ class AlertsUnits:
 
 
 @dataclass(frozen=True)
+class AlertsListCap:
+    # Перелік уперся в стелю сторінок (ops.list_caps) — попередження, поки останній такий
+    # випадок не давніший за стільки годин (власник 09.10: не тихе обрізання).
+    window_hours: float = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
 class AlertsConfig:
     """`config/alerts.toml` — тривоги на два рівні (рішення власника 08.10, D55 п. 6; D58).
 
@@ -1526,6 +1533,7 @@ class AlertsConfig:
     site: AlertsSite
     integrity: AlertsIntegrity
     units: AlertsUnits
+    list_cap: AlertsListCap
 
     def problems(self) -> list[str]:
         import re

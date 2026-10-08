@@ -501,6 +501,14 @@ class OlxJobs:
                 self.private_now.update(info["keys"])
             if not info["next"] or not info["keys"]:
                 break
+        else:
+            # Стеля сторінок вкладки, а наступна сторінка ще є — членство неповне; не тихо,
+            # а в щоденне зведення (власник 09.10).
+            out["cap_hit"] = True
+            from .. import ops
+            ops.record_list_cap("olx", "olx_tab", max_pages,
+                                f"вкладка «{tab}»{' ' + _part_id(part) if part else ''}: "
+                                f"наступна сторінка ще є")
         return out
 
     def _tabs(self, plan: dict) -> None:

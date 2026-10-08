@@ -233,6 +233,9 @@ class OlxSource(BaseSource):
                 except Exception as e:
                     log.debug("OLX: картка не розібралась: %s", e)
             self.end_page()
+        else:
+            # Дійшли до стелі, а остання сторінка ще мала нові — нове могло лишитись глибше.
+            self.cap_reached(self.cfg.max_pages, "нових оголошень на останній сторінці")
 
     def _page_url(self, page: int) -> str:
         params = [RECENT_FIRST, IN_USD] + ([f"page={page}"] if page > 1 else [])

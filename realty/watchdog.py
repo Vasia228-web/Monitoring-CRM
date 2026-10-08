@@ -582,6 +582,46 @@ def check_night(now: datetime) -> list[Alert]:
     return alerts
 
 
+LIST_CAP_KIND = {"full": "повний перелік", "fresh": "звичайний збір",
+                 "feed": "нічний прохід стрічки", "olx_tab": "вкладка пошуку OLX (нічні рендери)"}
+LIST_CAP_FIX = {
+    "full": "стеля — realty/config.py SOURCES.full_pages; різниця списків і перевірка "
+            "існування цього джерела без свіжого переліку",
+    "fresh": "нове оголошення могло лишитись глибше за стелю; стеля — realty/config.py "
+             "SOURCES.max_pages",
+    "feed": "решту сторінок прохід не дочитав; стеля — config/night.toml feed.max_pages",
+    "olx_tab": "членство у вкладці неповне; стеля — config/seller.toml (olx_tabs)",
+}
+
+
+def check_list_caps(now: datetime) -> list[Alert]:
+    """Перелік джерела вперся в стелю сторінок, а сторінки ще не скінчились (власник 09.10:
+    «попередження в щоденному зведенні, а не тихе обрізання»). Одне попередження на
+    (джерело, вид) — поки останній випадок не давніший за alerts.toml list_cap.window_hours;
+    у тексті — скільки разів за вікно, стеля й подробиця останнього."""
+    from sqlalchemy import select
+
+    hours = _alerts_cfg().list_cap.window_hours
+    ops.init_ops()
+    with ops.ops_session() as s:
+        rows = s.execute(select(ops.ListCap.source, ops.ListCap.kind, ops.ListCap.cap,
+                                ops.ListCap.detail, ops.ListCap.at)
+                         .where(ops.ListCap.at >= now - timedelta(hours=hours))
+                         .order_by(ops.ListCap.at)).all()
+    grouped: dict[tuple[str, str], list] = {}
+    for r in rows:
+        grouped.setdefault((r.source, r.kind), []).append(r)
+    alerts = []
+    for (source, kind), items in sorted(grouped.items()):
+        last = items[-1]
+        times = f", {len(items)} рази" if len(items) > 1 else ""
+        alerts.append(Alert(f"list-cap:{source}-{kind}".replace("_", "-"), (
+            f"📄 {source}: {LIST_CAP_KIND.get(kind, kind)} уперся в стелю {last.cap} сторінок "
+            f"({_ago(last.at, now)}{times}) — {last.detail or 'сторінки ще не скінчились'}. "
+            f"{LIST_CAP_FIX.get(kind, '')}.")))
+    return alerts
+
+
 def check_places(now: datetime) -> list[Alert]:
     """Крок «райони й ЖК» (Блок 4, E10, D57): останній прогін упав, або довідник чи нові
     докази змінили б уже визначені ключі (would_change) — їх крок НЕ змінює, рішення за
@@ -995,6 +1035,7 @@ ALERT_KEYS = (
     "liveness-no-canary",
     "night-missing", "night-skipped", "night-backup", "night-failed", "night-late",
     "night-blocked", "night-hold", "night-captcha",
+    "list-cap",
     "places-failed", "places-would-change",
     "watchdog",
 )
@@ -1249,7 +1290,8 @@ def collect(now: datetime, state: dict, persist=None) -> list[Alert]:
             alerts.append(Alert(f"watchdog:{name}",
                                 f"⚠️ Сторож не зміг виконати {name}: {notify._mask(str(e))[:300]}"))
     for check in (check_sources, check_low_sources, check_verify_blocks, check_dedup,
-                  check_liveness, check_canaries, check_night, check_places, check_sample):
+                  check_liveness, check_canaries, check_night, check_places, check_sample,
+                  check_list_caps):
         try:
             alerts += check(now)
         except Exception as e:

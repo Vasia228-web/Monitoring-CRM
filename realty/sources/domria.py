@@ -196,9 +196,13 @@ class DomRiaSource(BaseSource):
         last_len = 0
         while True:
             if page >= 200:                    # запобіжник від нескінченної пагінації
-                # Неповний перелік нікого не позначає (рецензія E8, D52).
+                # Неповний перелік нікого не позначає (рецензія E8, D52); стеля — у
+                # щоденне зведення (власник 09.10).
                 self.stats["enum_incomplete"] = True
                 log.warning("DIM.RIA: перелік обірвано на запобіжнику %d сторінок", page)
+                from .. import ops
+                ops.record_list_cap(self.name, "full", page,
+                                    f"перелік id по {self.ID_PAGE_SIZE} — запобіжник сторінок")
                 return
             try:
                 ids = self._search_page(page, limit=self.ID_PAGE_SIZE)
@@ -246,6 +250,9 @@ class DomRiaSource(BaseSource):
                 except Exception as e:
                     log.warning("DIM.RIA: картка %s не розібралась: %s", rid, e)
             self.end_page()
+        else:
+            # Дійшли до стелі, а остання сторінка ще мала нові — нове могло лишитись глибше.
+            self.cap_reached(self.cfg.max_pages, "нових оголошень на останній сторінці")
 
     def _parse(self, d: dict) -> dict:
         # Гео-фільтр: покладаємось на city_id самого джерела — він точний.

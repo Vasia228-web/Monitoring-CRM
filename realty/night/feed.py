@@ -197,7 +197,14 @@ def run(source: str, stop_at: float, gate, *, ncfg=None, scfg=None, scope=None,
                 break
             page += 1
         else:
-            finished = True                           # стеля сторінок
+            # Стеля сторінок, а стрічка ще не скінчилась: прохід завершуємо (наступний — за
+            # cooldown), але не тихо — у щоденне зведення (власник 09.10).
+            finished = True
+            report["cap_hit"] = True
+            from .. import ops
+            ops.record_list_cap(source, "feed", max_pages,
+                                f"нічний прохід стрічки: прочитано {page - 1} сторінок, сайт "
+                                f"каже {st.get('pages_total') or 'невідомо скільки'}")
     finally:
         if fetcher is not None and hasattr(fetcher, "close"):
             try:

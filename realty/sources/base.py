@@ -102,6 +102,25 @@ class BaseSource(abc.ABC):
         self.stats["enum_incomplete"] = True
         log.warning("%s: перелік неповний — %s", self.name, why)
 
+    def cap_reached(self, cap: int, detail: str) -> None:
+        """Перелік уперся в стелю сторінок, а сторінки ще не скінчились (власник 09.10: не
+        тихе обрізання — ops.list_caps → попередження в щоденному зведенні).
+
+        Повний перелік — ще й «неповний» (enum_incomplete). Звичайний збір: у джерел, що
+        віддають найновіші першими (supports_recency), — лише якщо остання дозволена
+        сторінка ще мала нові оголошення (нове могло лишитись за стелею); у решти стеля
+        звичайного збору — норма (їх глибше дочитують повний перелік і нічний прохід)."""
+        from .. import ops
+
+        if self.mode == "full":
+            self.enum_incomplete(f"стеля {cap} сторінок — {detail}")
+            ops.record_list_cap(self.name, "full", cap, detail)
+        elif self.mode == "fresh" and self.cfg.supports_recency and self._page_new > 0:
+            detail = f"{detail}: {self._page_new}"
+            log.warning("%s: звичайний збір уперся в стелю %d сторінок — %s", self.name,
+                        cap, detail)
+            ops.record_list_cap(self.name, "fresh", cap, detail)
+
     def begin_page(self, page: int | None = None) -> None:
         self._page_new = 0
         self.stats["pages"] += 1

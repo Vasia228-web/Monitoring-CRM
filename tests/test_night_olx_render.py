@@ -488,3 +488,21 @@ def test_tab_labels_are_written_only_where_empty_once_calibrated(db):
     assert get(db, ids[0]).seller_evidence["olx_tab"] == "business"        # не переписано
     assert all(get(db, i).seller_evidence["olx_tab"] == "private" for i in ids[1:])
     assert get(db, ids[1]).seller_evidence["olx_tab_at"] == NOW.date().isoformat()
+
+
+def test_a_tab_that_hits_its_page_cap_is_recorded_for_the_digest(db):
+    """Вкладка «Приватні»: стеля max_pages, а наступна сторінка ще є — членство неповне;
+    не тихо, а рядок ops.list_caps → попередження в зведенні (власник 09.10)."""
+    def answer(url):
+        if "private_business" in url:
+            n = len(seen)
+            seen.append(url)
+            return 200, olx_tab_html("Приватні", [f"10Cp{n:03d}"], next_page=True)
+        return 200, olx_detail_html(chip="Бізнес")
+    seen: list = []
+    spec = {"olx_tabs": {"private": {"due": True, "max_pages": 2}}, "olx_detail": []}
+    _summary, ev, _net, _rnd = _lane(db, [], spec, answer)
+    assert len(seen) == 2 and ev["tabs"]["private"].get("cap_hit") is True
+    with ops.ops_session() as s:
+        got = [(r.source, r.kind, r.cap) for r in s.scalars(select(ops.ListCap))]
+    assert ("olx", "olx_tab", 2) in got

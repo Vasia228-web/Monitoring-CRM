@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import weakref
@@ -20,6 +21,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .config import DATA_DIR
+
+log = logging.getLogger(__name__)
 
 OPS_DB_URL = os.getenv("OPS_DB_URL", f"sqlite:///{DATA_DIR / 'ops.db'}")
 # Після скількох хвилин мовчання воркер вважається таким, що впав.
@@ -392,6 +395,34 @@ class LivenessFuseLog(OpsBase):
     removed: Mapped[int | None] = mapped_column(Integer)
     share: Mapped[float | None] = mapped_column(Float)
     examples: Mapped[str | None] = mapped_column(Text)                 # JSON
+
+
+class ListCap(OpsBase):
+    """Перелік джерела вперся в стелю сторінок, а сторінки ще не скінчились (власник
+    09.10: «не тихе обрізання» — попередження в щоденному зведенні, сторож check_list_caps).
+
+    kind: full — повний перелік (різниця списків, перевірка існування); fresh — звичайний
+    збір джерела з новими першими, а остання дозволена сторінка ще мала нові оголошення;
+    feed — нічний прохід стрічки (E11); olx_tab — вкладка пошуку OLX у нічних рендерах."""
+
+    __tablename__ = "list_caps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    source: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(16))
+    cap: Mapped[int] = mapped_column(Integer)
+    detail: Mapped[str | None] = mapped_column(String(300))
+
+
+def record_list_cap(source: str, kind: str, cap: int, detail: str = "") -> None:
+    """Записати «вперлись у стелю» (ops.list_caps). Ніколи не валить збір."""
+    try:
+        init_ops()
+        with ops_session() as s:
+            s.add(ListCap(source=source, kind=kind, cap=int(cap), detail=(detail or "")[:300]))
+    except Exception:                                    # noqa: BLE001
+        log.exception("не вдалось записати стелю переліку %s/%s", source, kind)
 
 
 class LivenessSampleRun(OpsBase):
