@@ -367,7 +367,8 @@ def test_watchdog_would_change_once_per_state(tmp_path, monkeypatch):
     monkeypatch.setattr(ops, "OpsSession", sessionmaker(bind=eng, expire_on_commit=False,
                                                         future=True))
     ops.init_ops(force=True)
-    monkeypatch.setattr(watchdog, "collect", lambda now, state: watchdog.check_places(now))
+    monkeypatch.setattr(watchdog, "collect",
+                        lambda now, state, **_k: watchdog.check_places(now))
     monkeypatch.setattr(watchdog, "_header", lambda: "[test]")
     # Хвиля W3 (D58): places-would-change — попередження (у щоденне зведення, не одразу);
     # тут перевіряється семантика `once` надсилання, тож рівень примусово критичний.

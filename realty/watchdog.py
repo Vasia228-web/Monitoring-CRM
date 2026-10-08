@@ -231,13 +231,28 @@ def check_verify_blocks(now: datetime) -> list[Alert]:
     return alerts
 
 
+def _two_failed_in_a_row() -> bool:
+    """Дві останні завершені спроби бекапу (без «running» і свідомо локальних) — невдалі."""
+    from . import backup
+
+    ops.init_ops()
+    with ops.ops_session() as s:
+        last = s.scalars(select(backup.BackupRecord.status)
+                         .where(backup.BackupRecord.status.in_(("ok", "failed")))
+                         .order_by(backup.BackupRecord.id.desc()).limit(2)).all()
+    return len(last) == 2 and all(st == "failed" for st in last)
+
+
 def check_backup(now: datetime) -> list[Alert]:
     """Бекап на два рівні (D55 п. 6, D58).
 
       * backup-none (критичне) — копії поза машиною немає в ЖОДНОМУ сховищі: остання
         спроба «failed» (backup.py так і рахує: успіх — лише з копією поза машиною;
-        локальна перевірена копія на тому ж диску від смерті диска не захищає), або
-        успішного бекапу немає понад BACKUP_MAX_AGE_HOURS. Колишній ключ «backup».
+        локальна перевірена копія на тому ж диску від смерті диска не захищає) І успішного
+        за BACKUP_MAX_AGE_HOURS немає, або невдалі дві спроби поспіль; або успішного
+        бекапу немає понад BACKUP_MAX_AGE_HOURS. Колишній ключ «backup».
+      * backup-failed (попередження) — одна невдала спроба після успіху з копією поза
+        машиною не давніше BACKUP_MAX_AGE_HOURS (рецензія W3, 08.10).
       * backup-partial (попередження) — копія поза машиною є, але не всюди (Drive упав,
         Telegram спрацював).
       * db-integrity:backup (критичне) — копія бази не пройшла integrity_check: бекап
@@ -252,10 +267,22 @@ def check_backup(now: datetime) -> list[Alert]:
     if last_try is not None and last_try.status == "failed":
         local = ("локальна копія є й відновлюється, але поза машиною — ніде"
                  if last_try.restored_ok else "навіть локальної перевіреної копії немає")
-        alerts.append(Alert("backup-none", (
-            f"💾 Бекап не вдався ({_ago(last_try.created_at, now)}): "
-            f"{(last_try.message or 'без пояснення')[:300]}\n{local}.\n"
-            f"Останній успішний: {_ago(last_ok, now)}.")))
+        # Одна невдала спроба після недавнього успіху з копією поза машиною (напр., Drive
+        # зламаний, Telegram о 01:10 спрацював, о 04:30 — тайм-аут) — копія поза машиною
+        # Є: попередження backup-failed, а не критичне, що повторювалось би кожні 6 год
+        # (рецензія W3, 08.10). Критичне — коли копії поза машиною немає за
+        # BACKUP_MAX_AGE_HOURS або дві останні спроби поспіль невдалі.
+        recent_ok = last_ok is not None and _hours(now - last_ok) <= BACKUP_MAX_AGE_HOURS
+        if recent_ok and not _two_failed_in_a_row():
+            alerts.append(Alert("backup-failed", (
+                f"💾 Бекап {_ago(last_try.created_at, now)} не вдався: "
+                f"{(last_try.message or 'без пояснення')[:300]}\nКопія поза машиною є — "
+                f"останній успішний {_ago(last_ok, now)}; наступна спроба — за розкладом.")))
+        else:
+            alerts.append(Alert("backup-none", (
+                f"💾 Бекап не вдався ({_ago(last_try.created_at, now)}): "
+                f"{(last_try.message or 'без пояснення')[:300]}\n{local}.\n"
+                f"Останній успішний: {_ago(last_ok, now)}.")))
         if "integrity_check" in (last_try.message or ""):
             alerts.append(Alert("db-integrity:backup", (
                 f"🧨 Копія бази для бекапу не пройшла integrity_check "
@@ -438,7 +465,11 @@ def check_night(now: datetime) -> list[Alert]:
       * night-hold:<хост> — блокування дві ночі поспіль: хост чекає рішення
         (`cli.py night unhold --host …`), поки не знято — щоночі без смуги;
       * night-late — замок звільнено пізніше за release_lock (ризик пропущеного циклу);
-      * night-failed — диригент упав;
+      * night-failed — диригент упав; night-failed:<хост> — процес смуги впав (код ≠ 0,
+        без підсумку); night-failed:evidence — план дозбору доказів не побудовано
+        (рецензія W3, 08.10);
+      * night-captcha:<хост> — капча зупинила рендери OLX до кінця вікна (попередження;
+        Блок 1 тривав, утримання хоста немає — рецензія E11, 08.10);
       * night-missing — за NIGHT_MISSING_HOURS жодного вікна, хоча цикли йдуть;
       * night-skipped — два останні вікна поспіль пропущено (цикл не звільнив замок).
     Запобіжник ночі — та сама тривога liveness-fuse:<джерело> (check_liveness).
@@ -504,6 +535,15 @@ def check_night(now: datetime) -> list[Alert]:
         except ValueError:
             lane_info = {}
         for host, d in lane_info.items():
+            if not isinstance(d, dict):
+                continue
+            if d.get("code") and d.get("stopped") == "no_summary":
+                # Процес смуги впав (код ≠ 0, підсумку немає): вікно для хоста пропало, а
+                # статус ночі — лише «partial» (рецензія W3, 08.10).
+                alerts.append(Alert(f"night-failed:{host}", (
+                    f"🌙⚠️ {when}: смуга {host} упала (код {d.get('code')}, без підсумку) — "
+                    f"перевірки й дозбір цього хоста у вікні не завершились. Журнал: "
+                    f"journalctl --user -u realty-night -n 200 | grep {host}")))
             if d.get("stopped") in ("blocks", "block_share"):
                 # Запити смуги — перевірки, дозбір identity і рендери доказів (E11, D60).
                 blocked = sum(int(d.get(k) or 0) for k in ("blocked", "identity_blocked",
@@ -519,6 +559,14 @@ def check_night(now: datetime) -> list[Alert]:
         except ValueError:
             ev = {}
         ev = ev if isinstance(ev, dict) else {}
+        plan_error = (ev.get("plan") or {}).get("error") if isinstance(ev.get("plan"), dict) \
+            else None
+        if plan_error:
+            # План дозбору доказів не побудовано (виняток чи зламаний seller.toml): Блок 1
+            # ішов, а докази Блоків 3/4 — ні (рецензія W3, 08.10).
+            alerts.append(Alert("night-failed:evidence", (
+                f"🌙⚠️ {when}: план нічного дозбору доказів не побудовано — {plan_error[:300]}. "
+                f"Перевірки Блоку 1 ішли; рендерів OLX, проходу стрічки й GET rieltor не було.")))
         for host, rep in (ev.get("lanes") or {}).items():
             if isinstance(rep, dict) and rep.get("stopped") == "captcha":
                 # Капча зупиняє лише рендери вікна (рецензія E11, 08.10): перевірки Блоку 1
@@ -718,11 +766,26 @@ def _quick_check(path: Path | None, deadline: float) -> str:
 INTEGRITY_CHECK = _quick_check
 
 
-def check_db_integrity(now: datetime, state: dict, cfg=None) -> list[Alert]:
+def INTEGRITY_SLEEP(seconds: float) -> None:          # noqa: N802 — підмінне в тестах
+    import time
+
+    time.sleep(seconds)
+
+
+INTEGRITY_QUIET = ("ok", "interrupted", "killed")    # не тривога — рядок у зведенні
+
+
+def check_db_integrity(now: datetime, state: dict, cfg=None, persist=None) -> list[Alert]:
     """База пошкоджена (критичне, D55 п. 6): раз на місцеву добу після integrity.at —
     PRAGMA quick_check realty.db і ops.db (лише читання, спільна стеля max_seconds).
     Тривога тримається, доки наступна щоденна перевірка не скаже «ok». «Перервано»
-    (не встигли) і відсутній ops.db — не тривога, а рядок у зведенні."""
+    (не встигли), «killed» (сторожа вбили посеред перевірки) і відсутній ops.db — не
+    тривога, а рядок у зведенні.
+
+    Рецензія W3 (08.10): дата перевірки йде в стан ДО неї (`persist` — запис файла стану,
+    з run()): сторож, убитий на TimeoutStartSec, не повторює 120-секундну перевірку на
+    кожному наступному запуску; результат не ok/перервано (напр., «database is locked»)
+    — ще одна спроба через retry_wait_seconds, тривога — лише за другою."""
     import time
 
     cfg = cfg or _alerts_cfg()
@@ -732,17 +795,35 @@ def check_db_integrity(now: datetime, state: dict, cfg=None) -> list[Alert]:
         h, m = (int(x) for x in cfg.integrity.at.split(":"))
         today = local.date().isoformat()
         if (local.hour, local.minute) >= (h, m) and st.get("date") != today:
+            st.update(date=today, at=now.isoformat(),
+                      results={n: {"result": "killed", "seconds": 0.0}
+                               for n in cfg.integrity.databases})
+            if persist is not None:
+                try:
+                    persist()
+                except Exception:                       # noqa: BLE001 — перевірка важливіша
+                    log.warning("стан сторожа до перевірки цілісності не записано",
+                                exc_info=True)
             deadline = time.monotonic() + cfg.integrity.max_seconds
             results = {}
             for name in cfg.integrity.databases:
                 t0 = time.monotonic()
-                res = INTEGRITY_CHECK(_db_file(name), deadline)
+                path = _db_file(name)
+                res = INTEGRITY_CHECK(path, deadline)
+                first = None
+                if res not in INTEGRITY_QUIET and res != "missing" \
+                        and time.monotonic() + cfg.integrity.retry_wait_seconds < deadline:
+                    first = res
+                    INTEGRITY_SLEEP(cfg.integrity.retry_wait_seconds)
+                    res = INTEGRITY_CHECK(path, deadline)
                 results[name] = {"result": res, "seconds": round(time.monotonic() - t0, 2)}
-            st.update(date=today, at=now.isoformat(), results=results)
+                if first is not None:
+                    results[name]["first"] = first[:200]
+            st.update(results=results)
     alerts = []
     for name, r in (st.get("results") or {}).items():
         res = r.get("result")
-        if res in ("ok", "interrupted") or (res == "missing" and name == "ops"):
+        if res in INTEGRITY_QUIET or (res == "missing" and name == "ops"):
             continue
         alerts.append(Alert(f"db-integrity:{name}", (
             f"🧨 База {name}: PRAGMA quick_check — {res} (перевірка "
@@ -762,13 +843,28 @@ def check_sample(now: datetime) -> list[Alert]:
     from .liveness import sample
 
     last = sample.last_run()
-    if last is None or last["status"] == "running":
+    if last is None:
         return []
-    alert_days = configfiles.load("sample").verdict.alert_days
+    scfg = configfiles.load("sample")
+    if last["status"] == "running" and not sample.is_stuck(last, now, scfg):
+        return []
+    alert_days = scfg.verdict.alert_days
     if now - (last["finished_at"] or last["started_at"]) > timedelta(days=alert_days):
         return []
     once = str(last["id"])
     alerts = []
+    if last["status"] in ("running", "failed"):
+        # Прогін упав (виняток) чи «триває» понад stuck_minutes — процес убито, свій запис
+        # він не закриє (рецензія W3, 08.10). Падіння служби саме по собі вже дає критичне
+        # unit-failed (OnFailure); тут — попередження в зведення, щоб пропущена вибірка
+        # не зникала мовчки (вердиктів такий прогін не має).
+        why = (f"запис «триває» з {_ago(last['started_at'], now)} — процес, схоже, убито "
+               f"(TimeoutStartSec, брак пам'яті, вимкнення)" if last["status"] == "running"
+               else f"аварія: {(last.get('message') or 'без пояснення')[:200]}")
+        alerts.append(Alert("liveness-sample-failed", (
+            f"🎯 Контрольна вибірка №{last['id']} не завершилась: {why}. Журнал: journalctl "
+            f"--user -u realty-liveness-sample -n 80; вручну — cli.py liveness sample."),
+            once=once))
     if last["status"] == "lock_timeout":
         alerts.append(Alert("liveness-sample-skipped", (
             f"🎯 Контрольна вибірка №{last['id']} не відбулась: цикл не звільнив замок за "
@@ -888,12 +984,14 @@ CRITICAL_HEAD = "🚨 КРИТИЧНО — потрібна дія"
 # вимагає ЯВНИЙ рівень кожного в config/alerts.toml — без запасного «critical».
 ALERT_KEYS = (
     "silence", "drop", "write", "low", "blocks", "verify-blocks",
-    "backup-none", "backup-partial", "db-integrity", "site-local", "site-public",
+    "backup-none", "backup-failed", "backup-partial", "db-integrity", "site-local",
+    "site-public",
     "unit-failed",
     "dedup-suspicious", "dedup-missed", "dedup-complex",
     "liveness-fuse", "liveness-coverage", "liveness-ria-unrecognized", "liveness-repeat404",
     "liveness-snapshot-stale", "liveness-sample-canary", "liveness-sample-share",
-    "liveness-sample-removed", "liveness-sample-skipped", "liveness-canary-genuine",
+    "liveness-sample-removed", "liveness-sample-skipped", "liveness-sample-failed",
+    "liveness-canary-genuine",
     "liveness-no-canary",
     "night-missing", "night-skipped", "night-backup", "night-failed", "night-late",
     "night-blocked", "night-hold", "night-captcha",
@@ -1133,16 +1231,17 @@ def _header() -> str:
     return f"[{socket.gethostname()}]" + (f" {url}" if url else "")
 
 
-def collect(now: datetime, state: dict) -> list[Alert]:
+def collect(now: datetime, state: dict, persist=None) -> list[Alert]:
     """Усі перевірки. Помилка однієї — тривога «watchdog:<перевірка>», решта працюють;
     рівень такої тривоги — з alerts.toml: перевірки, що стережуть КРИТИЧНЕ (тиша, бекап,
     сайт, база, запобіжник, ніч), — critical, інакше впала перевірка ховала б аварію в
-    зведенні (D58)."""
+    зведенні (D58). `persist` — записати стан негайно (перед довгою перевіркою)."""
     alerts: list[Alert] = []
     for name, check in (("check_silence", lambda: [a] if (a := check_silence(now, state)) else []),
                         ("check_backup", lambda: check_backup(now)),
                         ("check_site", lambda: check_site(now, state)),
-                        ("check_db_integrity", lambda: check_db_integrity(now, state))):
+                        ("check_db_integrity",
+                         lambda: check_db_integrity(now, state, persist=persist))):
         try:
             alerts += check()
         except Exception as e:           # сторож не має падати через одну перевірку
@@ -1213,7 +1312,7 @@ def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH, *
     except Exception as e:                                       # noqa: BLE001
         # Без рівнів — усе критичне (обережний бік: нічого не ховається в зведення).
         cfg, cfg_error = None, notify._mask(str(e))[:300]
-    alerts = collect(now, state)
+    alerts = collect(now, state, persist=lambda: save_state(state, state_path))
     if cfg is None:
         alerts.append(Alert("watchdog:alerts-config", (
             f"⚠️ config/alerts.toml не читається — усі тривоги надсилаю одразу як критичні, "

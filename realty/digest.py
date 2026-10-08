@@ -154,7 +154,9 @@ def section_all_clear(ctx: Ctx) -> list[str] | None:
 
 ONETIME = ("onetime_reseen", "legacy_404", "onetime_hinted", "onetime_blind")
 STOP_SHORT = {"blocks": "зупинено блокуваннями", "block_share": "зупинено блокуваннями",
-              "deadline": "дедлайн", "sigterm": "зупинено", "killed": "зупинено примусово"}
+              "deadline": "дедлайн", "sigterm": "зупинено", "killed": "зупинено примусово",
+              # Процес смуги впав без підсумку (рецензія W3, 08.10; тривога night-failed).
+              "no_summary": "СМУГА ВПАЛА (без підсумку)"}
 
 
 def section_night(ctx: Ctx) -> list[str] | None:
@@ -213,10 +215,16 @@ def section_night(ctx: Ctx) -> list[str] | None:
         out.append("🧯 Запобіжник: жодне джерело не тримається")
     evidence = getattr(night_report, "evidence_summary", None)
     if callable(evidence):
-        from .db import SessionLocal
+        # Збій підсумку доказів не має забирати весь розділ ночі (перевірки, зняті,
+        # запобіжник) — лише свій рядок (рецензія W3, 08.10).
+        try:
+            from .db import SessionLocal
 
-        with SessionLocal() as s:
-            lines = evidence(s) or []
+            with SessionLocal() as s:
+                lines = evidence(s) or []
+        except Exception as e:                          # noqa: BLE001
+            log.exception("зведення: докази нічних робіт не зібрано")
+            lines = [f"Докази нічних робіт: не зібрано ({type(e).__name__})."]
         out += [f"  {x}" if not str(x).startswith(" ") else str(x) for x in lines]
     return out or None
 
@@ -314,9 +322,13 @@ def section_integrity(ctx: Ctx) -> list[str] | None:
     at = _iso(st.get("at"))
     if not results or at is None or at < ctx.since:
         return None
-    names = {"ok": "ok", "interrupted": "НЕ ВСТИГЛА (стеля)", "missing": "файлу немає"}
-    parts = [f"{name} {names.get(r.get('result'), 'ПОМИЛКА')} ({r.get('seconds', 0):.1f} с)"
-             for name, r in sorted(results.items())]
+    names = {"ok": "ok", "interrupted": "НЕ ВСТИГЛА (стеля)", "missing": "файлу немає",
+             # Сторожа вбили посеред перевірки (рецензія W3, 08.10): дата вже записана —
+             # завтра знову; тривоги немає.
+             "killed": "ПЕРЕРВАНО (сторожа зупинено посеред перевірки)"}
+    parts = [f"{name} {names.get(r.get('result'), 'ПОМИЛКА')} ({r.get('seconds') or 0:.1f} с"
+             + (f"; перша спроба — {str(r['first'])[:60]}, повтор" if r.get("first") else "")
+             + ")" for name, r in sorted(results.items())]
     return [f"🧪 Цілісність бази ({ctx.hm(at)}): " + "; ".join(parts)]
 
 
@@ -327,6 +339,8 @@ def section_sample(ctx: Ctx) -> list[str] | None:
     last = sample.last_run()
     if last is None or (last.get("finished_at") or last["started_at"]) < ctx.since:
         return None
+    if sample.is_stuck(last, ctx.now):
+        last = {**last, "status": "stuck"}              # рецензія W3, 08.10
     return sample.render_short(last, local=ctx.hm)
 
 

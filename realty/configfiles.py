@@ -1493,9 +1493,15 @@ class AlertsIntegrity:
     at: str
     max_seconds: float = field(**_limits(min=1, max=240))
     databases: tuple[str, ...] = field(**_limits(min_len=1, choices=("realty", "ops")))
+    # Результат не «ok» і не «перервано» (напр., «database is locked») — ще одна спроба
+    # через стільки секунд, і лише її результат іде в тривогу (рецензія W3, 08.10).
+    retry_wait_seconds: float = field(**_limits(min=0, max=60))
 
     def problems(self) -> list[str]:
-        return [] if hhmm_minutes(self.at) is not None else [f"at: {self.at!r} — час «ГГ:ХХ»"]
+        out = [] if hhmm_minutes(self.at) is not None else [f"at: {self.at!r} — час «ГГ:ХХ»"]
+        if self.retry_wait_seconds >= self.max_seconds:
+            out.append("retry_wait_seconds: має бути менше за max_seconds (спільна стеля)")
+        return out
 
 
 @dataclass(frozen=True)
@@ -1549,6 +1555,15 @@ class SampleRun:
     max_minutes: float = field(**_limits(min=1, max=90))
     lock_wait_minutes: float = field(**_limits(min=0, max=60))
     seed: int
+    # Запис прогону «триває» довше — процес убито (TimeoutStartSec, OOM, вимкнення):
+    # прогін вважається аварією (попередження liveness-sample-failed; рецензія W3, 08.10).
+    stuck_minutes: float = field(**_limits(min=10, max=600))
+
+    def problems(self) -> list[str]:
+        if self.stuck_minutes <= self.lock_wait_minutes + self.max_minutes:
+            return ["stuck_minutes: має бути більше за lock_wait_minutes + max_minutes "
+                    "(інакше живий прогін вважався б завислим)"]
+        return []
 
 
 @dataclass(frozen=True)
