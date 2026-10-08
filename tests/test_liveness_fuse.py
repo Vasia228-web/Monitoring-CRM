@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -32,8 +33,9 @@ def _mode(tmp_path, monkeypatch, mode: str):
     for f in (configfiles.ROOT / "config").glob("*.toml"):
         shutil.copy(f, cfg_dir / f.name)
     path = cfg_dir / "liveness.toml"
-    path.write_text(path.read_text(encoding="utf-8").replace(
-        'mode = "literal"', f'mode = "{mode}"', 1), encoding="utf-8")
+    # Будь-яке поточне значення: з 08.10 у конфігу "tiered" (рішення власника, D55).
+    path.write_text(re.sub(r'^mode = "\w+"', f'mode = "{mode}"', path.read_text(encoding="utf-8"),
+                           count=1, flags=re.M), encoding="utf-8")
     monkeypatch.setenv(configfiles.ENV_DIR, str(cfg_dir))
     assert configfiles.load("liveness").fuse.mode == mode
 
@@ -99,8 +101,9 @@ def test_tiered_mode_lets_hinted_candidates_through(db, tmp_path, monkeypatch):
     assert all(get(db, i).is_active for i in blind)
 
 
-def test_literal_mode_counts_every_tier(db):
-    """Той самий прогін у literal (типово): частка рахується по всіх перевірених."""
+def test_literal_mode_counts_every_tier(db, tmp_path, monkeypatch):
+    """Той самий прогін у literal: частка рахується по всіх перевірених."""
+    _mode(tmp_path, monkeypatch, "literal")
     hinted = _domria(db, 60, start=34500000, absent_since=datetime(2026, 10, 7))
     _domria(db, 40, start=34600000)
     archived = {34500000 + i for i in range(51)}
@@ -127,6 +130,31 @@ def test_two_canaries_reporting_removed_hold_the_source(db, tmp_path, monkeypatc
                       for i in range(30)}})
     stats = verify.verify_batch(http=net)
     assert stats["tiers"]["dom.ria.com"].get("canary") == 4
+    assert fuse.held_sources() == {"domria"}
+    assert all(get(db, i).is_active for i in fresh)
+
+
+def test_shipped_config_follows_the_owners_decision():
+    """Рішення власника 08.10 (D55): 20% — лише серед випадкових і контрольних
+    перевірок (tiered), а банер на БУДЬ-ЯКОМУ відомо живому — зупинка."""
+    cfg = configfiles.load("liveness").fuse
+    assert cfg.mode == "tiered" and cfg.canary_trip_min == 1
+
+
+def test_one_canary_reporting_removed_holds_the_source(db, tmp_path, monkeypatch):
+    """Один відомо живий з банером — уже зупинка (у tiered)."""
+    from realty.liveness import fuse, queue
+
+    _mode(tmp_path, monkeypatch, "tiered")
+    now = datetime(2026, 10, 8, 3, 0)
+    monkeypatch.setattr(queue, "_now", lambda: now)
+    fresh = _domria(db, 4, start=34710000, last_seen=datetime(2026, 10, 8, 1, 0))
+    _domria(db, 30, start=34810000, last_seen=datetime(2026, 9, 1))
+    net = FakeNet({**{f"domria:{34710000 + i}": (200, ria_page(34710000 + i, archived=i == 0))
+                      for i in range(4)},
+                   **{f"domria:{34810000 + i}": (200, ria_page(34810000 + i))
+                      for i in range(30)}})
+    verify.verify_batch(http=net)
     assert fuse.held_sources() == {"domria"}
     assert all(get(db, i).is_active for i in fresh)
 
@@ -203,12 +231,13 @@ def test_fuse_counts_by_the_host_whose_signature_fired(db):
     assert not [i for i in plan.items if i.host == "dom.ria.com" and i.tier == "sweep"]
 
 
-def test_small_runs_add_up_within_the_window(db):
+def test_small_runs_add_up_within_the_window(db, tmp_path, monkeypatch):
     """Перевірки по одній квартирі (як при відкритті) набирають n ≥ min_checked разом із
     перевірками за вікно fuse.window_hours: зламаний підпис знімає не більше
     min_checked − 1, далі джерело тримається. На коді до виправлення — усі 25."""
     from realty.liveness import fuse
 
+    _mode(tmp_path, monkeypatch, "literal")
     ids = _domria(db, 25, start=35500000)
     net = FakeNet({f"domria:{35500000 + i}": (200, ria_page(35500000 + i, archived=True))
                    for i in range(25)})
