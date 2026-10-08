@@ -494,3 +494,49 @@ def test_alert_unit_template_and_on_failure_hooks():
         q.optionxform = str
         q.read(units / name, encoding="utf-8")
         assert q["Unit"].get("OnFailure") == "realty-alert@%n.service", name
+
+
+# --- Контрольні ключі перевірки актуальності (гілка запобіжника, D58) ------------------------
+
+
+def _lrun(at, *, kind="cycle", fuse=None, report=None, plan=None):
+    with ops.ops_session() as s:
+        s.add(ops.LivenessRun(kind=kind, status="ok", started_at=at, finished_at=at,
+                              fuse=json.dumps(fuse) if fuse is not None else None,
+                              report=json.dumps(report) if report is not None else None,
+                              per_tier=json.dumps({"plan": plan, "verdicts": {}})
+                              if plan is not None else None))
+
+
+def test_genuine_canary_removal_is_a_warning(env, cfg):
+    _lrun(NOW - timedelta(hours=2), fuse={"trips": [], "canary_genuine": [
+        {"key": "domria:123", "url": "https://dom.ria.com/uk/x-123.html"}]})
+    _lrun(NOW - timedelta(hours=30), fuse={"canary_genuine": [{"host": "olx.ua"}]})  # давно
+    _lrun(NOW - timedelta(hours=1), kind="night", report={"canary_genuine": []})
+    keys = {a.key: a.text for a in watchdog.check_canaries(NOW)}
+    assert list(keys) == ["liveness-canary-genuine:dom.ria.com"]
+    assert "x-123" in keys["liveness-canary-genuine:dom.ria.com"]
+    assert watchdog.level_of("liveness-canary-genuine:dom.ria.com", cfg.levels) == "warning"
+
+
+def test_no_canary_planned_three_cycles_in_a_row_is_a_warning(env, cfg):
+    hosts = configfiles.load("liveness").hosts
+    full = {h: {"canary": s.canaries_per_run} for h, s in hosts.items() if s.checkable}
+    for i in range(3):
+        _lrun(NOW - timedelta(hours=3 * i + 1), plan=full)
+    assert watchdog.check_canaries(NOW) == []
+    no_olx = {**full, "olx.ua": {"sweep": 400}}
+    for i in range(2):
+        _lrun(NOW + timedelta(minutes=i + 1), plan=no_olx)
+    assert watchdog.check_canaries(NOW + timedelta(hours=1)) == []         # лише 2 поспіль
+    _lrun(NOW + timedelta(minutes=5), plan=no_olx)
+    keys = [a.key for a in watchdog.check_canaries(NOW + timedelta(hours=1))]
+    assert keys == ["liveness-no-canary:olx.ua"]
+    assert watchdog.level_of(keys[0], cfg.levels) == "warning"
+
+
+def test_canary_checks_skip_runs_without_the_new_fields(env):
+    _lrun(NOW - timedelta(hours=1), fuse={"trips": []})
+    with ops.ops_session() as s:
+        s.add(ops.LivenessRun(kind="cycle", status="ok", started_at=NOW, per_tier="не json"))
+    assert watchdog.check_canaries(NOW) == []

@@ -42,6 +42,8 @@ liveness-coverage = "warning"        # черга перевірки не вст
 liveness-ria-unrecognized = "warning"  # сторінки DOM.RIA не розпізнано (нічого не знімається)
 liveness-repeat404 = "warning"       # правило повторного 404 помиляється — дані власнику
 liveness-snapshot-stale = "warning"  # повний перелік давно не оновлювався
+liveness-canary-genuine = "warning"  # контрольне DOM.RIA знято після того, як ми його бачили (справжнє)
+liveness-no-canary = "warning"       # 3 прогони циклу поспіль без жодного контрольного для хоста
 # --- нічний диригент ---
 night-failed = "critical"            # диригент упав або його вбито («триває» > 2,5 год)
 night-backup = "critical"            # бекап на старті вікна не вдався — вікно нічого не писало

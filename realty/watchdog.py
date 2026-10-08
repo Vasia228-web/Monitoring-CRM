@@ -774,6 +774,91 @@ def check_sample(now: datetime) -> list[Alert]:
     return alerts
 
 
+CANARY_GENUINE_HOURS = 24    # «знято» на контрольному, визнане справжнім, — за стільки годин
+NO_CANARY_RUNS = 3           # стільки останніх прогонів циклу поспіль без жодного контрольного
+
+
+def _canary_host(cfg, item) -> str:
+    """Хост запису canary_genuine (формат — гілки запобіжника; читаємо обережно)."""
+    from .liveness import policy as pol
+
+    if isinstance(item, dict):
+        if item.get("host"):
+            return str(item["host"])
+        fam = pol.family_of_key(item.get("key")) or item.get("family")
+        host = pol.host_for_family(cfg, fam) if fam else None
+        if host is None and item.get("url"):
+            host = pol.host_of_url(cfg, item["url"])
+        return host or "?"
+    if isinstance(item, str):
+        fam = pol.family_of_key(item)
+        return (pol.host_for_family(cfg, fam) if fam else None) or "?"
+    return "?"
+
+
+def check_canaries(now: datetime) -> list[Alert]:
+    """Контрольні ключі перевірки актуальності (попередження, D58; гілка запобіжника):
+
+      * liveness-canary-genuine:<хост> — прогін записав `canary_genuine`: контрольне
+        DOM.RIA знято ПІСЛЯ того, як ми його востаннє бачили, — визнано справжнім зняттям
+        (записано, джерело не тримається); власнику — для відома, у зведення;
+      * liveness-no-canary:<хост> — NO_CANARY_RUNS останніх прогонів циклу не запланували
+        жодного контрольного для хоста, у якого canaries_per_run > 0: запобіжник на
+        контрольних для нього сліпий.
+    Поля читаються обережно: прогони без них (старіший код) — пропускаються мовчки."""
+    from . import configfiles
+    from .liveness import queue
+
+    cfg = configfiles.load("liveness")
+    ops.init_ops()
+    with ops.ops_session() as s:
+        recent = s.execute(select(ops.LivenessRun.fuse, ops.LivenessRun.report)
+                           .where(ops.LivenessRun.started_at
+                                  >= now - timedelta(hours=CANARY_GENUINE_HOURS))).all()
+        cycles = s.execute(select(ops.LivenessRun.per_tier)
+                           .where(ops.LivenessRun.kind == "cycle", ops.LivenessRun.status == "ok",
+                                  ops.LivenessRun.per_tier.isnot(None))
+                           .order_by(ops.LivenessRun.id.desc()).limit(NO_CANARY_RUNS)).all()
+    genuine: dict[str, list] = {}
+    for blobs in recent:
+        for blob in blobs:
+            try:
+                d = json.loads(blob) if blob else {}
+            except ValueError:
+                continue
+            items = d.get("canary_genuine") if isinstance(d, dict) else None
+            for item in items if isinstance(items, list) else []:
+                genuine.setdefault(_canary_host(cfg, item), []).append(item)
+    alerts = []
+    for host, items in sorted(genuine.items()):
+        ex = [str(i.get("url") or i.get("key")) if isinstance(i, dict) else str(i)
+              for i in items[:3]]
+        alerts.append(Alert(f"liveness-canary-genuine:{host}", (
+            f"🐤 {host}: контрольних, знятих після того, як ми їх востаннє бачили, — "
+            f"{len(items)} за {CANARY_GENUINE_HOURS} год (визнано справжнім зняттям, джерело "
+            f"не тримається)" + (f": {', '.join(ex)}" if ex else "") + ".")))
+    plans = []
+    for (blob,) in cycles:
+        try:
+            plan = (json.loads(blob) or {}).get("plan")
+        except (ValueError, AttributeError):
+            plan = None
+        if isinstance(plan, dict):
+            plans.append(plan)
+    if len(plans) >= NO_CANARY_RUNS:
+        for host, spec in sorted(cfg.hosts.items()):
+            if not spec.checkable or spec.canaries_per_run <= 0:
+                continue
+            tiers = [p.get(host) for p in plans]
+            if all(isinstance(t, dict) and not t.get(queue.TIER_CANARY) for t in tiers):
+                alerts.append(Alert(f"liveness-no-canary:{host}", (
+                    f"🐤 {host}: {NO_CANARY_RUNS} останні прогони циклу не запланували жодного "
+                    f"контрольного ключа (canaries_per_run = {spec.canaries_per_run}) — "
+                    f"запобіжник на контрольних для сайту сліпий. Чому немає «відомо живих» — "
+                    f"cli.py liveness plan.")))
+    return alerts
+
+
 # --- Рівні й нагальне надсилання (D58) ------------------------------------------------------
 
 CRITICAL, WARNING = "critical", "warning"
@@ -788,7 +873,8 @@ ALERT_KEYS = (
     "dedup-suspicious", "dedup-missed", "dedup-complex",
     "liveness-fuse", "liveness-coverage", "liveness-ria-unrecognized", "liveness-repeat404",
     "liveness-snapshot-stale", "liveness-sample-canary", "liveness-sample-share",
-    "liveness-sample-removed", "liveness-sample-skipped",
+    "liveness-sample-removed", "liveness-sample-skipped", "liveness-canary-genuine",
+    "liveness-no-canary",
     "night-missing", "night-skipped", "night-backup", "night-failed", "night-late",
     "night-blocked", "night-hold",
     "places-failed", "places-would-change",
@@ -1044,7 +1130,7 @@ def collect(now: datetime, state: dict) -> list[Alert]:
             alerts.append(Alert(f"watchdog:{name}",
                                 f"⚠️ Сторож не зміг виконати {name}: {notify._mask(str(e))[:300]}"))
     for check in (check_sources, check_low_sources, check_verify_blocks, check_dedup,
-                  check_liveness, check_night, check_places, check_sample):
+                  check_liveness, check_canaries, check_night, check_places, check_sample):
         try:
             alerts += check(now)
         except Exception as e:
