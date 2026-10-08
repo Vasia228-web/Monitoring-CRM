@@ -474,7 +474,15 @@ def canary_keys(u: Universe, cfg) -> list[str]:
         out.append(k)
     by_attempt = sorted(out, key=lambda k: (
         max((r.last_attempt or datetime.min) for r in u.groups[k]), k))
-    by_age = sorted(out, key=lambda k: (min(r.id for r in u.groups[k]), k))
+    # Найстаріші — за id ВЛАСНОГО рядка сайту (не копії LUN); серед найстаріших 10%
+    # (не менше 4) — давніша спроба першою, щоб щоразу не ті самі два ключі.
+    own = cfg.hosts
+    by_age = sorted(out, key=lambda k: (min((r.id for r in u.groups[k]
+                                             if r.source in own[u.key_host[k]].canary_sources),
+                                            default=10**12), k))
+    head = max(4, len(by_age) // 10)
+    by_age = sorted(by_age[:head], key=lambda k: (
+        max((r.last_attempt or datetime.min) for r in u.groups[k]), k)) + by_age[head:]
     mixed, used = [], set()
     for pair in zip(by_age, by_attempt):
         for k in pair:

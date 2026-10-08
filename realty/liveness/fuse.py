@@ -138,12 +138,13 @@ def held_for(cfg, item, held: set[str]) -> bool:
 
 
 def sweep_share_for(cfg, name: str) -> float:
-    """Межа пулу обходу для джерела чи сайту `name`: хост цього сімейства; джерело без
-    власного хоста (копії) — найсуворіша з меж хостів."""
+    """Межа пулу обходу сайту (сімейства) `name` — hosts.*.sweep_share його хоста. Пул
+    обходу судимо лише за сайтом, чий підпис спрацював (`evaluate`): за джерелом рядків
+    («lun» — здебільшого копії чужих оголошень) межа не мала б сенсу."""
     for spec in cfg.hosts.values():
         if spec.family == name and spec.checkable:
             return spec.sweep_share
-    return min(s.sweep_share for s in cfg.hosts.values() if s.checkable)
+    return 1.0
 
 
 def _limits(fz, pool: str, cfg=None, name: str | None = None) -> tuple[float, int]:
@@ -220,6 +221,8 @@ def window_counts(session, cfg, *, since: datetime,
         unit = (site_key or f"id:{lid}", tier, at) if mode == "tiered" else (lid, tier, at)
         for scope, name in ((SCOPE_SOURCE, source), (SCOPE_HOST, pol.family_of_key(site_key))):
             if not name or (name in cleared and at < cleared[name]):
+                continue
+            if pool == POOL_SWEEP and scope == SCOPE_SOURCE:
                 continue
             mark = (scope, name, pool, unit)
             if mark in seen:
@@ -299,11 +302,15 @@ def evaluate(outcomes, cfg, *, prior: dict | None = None,
             for scope, name in ((SCOPE_SOURCE, row.source), (SCOPE_HOST, family)):
                 if not name:
                     continue
-                if pool is not None:
+                if pool == POOL_SWEEP and scope == SCOPE_SOURCE:
+                    pool_here = None          # обхід — лише за сайтом (sweep_share_for)
+                else:
+                    pool_here = pool
+                if pool_here is not None:
                     if fz.mode == "tiered":
-                        units.add((scope, name, pool))
+                        units.add((scope, name, pool_here))
                     else:
-                        c = counts[(scope, name, pool)]
+                        c = counts[(scope, name, pool_here)]
                         c[0] += 1
                         c[1] += int(removed)
                 if url and len(examples[name]) < EXAMPLES_MAX and url not in examples[name]:

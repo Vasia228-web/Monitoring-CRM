@@ -270,6 +270,9 @@ def api_liveness():
                              "share_test": cfg.fuse.share_test,
                              "hinted_share": cfg.fuse.hinted_share,
                              "canary_trip_min": cfg.fuse.canary_trip_min,
+                             "sweep_min_checked": cfg.fuse.sweep_min_checked,
+                             "sweep_share": {h: s.sweep_share for h, s in cfg.hosts.items()
+                                             if s.checkable},
                              "random_window_hours": cfg.fuse.random_window_hours}
     except configfiles.ConfigError as e:
         log.error("config/liveness.toml не читається: %s", e)

@@ -165,7 +165,8 @@ def night_batches(ncfg) -> int:
     return max(1, math.ceil(longest / ncfg.lanes.batch_minutes))
 
 
-def spread_canaries(p: HostPlan, first: int, per_batch: int, batch_minutes: float) -> None:
+def spread_canaries(p: HostPlan, first: int, per_batch: int, batch_minutes: float,
+                    seconds: float | None = None) -> None:
     """Контрольні — у кожен пакет смуги (D56): перші `first` — на початку, далі по
     `per_batch` через кожні ~batch_minutes × 60 / pace запитів. Ті, що випали б за
     кінець черги, не питаємо (запитів не більшає понад план)."""
@@ -173,7 +174,10 @@ def spread_canaries(p: HostPlan, first: int, per_batch: int, batch_minutes: floa
     if len(canaries) <= first or per_batch <= 0:
         return
     rest = [i for i in p.items if i.tier != queue.TIER_CANARY]
-    step = max(1, int(batch_minutes * 60 / max(p.pace, 0.1)))
+    # Удвічі частіше, ніж уміщує пакет за темпом: справжній крок довший за плановий
+    # (DOM.RIA 1,4 с проти 1,0; перевірки існування — тим самим темпом), і за плановим
+    # кроком частина пакетів лишалась би без контрольного (перевірка виправлень D56).
+    step = max(1, int(batch_minutes * 60 / max(p.pace, seconds or 0, 0.1) / 2))
     extra = canaries[first:]
     out = list(canaries[:first])
     pos = 0
@@ -265,7 +269,7 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
     for job in order:
         if job == queue.TIER_CANARY:
             fill(job, queue.canary_keys(u, lcfg),
-                 lambda h: lcfg.hosts[h].canaries_per_run + ncfg.jobs.canaries_per_batch
+                 lambda h: lcfg.hosts[h].canaries_per_run + 2 * ncfg.jobs.canaries_per_batch
                  * max(0, batches - 1))
         elif job == queue.TIER_HELD:
             fill(queue.TIER_HELD, queue.unapplied_removal_keys(u, lcfg, held))
@@ -293,7 +297,8 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
                            if u.key_host[k] in late])
     for host, p in plans.items():
         spread_canaries(p, lcfg.hosts[host].canaries_per_run, ncfg.jobs.canaries_per_batch,
-                        ncfg.lanes.batch_minutes)
+                        ncfg.lanes.batch_minutes,
+                        ncfg.report.typical_request_seconds.get(host))
     return NightPlan(hosts=plans, held=held, now=now)
 
 
@@ -346,6 +351,10 @@ def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int, night: str) -> list[s
         absent = [r.absent_since for r in rows if r.is_active and r.absent_since]
         if absent:
             hinted.append((min(absent), key))
+        elif not all(r.is_active for r in rows):
+            # Змішаний ключ (рядок уже знято, копія ще актуальна) — не сліпий: «знято» на
+            # ньому здебільшого справжнє і здувало б частку пулу випадкових (D56).
+            hinted.append((datetime.min, key))
         else:
             blind[u.key_host[key]].append(key)
     if tier == queue.TIER_M3_HINTED:

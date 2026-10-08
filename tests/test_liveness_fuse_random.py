@@ -144,17 +144,44 @@ def _canaries(db, start, deleted_at):
     return fresh, FakeNet(pages)
 
 
-def test_dom_ria_canary_removed_after_we_last_saw_it_is_a_genuine_removal(db, frozen):
-    """DOM.RIA: дата зняття 02:00 пізніша за останню появу в стрічці 01:00 — справжнє
-    зняття: записуємо й знімаємо, джерело не тримаємо."""
+def test_dom_ria_canary_removed_after_we_last_saw_it_still_holds(db, frozen):
+    """Дата зняття 02:00 пізніша за останню появу в стрічці 01:00 — схоже на справжнє
+    зняття, але виняток вимкнено (fuse.canary_genuine_max = 0, рішення власника 08.10:
+    будь-яке «знято» контрольного — зупинка): тримаємо."""
     from realty.liveness import fuse
 
     fresh, net = _canaries(db, 36100000, datetime(2026, 10, 8, 2, 0))
     stats = verify.verify_batch(http=net)
     assert stats["tiers"]["dom.ria.com"].get("canary") == 4
-    assert fuse.held_sources() == set()
-    assert get(db, fresh[0]).is_active is False
-    assert [g["key"] for g in stats["canary_genuine"]] == ["domria:36100000"]
+    assert fuse.held_sources() == {"domria"}
+    assert all(get(db, i).is_active for i in fresh)
+    assert configfiles.load("liveness").fuse.canary_genuine_max == 0
+
+
+def test_the_genuine_exception_when_enabled_records_one_and_does_not_hold():
+    """Якщо власник колись увімкне виняток (canary_genuine_max = 1): один контрольний із
+    датою зняття між нашою появою і «зараз» — записується, не тримає; два — тримають."""
+    from dataclasses import replace
+
+    from realty.liveness import fuse
+
+    cfg = configfiles.load("liveness")
+    cfg = replace(cfg, fuse=replace(cfg.fuse, canary_genuine_max=1))
+    seen = datetime(2026, 10, 8, 1, 0)
+
+    def run(n_genuine):
+        out = []
+        for i in range(4):
+            oc = _oc("dom.ria.com", "domria", "canary", 700 + i, i < n_genuine,
+                     removed_at=datetime(2026, 10, 8, 2, 0), seen=seen)
+            oc.at = NOW
+            out.append(oc)
+        return out
+
+    report: dict = {}
+    assert fuse.evaluate(run(1), cfg, report=report) == []
+    assert len(report["canary_genuine"]) == 1
+    assert [t.reason for t in fuse.evaluate(run(2), cfg)] == ["canary"]
 
 
 def test_dom_ria_canary_removed_before_we_last_saw_it_holds_the_source(db, frozen):
@@ -297,20 +324,38 @@ def test_a_key_with_an_already_removed_row_is_not_drawn_as_random(db):
 
 
 def test_night_canaries_go_into_every_batch():
-    """Вночі прогін — 15-хвилинний пакет: після повної порції на початку — по одному
-    контрольному через кожні ~batch × 60 / pace запитів (рішення власника 08.10)."""
+    """Вночі прогін — 15-хвилинний пакет: після повної порції на початку — контрольні
+    вдвічі частіше, ніж уміщує пакет за темпом (справжній крок довший за плановий:
+    DOM.RIA 1,4 с проти 1,0), тож кожен пакет має хоч один (рішення власника 08.10)."""
     from realty.night import plan
 
     ncfg = configfiles.load("night")
     assert plan.night_batches(ncfg) == 7                     # 01:10–02:47 = 97 хв / 15
-    items = [SimpleNamespace(tier="canary") for _ in range(4 + 6)]
+    items = [SimpleNamespace(tier="canary") for _ in range(4 + 12)]
     items += [SimpleNamespace(tier="onetime_blind") for _ in range(2000)]
-    hp = plan.HostPlan(host="olx.ua", pace=3.0, items=list(items))
-    plan.spread_canaries(hp, 4, 1, 15)
+    hp = plan.HostPlan(host="dom.ria.com", pace=1.0, items=list(items))
+    plan.spread_canaries(hp, 4, 1, 15, seconds=1.4)
     tiers = [i.tier for i in hp.items]
-    assert tiers[:4] == ["canary"] * 4 and len(tiers) == len(items)
-    step = 15 * 60 // 3                                      # 300 запитів на пакет
+    assert tiers[:4] == ["canary"] * 4
+    assert [i.tier for i in hp.items if i.tier != "canary"] == ["onetime_blind"] * 2000
+    real_batch = int(15 * 60 / 1.4)                          # ~642 запити за 15 хв насправді
     body = tiers[4:]
-    for b in range(6):
-        assert "canary" in body[b * (step + 1):(b + 1) * (step + 1)], b
-    assert hp.tiers["canary"] == 10
+    for start in range(0, len(body) - real_batch, real_batch // 3):
+        assert "canary" in body[start:start + real_batch], start
+
+
+def test_night_m3_puts_mixed_keys_into_the_hinted_part(db):
+    """M3: змішаний ключ (рядок уже знято, копія актуальна) — не сліпий випадковий."""
+    from realty.liveness import queue
+    from realty.night import plan
+
+    for i in range(10):
+        add(db, ria_url(36700000 + i), source="domria", external_id=str(36700000 + i))
+    add(db, ria_url(36709999), source="domria", external_id="gone", is_active=False)
+    add(db, ria_url(36709999), source="lun", external_id="lun-copy-2")
+    cfg = configfiles.load("liveness")
+    with db() as s:
+        u = queue.universe(s, cfg, now=NOW, history_since=plan.EPOCH)
+    blind = plan._m3_keys(u, cfg, queue.TIER_M3_BLIND, 7, "2026-10-09")
+    hinted = plan._m3_keys(u, cfg, queue.TIER_M3_HINTED, 7, "2026-10-09")
+    assert "domria:36709999" in hinted and "domria:36709999" not in blind
