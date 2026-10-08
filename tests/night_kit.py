@@ -132,7 +132,9 @@ def clean_night():
     """Нічні записи й утримання хостів — у спільній ops.db тестів: кожен тест чистий."""
     def wipe():
         ops.init_ops(force=True)
-        for table in ("night_runs", "night_holds", "liveness_fuse", "liveness_fuse_log"):
+        # night_state, olx_tab_seen — стан нічних робіт доказів (E11, D60).
+        for table in ("night_runs", "night_holds", "liveness_fuse", "liveness_fuse_log",
+                      "night_state", "olx_tab_seen"):
             try:
                 with ops.engine.begin() as conn:
                     conn.execute(text(f"DELETE FROM {table}"))

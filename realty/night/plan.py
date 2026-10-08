@@ -67,6 +67,9 @@ class HostPlan:
     held_keys: int = 0                                    # ключів під запобіжником — не питаємо
     attempted_tonight: int = 0                            # уже пробували цієї ночі
     body_gets: int = 0                                    # GET замість HEAD — для доказів (E11)
+    # Дозбір доказів Блоків 3/4 після Блоку 1 (E11, D60; night/evidence.py): "spec" —
+    # план для смуги (рендери OLX), решта — числа для звіту й `--dry-run`.
+    evidence: dict = field(default_factory=dict)
 
     @property
     def requests(self) -> int:
@@ -82,7 +85,8 @@ class HostPlan:
                 "seconds": round(self.seconds, 1), "tiers": dict(self.tiers),
                 "identity": self.identity, "skipped": self.skipped,
                 "overdue_share": self.overdue_share, "held_keys": self.held_keys,
-                "attempted_tonight": self.attempted_tonight, "body_gets": self.body_gets}
+                "attempted_tonight": self.attempted_tonight, "body_gets": self.body_gets,
+                "evidence": {k: v for k, v in self.evidence.items() if k != "spec"}}
 
 
 @dataclass
@@ -95,7 +99,7 @@ class NightPlan:
     def lanes(self) -> dict[str, HostPlan]:
         """Хости, яким є що робити (ключі чи дозбір) і яких не зупинено."""
         return {h: p for h, p in self.hosts.items()
-                if p.skipped is None and (p.items or p.identity)}
+                if p.skipped is None and (p.items or p.identity or p.evidence.get("spec"))}
 
     def as_dict(self) -> dict:
         return {h: p.as_dict() for h, p in sorted(self.hosts.items())}

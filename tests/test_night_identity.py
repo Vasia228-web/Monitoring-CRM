@@ -189,11 +189,23 @@ def test_lun_identity_pass_in_the_lane_asks_only_lun_ua_at_the_night_pace(wire, 
     """Справжній Lane.finish → identity_job('lun') → прохід стрічки: кожен запит — до
     lun.ua, пауза старт-до-старту ≥ нічного темпу lun.ua. Записи стрічки ведуть на
     rieltor.ua, olx.ua і dom.ria.com, і стан у них «невідомо» — старий прохід ішов на їхні
-    сторінки деталей своїм темпом 1,5 с, поки смуги цих хостів питали їх у своєму."""
+    сторінки деталей своїм темпом 1,5 с, поки смуги цих хостів питали їх у своєму.
+
+    З E11 (D60) прохід — спільний нічний прохід стрічки (night/feed.py), а не звичайний
+    збір: новий запис стрічки (9001) НЕ додається, наявний рядок (9000) отримує identity
+    і докази лише туди, де порожньо (до E11 тест перевіряв `scrape --no-detail` і
+    вставку 9001 — поведінку свідомо змінено, D60)."""
+    import realty.db as rdb
+
+    from night_kit import scope_of
+
     clock, log, pages = wire
-    for i in range(3):
+    monkeypatch.setattr(rdb, "session_scope", scope_of(db))
+    for i in range(60):
         add(db, f"https://rieltor.ua/ivano-frankovsk/flats-sale/view/{7700000 + i}/",
             source="lun", external_id=f"old{i}")              # активні LUN без identity
+    known = add(db, "https://rieltor.ua/ivano-frankovsk/flats-sale/view/11868893/",
+                source="lun", external_id="9000")
     objs = [_lun_obj(0, "https://rieltor.ua/ivano-frankovsk/flats-sale/view/11868893/"),
             _lun_obj(1, "https://www.olx.ua/d/uk/obyavlenie/kvartyra-IDabc12.html"),
             _lun_obj(2, "https://dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-"
@@ -208,17 +220,20 @@ def test_lun_identity_pass_in_the_lane_asks_only_lun_ua_at_the_night_pace(wire, 
     steps = _inline_scrape(monkeypatch, db)
     lane, _net = _lane("lun.ua", [], clock, identity="lun")
     summary = lane.run()
-    assert steps, "прохід стрічки не запускався"
+    assert not steps, "звичайного збору (`cli.py scrape`) уночі більше немає"
     assert {host for host, _t, _u in log} == {"lun.ua"}, log
     pace = policy.pace(policy.load(), "lun.ua", "night")
     assert len(log) >= 2 and min(_gaps([t for _h, t, _u in log])) >= pace - 1e-6
-    assert "--no-detail" in steps[0] and "--min-delay" in steps[0]
     assert summary["stopped"] is None
     from realty.models import Listing
 
-    with db() as s:                                  # стрічку записано (це звичайний збір)
+    with db() as s:
         assert s.scalar(select(func.count()).select_from(Listing)
-                        .where(Listing.external_id == "9001")) == 1
+                        .where(Listing.external_id == "9001")) == 0     # не збір
+        row = s.get(Listing, known)
+        assert row.identity and row.seller_evidence["lun_checked_at"]
+        assert row.place_raw["lun_geo_checked_at"]
+        assert row.last_seen == SEEN and row.price_usd == 50_000.0        # не чіпали
 
 
 def test_full_pass_reports_what_the_feed_pass_wrote_and_keeps_flombu_state(db, tmp_path,

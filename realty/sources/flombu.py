@@ -126,6 +126,25 @@ class FlombuSource(BaseSource):
             "page": page,
         }
 
+    def parse_page(self, data: dict) -> tuple[list[dict], int, int | None]:
+        """Записи однієї сторінки JSON:API, скільки на ній записів і скільки сторінок
+        каже сайт (meta.pages) — для нічного проходу стрічки (E11, D60): той самий розбір
+        (`_parse`, гео-відбір), що й у збору, без запису."""
+        items = data.get("data") or []
+        geo = {inc["id"]: inc.get("attributes", {}) for inc in (data.get("included") or [])
+               if inc.get("type") == "estateRecordLocation"}
+        pages = (data.get("meta") or {}).get("pages")
+        recs = []
+        for item in items:
+            try:
+                rec = self._parse(item, geo)
+            except Exception as e:                     # noqa: BLE001 — запис, не сторінка
+                log.debug("flombu: запис %s не розібрався: %s", item.get("id"), e)
+                continue
+            if rec:
+                recs.append(rec)
+        return recs, len(items), pages if isinstance(pages, int) else None
+
     def iter_listings(self) -> Iterator[dict]:
         total = None                      # meta.pages — скільки сторінок каже сам сайт
         page = None

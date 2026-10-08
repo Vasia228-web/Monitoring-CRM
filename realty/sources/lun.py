@@ -107,8 +107,30 @@ def iter_json_objects(payload: str, marker: str = '{"id":') -> Iterator[dict]:
         pos = end + 1
 
 
+def page_url(page: int) -> str:
+    """Адреса сторінки стрічки (та сама, що в iter_listings)."""
+    return FLATS_URL if page == 1 else f"{FLATS_URL}?page={page}"
+
+
 class LunSource(BaseSource):
     name = "lun"
+
+    def parse_page(self, html: str) -> tuple[list[dict], int]:
+        """Записи однієї сторінки стрічки й скільки об'єктів оголошень на ній (−1 —
+        порожній payload: розмітка змінилась). Для нічного проходу стрічки (E11, D60):
+        той самий розбір, що й у збору (`_parse`, гео-відбір), без запису."""
+        payload = extract_payload(html)
+        if not payload:
+            return [], -1
+        rows = resolve_text_rows(payload)
+        recs, found = [], 0
+        for obj in iter_json_objects(payload):
+            if "price" not in obj or "urlRaw" not in obj:
+                continue
+            found += 1
+            if rec := self._parse(obj, rows):
+                recs.append(rec)
+        return recs, found
 
     def _geo_types(self) -> tuple:
         """Які geoEntities зберігати в place_raw (config/places/rules.toml

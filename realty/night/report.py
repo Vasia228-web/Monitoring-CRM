@@ -44,7 +44,7 @@ def as_dict(row: ops.NightRun) -> dict:
         "lock_waited_s", "config_hash", "liveness_hash", "fuse_mode", "liveness_run_id",
         "active_before", "active_after", "message")}
     for name in ("backup", "plan", "lanes", "batches", "per_host", "per_tier", "fuse",
-                 "identity", "totals", "liquidity_before", "liquidity_after"):
+                 "identity", "totals", "liquidity_before", "liquidity_after", "evidence"):
         d[name] = _j(getattr(row, name))
     return d
 
