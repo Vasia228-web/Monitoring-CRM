@@ -13,10 +13,12 @@
   friend — будь-хто, хто ввійшов: друг і власник;
   owner  — лише власник (auth.OWNER_ONLY); друг отримує 403.
 
-Два доступи друга записані тут як є, але ніде не задокументовані як його права
-(D38: «перегляд, аналітика, „в обробці“») — чекають рішення власника, D48:
-документація API (/openapi.json, /api/docs, /redoc) показує й маршрути власника,
-а POST /api/listings/{id}/status дає другові вручну позначити актуальність.
+Два доступи друга, що були тут записані як є (D48: документація API показувала й
+маршрути власника, а POST /api/listings/{id}/status давав другові вручну позначити
+актуальність), закрито рішенням власника 08.10 (D55 п. 5; хвиля W3, D58): /openapi.json,
+/api/docs (разом з /api/docs/oauth2-redirect), /redoc — префікси auth.OWNER_ONLY;
+ручна позначка — вираз auth.OWNER_ONLY_RE усередині спільного /api/listings.
+Клас «лише власник» тепер — `auth.owner_only(шлях)`: префікс або вираз.
 """
 from __future__ import annotations
 
@@ -60,11 +62,9 @@ POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/stats"): FRIEND,
     ("GET", "/api/analytics/segments"): FRIEND,
     ("GET", "/api/analytics/property/{property_id}"): FRIEND,
-    # «в обробці» — спільний список (D38); скарга «дані не збігаються»; ручна
-    # позначка актуальності — так зараз, клас фіксує наявну поведінку.
+    # «в обробці» — спільний список (D38); скарга «дані не збігаються».
     ("POST", "/api/listings/{listing_id}/processing"): FRIEND,
     ("POST", "/api/properties/{property_id}/processing"): FRIEND,
-    ("POST", "/api/listings/{listing_id}/status"): FRIEND,
     ("POST", "/api/listings/{listing_id}/report"): FRIEND,
     # Маячок часу переходу (Блок 2, D49): обидві ролі; вхід і same-origin — як
     # для будь-якого POST.
@@ -74,12 +74,14 @@ POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/property/{property_id}/liveness"): FRIEND,
     # «Райони й ЖК» (Блок 4, E10, D57): розподіл за районами й ЖК — обидві ролі.
     ("GET", "/places"): FRIEND,
-    # Документація API — за входом, як і все, що не відкрите явно.
-    ("GET", "/openapi.json"): FRIEND,
-    ("GET", "/api/docs"): FRIEND,
-    ("GET", "/docs/oauth2-redirect"): FRIEND,
-    ("GET", "/redoc"): FRIEND,
     # --- лише власник ---
+    # Документація API показує й маршрути власника; ручне «активне/неактивне» — лише
+    # власнику (рішення власника 08.10, D55 п. 5; D58).
+    ("GET", "/openapi.json"): OWNER,
+    ("GET", "/api/docs"): OWNER,
+    ("GET", "/api/docs/oauth2-redirect"): OWNER,
+    ("GET", "/redoc"): OWNER,
+    ("POST", "/api/listings/{listing_id}/status"): OWNER,
     ("GET", "/status"): OWNER,
     ("GET", "/api/status"): OWNER,
     ("GET", "/api/status/reports"): OWNER,
@@ -206,11 +208,13 @@ def test_policy_has_no_stale_entries():
 
 
 def test_owner_only_class_matches_auth_prefixes():
-    """Клас «лише власник» ⇔ шлях під префіксом auth.OWNER_ONLY; «без входу» ⇔ OPEN_PATHS."""
+    """Клас «лише власник» ⇔ auth.owner_only(шлях) — і для шаблону маршруту, і для
+    конкретної адреси; «без входу» ⇔ OPEN_PATHS."""
     for (method, path), level in POLICY.items():
-        under_prefix = path.startswith(auth.OWNER_ONLY)
-        assert under_prefix == (level == OWNER), \
-            f"{method} {path}: клас {level}, а префікс власника — {under_prefix}"
+        for p in (path, concrete(path)):
+            owner = auth.owner_only(p)
+            assert owner == (level == OWNER), \
+                f"{method} {p}: клас {level}, а auth.owner_only — {owner}"
         assert (path in auth.OPEN_PATHS) == (level == PUBLIC), \
             f"{method} {path}: клас {level}, а OPEN_PATHS — {path in auth.OPEN_PATHS}"
 
@@ -218,6 +222,18 @@ def test_owner_only_class_matches_auth_prefixes():
 def test_every_owner_prefix_still_protects_something():
     for prefix in auth.OWNER_ONLY:
         assert any(p.startswith(prefix) for _, p in POLICY), f"префікс {prefix} нічого не закриває"
+    for rx in auth.OWNER_ONLY_RE:
+        assert any(rx.fullmatch(p) for _, p in POLICY), f"вираз {rx.pattern} нічого не закриває"
+
+
+def test_owner_only_pattern_does_not_close_shared_listing_routes():
+    """Вираз ручної позначки не зачіпає сусідніх спільних маршрутів /api/listings/…"""
+    for path in ("/api/listings", "/api/listings/1/processing", "/api/listings/1/report",
+                 "/api/listings/1/statusx", "/api/listings/1/status/extra"):
+        assert not auth.owner_only(path), path
+    for path in ("/api/listings/1/status", "/api/listings/1/status/",
+                 "/api/docs/oauth2-redirect", "/openapi.json", "/redoc"):
+        assert auth.owner_only(path), path
 
 
 # --- Поведінка зі справжніми входами ------------------------------------------------------
@@ -403,3 +419,59 @@ def test_everything_else_needs_login(env, no_side_effects):
             assert browser.status_code == 303 and \
                 browser.headers["location"].startswith("/login"), f"{method} {path}"
         assert script.status_code == 401, f"{method} {path} → {script.status_code}"
+
+
+# --- Закриті доступи друга (рішення власника 08.10, D55 п. 5; хвиля W3, D58) ---------------
+
+DOCS = ("/openapi.json", "/api/docs", "/api/docs/oauth2-redirect", "/redoc")
+
+
+def _first_listing() -> tuple[int, bool | None]:
+    from realty.db import SessionLocal
+    from realty.models import Listing
+
+    with SessionLocal() as s:
+        row = s.execute(select(Listing.id, Listing.manual_active)
+                        .order_by(Listing.id).limit(1)).first()
+    if row is None:
+        pytest.skip("у копії бази немає оголошень")
+    return int(row[0]), row[1]
+
+
+def _manual_active(lid: int):
+    from realty.db import SessionLocal
+    from realty.models import Listing
+
+    with SessionLocal() as s:
+        return s.get(Listing, lid).manual_active
+
+
+@pytest.mark.parametrize("via", ["cookie", "basic"])
+def test_friend_gets_403_on_api_docs_and_manual_status(env, no_side_effects, via):
+    """До D58 друг відкривав документацію API (з маршрутами власника) і міг вручну
+    позначити оголошення неактуальним — тепер 403, і рядок у базі не змінюється."""
+    lid, before = _first_listing()
+    c = friend_client(via, "203.0.113.51" if via == "cookie" else "203.0.113.52",
+                      no_side_effects)
+    for path in DOCS:
+        r = c.get(path)
+        assert r.status_code == 403, f"друг ({via}): GET {path} → {r.status_code}"
+    r = c.post(f"/api/listings/{lid}/status", json={"active": not before},
+               headers={"Origin": SITE})
+    assert r.status_code == 403, r.status_code
+    assert _manual_active(lid) == before
+
+
+def test_owner_still_opens_api_docs_and_marks_status(env):
+    c = logged_in(OWNER_U, OWNER_PW, "203.0.113.53")
+    for path in DOCS:
+        r = c.get(path)
+        assert r.status_code == 200, f"власник: GET {path} → {r.status_code}"
+    assert "/api/listings/{listing_id}/status" in c.get("/openapi.json").json()["paths"]
+    # Swagger UI посилається на oauth2-redirect під тим самим префіксом.
+    assert "/api/docs/oauth2-redirect" in c.get("/api/docs").text
+    lid, before = _first_listing()
+    # Те саме значення — маршрут пройдено власником, а спільна копія бази не змінилась.
+    r = c.post(f"/api/listings/{lid}/status", json={"active": before}, headers={"Origin": SITE})
+    assert r.status_code == 200 and r.json()["manual_active"] == before, r.text[:200]
+    assert _manual_active(lid) == before

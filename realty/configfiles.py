@@ -1289,6 +1289,139 @@ class CycleConfig:
     places: CyclePlaces
 
 
+# --- Тривоги на два рівні й щоденне зведення (хвиля W3, D58) ------------------------------
+
+ALERT_LEVELS = ("critical", "warning")
+
+
+def _tz_problems(where: str, name: str) -> list[str]:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return [f"{where}: невідомий часовий пояс {name!r}"]
+    return []
+
+
+@dataclass(frozen=True)
+class AlertsDigest:
+    # «ГГ:ХХ» місцевого часу (`timezone`): перший запуск сторожа після цього часу шле
+    # зведення за цю місцеву дату, якщо його ще не надіслано.
+    at: str
+    timezone: str
+    max_chars: int = field(**_limits(min=500, max=4000))
+    # Скільки годин зниклі попередження лишаються в стані сторожа (для зведення).
+    keep_resolved_hours: float = field(**_limits(min=24))
+    # Найдовше вікно «з попереднього зведення» (пропущені дні не роздувають розділи).
+    max_window_hours: float = field(**_limits(min=24))
+
+    def problems(self) -> list[str]:
+        out = [] if hhmm_minutes(self.at) is not None else [f"at: {self.at!r} — час «ГГ:ХХ»"]
+        return out + _tz_problems("timezone", self.timezone)
+
+
+@dataclass(frozen=True)
+class AlertsSite:
+    local_url: str = field(**_limits(prefix="http://"))
+    check_public: bool
+    public_path: str = field(**_limits(prefix="/"))
+    timeout_s: float = field(**_limits(min=1, max=60))
+    fail_runs: int = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class AlertsIntegrity:
+    enabled: bool
+    at: str
+    max_seconds: float = field(**_limits(min=1, max=240))
+    databases: tuple[str, ...] = field(**_limits(min_len=1, choices=("realty", "ops")))
+
+    def problems(self) -> list[str]:
+        return [] if hhmm_minutes(self.at) is not None else [f"at: {self.at!r} — час «ГГ:ХХ»"]
+
+
+@dataclass(frozen=True)
+class AlertsUnits:
+    repeat_minutes: float = field(**_limits(min=1))
+    log_lines: int = field(**_limits(min=0, max=40))
+
+
+@dataclass(frozen=True)
+class AlertsConfig:
+    """`config/alerts.toml` — тривоги на два рівні (рішення власника 08.10, D55 п. 6; D58).
+
+    `levels` — префікс ключа тривоги → critical (одразу) чи warning (у щоденне зведення);
+    ключ без явного рівня — critical. `actions` — рядок «що робити» критичного
+    повідомлення ({arg} — частина ключа після «:»). Решта — зведення, сайт, цілісність
+    бази, впалі служби (`cli.py alert unit-failed`).
+    """
+
+    levels: dict[str, str]
+    actions: dict[str, str]
+    digest: AlertsDigest
+    site: AlertsSite
+    integrity: AlertsIntegrity
+    units: AlertsUnits
+
+    def problems(self) -> list[str]:
+        import re
+
+        out: list[str] = []
+        for key, level in self.levels.items():
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*(?::[a-z0-9][a-z0-9_.@-]*)?", key):
+                out.append(f"levels.{key}: префікс — малі латинські, цифри, «-», «_», "
+                           f"щонайбільше одне «:»")
+            if level not in ALERT_LEVELS:
+                out.append(f"levels.{key}: {level!r} — не з переліку {list(ALERT_LEVELS)}")
+        for key, text in self.actions.items():
+            if key not in self.levels:
+                out.append(f"actions.{key}: такого префікса немає в [levels]")
+            if not text.strip():
+                out.append(f"actions.{key}: порожньо")
+        return out
+
+
+@dataclass(frozen=True)
+class SampleRun:
+    per_source: int = field(**_limits(min=1, max=1000))
+    canaries_per_host: int = field(**_limits(min=0, max=100))
+    # Темп хостів: "cycle" — `delay` хоста, як крок циклу; "night" — не швидше за повний
+    # збір джерела (policy.pace).
+    pace: str = field(**_limits(choices=("cycle", "night")))
+    max_minutes: float = field(**_limits(min=1, max=90))
+    lock_wait_minutes: float = field(**_limits(min=0, max=60))
+    seed: int
+
+
+@dataclass(frozen=True)
+class SampleVerdict:
+    max_removed_share: float = field(**_limits(min=0, max=1))
+    min_checked: int = field(**_limits(min=1))
+    examples: int = field(**_limits(min=0, max=100))
+    # Тривога за прогоном тримається до наступного, але не довше за стільки діб.
+    alert_days: float = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class SampleHints:
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class SampleConfig:
+    """`config/sample.toml` — контрольна вибірка Блоку 1 (`cli.py liveness sample`, D58).
+
+    Випадкові актуальні оголошення кожного джерела + контрольні (відомо живі) — тим
+    самим підписом, що й перевірка актуальності, під замком циклу; стану оголошень НЕ
+    змінює. Межі запобіжника (`share`, `min_checked`) — з liveness.toml [fuse].
+    """
+
+    run: SampleRun
+    verdict: SampleVerdict
+    hints: SampleHints
+
+
 # Реєстр тем: ім'я файлу без .toml (з підтекою, якщо є) → схема.
 SCHEMAS: dict[str, type] = {
     "speed": SpeedConfig,
@@ -1300,6 +1433,8 @@ SCHEMAS: dict[str, type] = {
     "places/complexes": PlacesComplexesConfig,
     "places/rules": PlacesRulesConfig,
     "cycle": CycleConfig,
+    "alerts": AlertsConfig,
+    "sample": SampleConfig,
 }
 
 

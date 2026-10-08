@@ -26,7 +26,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(watchdog, "PUBLIC_URL_PATH", tmp_path / "public_url")
     sent: list[str] = []
     state = tmp_path / "alerts.json"
-    return {"sent": sent, "run": lambda now: watchdog.run(now, sent.append, state)}
+    return {"sent": sent, "run": lambda now: watchdog.run(now, sent.append, state),
+            "state": lambda: watchdog.load_state(state)}
 
 
 def _cycle(status, finished, kept=0, message=None):
@@ -135,8 +136,9 @@ def test_block_rate_jump(env):
     _run("olx", NOW - timedelta(hours=6), kept=50, ok=50)
     _run("olx", NOW - timedelta(hours=3), kept=20, ok=30, failed=20, blocked=18)
     rep = env["run"](NOW)
-    assert rep["sent"] == ["blocks:olx"]
-    assert "36%" in env["sent"][0]
+    # Попередження (D58): не одразу, а в щоденне зведення — стан із текстом є.
+    assert rep["sent"] == [] and rep["warned"] == ["blocks:olx"]
+    assert "36%" in env["state"]()["blocks:olx"]["text"]
 
 
 def test_failed_backup_is_reported(env):
@@ -145,8 +147,10 @@ def test_failed_backup_is_reported(env):
         s.add(backup.BackupRecord(status="failed", created_at=NOW - timedelta(hours=2),
                                   message="немає жодного місця поза машиною"))
     rep = env["run"](NOW)
-    assert rep["sent"] == ["backup"]
+    # Копії поза машиною немає ніде — критичне (D58; колишній ключ «backup»).
+    assert rep["sent"] == ["backup-none"]
     assert "поза машиною" in env["sent"][0]
+    assert env["sent"][0].startswith(watchdog.CRITICAL_HEAD)
 
 
 def test_partial_backup_failure_is_reported(env):
@@ -157,8 +161,10 @@ def test_partial_backup_failure_is_reported(env):
                                   offsite="telegram:9",
                                   message="rclone: couldn't fetch token: invalid_client"))
     rep = env["run"](NOW)
-    assert rep["sent"] == ["backup-partial"]
-    assert "invalid_client" in env["sent"][0] and "telegram:9" in env["sent"][0]
+    # Одне сховище не спрацювало — попередження в зведення (D58), не одразу.
+    assert rep["sent"] == [] and rep["warned"] == ["backup-partial"]
+    text = env["state"]()["backup-partial"]["text"]
+    assert "invalid_client" in text and "telegram:9" in text
 
 
 def test_records_that_fail_to_write_raise_an_alarm(env):

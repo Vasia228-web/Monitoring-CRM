@@ -1,5 +1,9 @@
 [Unit]
 Description=Realty: веб-інтерфейс (лише localhost; назовні — через тунель)
+# Упала (failed) — критична тривога одразу (realty-alert@, хвиля W3, D58). З
+# Restart=always служба зазвичай не доходить до failed (перезапуск); падіння,
+# після якого сайт не піднявся, ловить сторож: site-local, 2 запуски поспіль.
+OnFailure=realty-alert@%n.service
 StartLimitIntervalSec=0
 
 [Service]

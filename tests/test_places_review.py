@@ -369,6 +369,12 @@ def test_watchdog_would_change_once_per_state(tmp_path, monkeypatch):
     ops.init_ops(force=True)
     monkeypatch.setattr(watchdog, "collect", lambda now, state: watchdog.check_places(now))
     monkeypatch.setattr(watchdog, "_header", lambda: "[test]")
+    # Хвиля W3 (D58): places-would-change — попередження (у щоденне зведення, не одразу);
+    # тут перевіряється семантика `once` надсилання, тож рівень примусово критичний.
+    from realty import configfiles
+    assert watchdog.level_of("places-would-change",
+                             configfiles.load("alerts").levels) == watchdog.WARNING
+    monkeypatch.setattr(watchdog, "level_of", lambda key, levels: watchdog.CRITICAL)
     sent = []
     t0 = datetime(2026, 10, 8, 12, 0)
     state = tmp_path / "alerts.json"

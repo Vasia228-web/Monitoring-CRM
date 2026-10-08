@@ -1,5 +1,7 @@
 [Unit]
 Description=Realty: щоденний бекап бази
+# Упала (failed) — критична тривога одразу (realty-alert@, хвиля W3, D58).
+OnFailure=realty-alert@%n.service
 
 [Service]
 Type=oneshot

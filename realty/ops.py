@@ -388,6 +388,66 @@ class LivenessFuseLog(OpsBase):
     examples: Mapped[str | None] = mapped_column(Text)                 # JSON
 
 
+class LivenessSampleRun(OpsBase):
+    """Один прогін контрольної вибірки Блоку 1 (`cli.py liveness sample`; D55 п. 7, D58).
+
+    Статус: running | ok | lock_timeout (цикл не звільнив замка — нічого не перевірено) |
+    disabled (COLLECTOR_OFF) | failed (виняток). `verdicts` — JSON джерело → вердикт:
+    pass | fail (знято > max_removed_share) | fuse_share (> fuse.share — рішення власника) |
+    canary (контрольне показало «знято» — джерело зупинено) | too_few | skipped.
+    Стану оголошень вибірка не змінює — лише цей рядок і liveness_sample_checks.
+    """
+
+    __tablename__ = "liveness_sample_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    per_source: Mapped[int | None] = mapped_column(Integer)
+    seed: Mapped[str | None] = mapped_column(String(40))
+    config_hash: Mapped[str | None] = mapped_column(String(16))      # config/sample.toml
+    liveness_hash: Mapped[str | None] = mapped_column(String(16))    # config/liveness.toml
+    lock_waited_s: Mapped[float] = mapped_column(Float, default=0.0)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    verdicts: Mapped[str | None] = mapped_column(Text)               # JSON: джерело → вердикт
+    lanes: Mapped[str | None] = mapped_column(Text)                  # JSON: хост → запити, зупинка
+    message: Mapped[str | None] = mapped_column(Text)
+
+
+class LivenessSampleCheck(OpsBase):
+    """Одне оголошення контрольної вибірки: що відповів підпис і коли його бачили.
+
+    `kind`: random (випадкове актуальне) | canary (відомо живий ключ). `outcome`: alive |
+    removed | not_found | unknown | not_reached (стеля часу, блокування). `last_seen` —
+    коли оголошення востаннє бачили в стрічці, `last_checked`/`last_attempt` — коли
+    звичайна перевірка востаннє отримала відповідь / пробувала (пояснює запізнення
+    виявлення). `hinted` — «знято» передано звичайній перевірці (завдання lookup_checks).
+    """
+
+    __tablename__ = "liveness_sample_checks"
+    __table_args__ = (Index("ix_sample_check_run", "run_id", "source"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(32))
+    listing_id: Mapped[int | None] = mapped_column(Integer)
+    property_id: Mapped[int | None] = mapped_column(Integer)
+    key: Mapped[str | None] = mapped_column(String(64))
+    host: Mapped[str | None] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(8))
+    outcome: Mapped[str] = mapped_column(String(12))
+    signature: Mapped[str | None] = mapped_column(String(24))
+    code: Mapped[int | None] = mapped_column(Integer)
+    url: Mapped[str | None] = mapped_column(String(300))             # безпечна адреса (policy.safe_url)
+    detail: Mapped[str | None] = mapped_column(Text)                 # JSON: доказ підпису
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    last_checked: Mapped[datetime | None] = mapped_column(DateTime)
+    last_attempt: Mapped[datetime | None] = mapped_column(DateTime)
+    hinted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class NightRun(OpsBase):
     """Одне нічне вікно диригента `cli.py night` (E9, D53).
 

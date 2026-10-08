@@ -4,6 +4,8 @@
   python cli.py cycle                  # регулярний цикл із лімітами часу (для розкладу)
   python cli.py backup                 # бекап бази з перевіркою відновлення
   python cli.py watchdog               # сигнал тиші: Telegram, якщо системі погано
+  python cli.py alert digest --dry-run # щоденне зведення попереджень (без надсилання)
+  python cli.py alert levels           # рівень кожної тривоги (config/alerts.toml)
   python cli.py tunnel                 # доступ ззовні через Cloudflare Tunnel
   python cli.py scrape                 # зібрати з усіх джерел
   python cli.py scrape --sources olx,lun --pages 3
@@ -15,6 +17,8 @@
   python cli.py liveness plan          # яруси перевірки актуальності (без мережі)
   python cli.py liveness fuse status   # запобіжник; fuse clear --source domria — зняти
   python cli.py liveness report        # підсумки останньої ночі (по хостах, до/після)
+  python cli.py liveness sample --dry-run  # контрольна вибірка: план (без мережі й запису)
+  python cli.py liveness sample --report   # звіт останньої контрольної вибірки
   python cli.py liveness report --status --liquidity  # зведення /status і строк продажу
   python cli.py night --dry-run        # план ночі: ключі × темп = тривалість по хостах
   python cli.py night --budget-min 100 # нічний диригент (таймер realty-night, 01:10 і 04:10)
@@ -178,13 +182,50 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
         msg_id = watchdog.test_message()
         print(f"тестове повідомлення прийняте Telegram, message_id={msg_id}")
         return 0
-    rep = watchdog.run()
+    # Таймер сторожа — ще й щоденне зведення, коли настав його час (D58).
+    rep = watchdog.run(digest=True)
     print(f"активні: {rep['active'] or '—'}")
     print(f"надіслано: {rep['sent'] or '—'}   притримано: {rep['held'] or '—'}   "
           f"відновилось: {rep['resolved'] or '—'}")
+    print(f"попередження (у зведення): {rep['warned'] or '—'}"
+          + (f"   із черги: {rep['outbox']}" if rep["outbox"] else "")
+          + (f"   зведення: {rep['digest']}" if rep["digest"] else ""))
     for e in rep["errors"]:
         print(f"  ! {e}")
     return 1 if rep["errors"] else 0
+
+
+def cmd_alert(args: argparse.Namespace) -> int:
+    """Тривоги на два рівні (D58): впала служба (OnFailure), щоденне зведення, рівні."""
+    from realty import watchdog
+
+    if args.action == "unit-failed":
+        # Викликає realty-alert@%n.service; сам ніколи не падає (watchdog.unit_failed).
+        return watchdog.unit_failed(args.unit or "")
+    from realty import configfiles
+
+    cfg = configfiles.load("alerts")
+    if args.action == "levels":
+        for key in watchdog.ALERT_KEYS:
+            print(f"  {watchdog.level_of(key, cfg.levels):<9} {key}")
+        return 0
+    from realty import digest, notify, ops
+
+    state = watchdog.load_state()
+    now = ops._now()
+    text = digest.build(now, state, cfg)
+    if args.send:
+        if not notify.configured():
+            print("Telegram не налаштовано: задайте TELEGRAM_BOT_TOKEN і TELEGRAM_CHAT_ID у .env")
+            return 2
+        # Ручне надсилання розкладу щоденного не змінює (стан не пишеться).
+        msg_id = notify.send_message(text)
+        print(f"зведення надіслано, message_id={msg_id} ({len(text)} символів)")
+        return 0
+    print(text)
+    print(f"\n({len(text)} символів; не надіслано — --dry-run; останнє щоденне надіслано "
+          f"за дату: {(state.get('_digest') or {}).get('date') or '—'})")
+    return 0
 
 
 def cmd_tunnel(args: argparse.Namespace) -> int:
@@ -426,6 +467,24 @@ def cmd_liveness(args: argparse.Namespace) -> int:
     init_db()
     if args.action == "run":
         return cmd_verify(args)
+    if args.action == "sample":
+        # Контрольна вибірка Блоку 1 (D55 п. 7, D58): стану оголошень не змінює.
+        from realty.liveness import sample
+
+        if args.report:
+            rows = sample.runs(limit=args.last)
+            if not rows:
+                print("контрольної вибірки ще не було (cli.py liveness sample)")
+                return 0
+            for d in reversed(rows):
+                print(sample.render(d))
+            return 0
+        import signal
+
+        # SIGTERM (systemd TimeoutStartSec) — як SystemExit: рядок прогону закривається
+        # «failed», замок циклу звільняється.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+        return sample.run(per_source=args.per_source, dry_run=args.dry_run)
     if args.action == "fuse":
         from realty.liveness import fuse
 
@@ -960,6 +1019,17 @@ def main() -> int:
                     help="надіслати тестове повідомлення тим самим шляхом, що й тривогу")
     wd.set_defaults(func=cmd_watchdog)
 
+    al = sub.add_parser("alert", help="тривоги на два рівні: впала служба, щоденне зведення")
+    al.add_argument("action", choices=("unit-failed", "digest", "levels"),
+                    help="unit-failed ЮНІТ — критичне одразу (OnFailure=realty-alert@%%n); "
+                         "digest — щоденне зведення; levels — рівень кожної тривоги")
+    al.add_argument("unit", nargs="?", help="unit-failed: юніт systemd, що впав")
+    al_mode = al.add_mutually_exclusive_group()
+    al_mode.add_argument("--dry-run", action="store_true",
+                         help="digest: надрукувати, не надсилати (типово)")
+    al_mode.add_argument("--send", action="store_true", help="digest: надіслати зараз")
+    al.set_defaults(func=cmd_alert)
+
     tn = sub.add_parser("tunnel", help="доступ ззовні через Cloudflare Tunnel")
     tn.add_argument("--plan", action="store_true", help="лише показати, що буде запущено")
     tn.set_defaults(func=cmd_tunnel)
@@ -1002,10 +1072,10 @@ def main() -> int:
 
     lv = sub.add_parser("liveness", help="перевірка актуальності (Блок 1): прогін, "
                                          "запобіжник, зведення, план")
-    lv.add_argument("action", choices=("run", "fuse", "report", "plan"),
+    lv.add_argument("action", choices=("run", "fuse", "report", "plan", "sample"),
                     help="run — як verify; fuse — стан чи зняття запобіжника; report — "
                          "підсумки ночі (--status — зведення /status); plan — яруси черги "
-                         "без мережі")
+                         "без мережі; sample — контрольна вибірка (--report — звіт)")
     lv.add_argument("fuse_action", nargs="?", default="status", choices=("status", "clear"))
     lv.add_argument("--source", help="fuse clear: джерело (domria, olx, lun, …)")
     lv.add_argument("--limit", type=int, default=None, help="run: стеля на кожен сайт")
@@ -1019,6 +1089,12 @@ def main() -> int:
     lv.add_argument("--night", type=int, help="report: номер нічного вікна (ops.night_runs)")
     lv.add_argument("--last", type=int, default=1, help="report: скільки останніх вікон")
     lv.add_argument("--json", action="store_true", help="report: сирі числа")
+    lv.add_argument("--per-source", type=int, default=None,
+                    help="sample: випадкових на джерело (типово — config/sample.toml)")
+    lv.add_argument("--dry-run", action="store_true",
+                    help="sample: лише план вибірки — без мережі, замка й запису")
+    lv.add_argument("--report", action="store_true",
+                    help="sample: звіт останнього прогону (--last N — кількох)")
     lv.set_defaults(func=cmd_liveness)
 
     nt = sub.add_parser("night", help="нічний диригент: перевірка актуальності, M2/M3, дозбір "

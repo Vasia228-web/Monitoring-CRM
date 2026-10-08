@@ -1,0 +1,137 @@
+# Тривоги сторожа на два рівні й щоденне зведення — хвиля W3 промту 11 (D58).
+#
+# Схема — realty/configfiles.py (AlertsConfig). Значень за замовчуванням у коді немає:
+# кожен ключ обов'язковий (`cli.py config check`). Код — realty/watchdog.py (рівні,
+# нові перевірки, `alert unit-failed`) і realty/digest.py (щоденне зведення).
+#
+# Рішення власника 08.10 (D55 п. 6): КРИТИЧНІ — одразу (збір стоїть, бекапу немає в
+# жодному сховищі, база пошкоджена, сайт не відкривається, нічна робота впала);
+# ПОПЕРЕДЖЕННЯ — одним зведенням раз на добу (одне сховище не спрацювало, підозрілі
+# склеювання, нерозпізнані райони тощо). Критичне має виглядати інакше, ніж зведення:
+# перший рядок «🚨 КРИТИЧНО — потрібна дія», у зведення — «📋 Щоденне зведення».
+
+[levels]
+# Ключ тривоги → рівень. Ключ підпадає під рядок, якщо дорівнює йому або починається з
+# «рядок:» (drop:domria → drop; night-blocked:olx.ua → night-blocked); найдовший збіг
+# виграє. Ключ БЕЗ явного рівня — critical (обережний бік): нова тривога в коді без
+# рядка тут прийде одразу, а тест tests/test_alerts.py вимагає рядок для кожної.
+# Обґрунтування кожного рядка — D58.
+#
+# --- збір ---
+silence = "critical"                 # жодного успішного циклу понад ALERT_SILENCE_HOURS
+drop = "critical"                    # джерело 2 прогони поспіль не записало нічого — «збір стоїть»
+write = "critical"                   # зібране не записується в базу — помилка бази
+low = "warning"                      # нових за добу < 20% звичайного, але не нуль
+blocks = "warning"                   # частка 401/403/429 збору зросла
+# --- бекап і база ---
+backup-none = "critical"             # копії поза машиною немає ніде / бекапу понад 30 год
+backup-partial = "warning"           # одне сховище не спрацювало (напр., Drive), інше — так
+db-integrity = "critical"            # PRAGMA quick_check чи integrity_check бекапу — не «ok»
+# --- сайт і служби ---
+site-local = "critical"              # 127.0.0.1:8000/healthz не відповідає 2 запуски поспіль
+site-public = "critical"             # публічна адреса /healthz не відповідає 2 запуски поспіль
+unit-failed = "critical"             # служба systemd упала (OnFailure → realty-alert@)
+# --- перевірка актуальності (Блок 1) ---
+liveness-fuse = "critical"           # запобіжник тримає джерело (зокрема контрольний «знято»)
+liveness-sample-canary = "critical"  # контрольна вибірка: відомо живе показало «знято»
+liveness-sample-share = "critical"   # контрольна вибірка: «знято» > fuse.share випадкових
+liveness-sample-removed = "warning"  # контрольна вибірка: «знято» > max_removed_share, ≤ fuse.share
+liveness-sample-skipped = "warning"  # контрольна вибірка не дочекалась замка циклу
+verify-blocks = "warning"            # блокування на перевірці актуальності зросли
+liveness-coverage = "warning"        # черга перевірки не встигає
+liveness-ria-unrecognized = "warning"  # сторінки DOM.RIA не розпізнано (нічого не знімається)
+liveness-repeat404 = "warning"       # правило повторного 404 помиляється — дані власнику
+liveness-snapshot-stale = "warning"  # повний перелік давно не оновлювався
+liveness-canary-genuine = "warning"  # контрольне DOM.RIA знято після того, як ми його бачили (справжнє)
+liveness-no-canary = "warning"       # 3 прогони циклу поспіль без жодного контрольного для хоста
+# --- нічний диригент ---
+night-failed = "critical"            # диригент упав або його вбито («триває» > 2,5 год)
+night-backup = "critical"            # бекап на старті вікна не вдався — вікно нічого не писало
+night-missing = "critical"           # за 26 год жодного нічного вікна, хоча цикли йдуть
+night-skipped = "critical"           # два вікна поспіль пропущено (цикл не звільнив замок)
+night-hold = "critical"              # хост чекає рішення (блокування дві ночі поспіль)
+night-blocked = "warning"            # смугу одного хоста зупинили блокування цієї ночі
+night-late = "warning"               # замок звільнено пізніше межі
+# --- зведення квартир, райони й ЖК (Блок 4) ---
+dedup-suspicious = "warning"
+dedup-missed = "warning"
+dedup-complex = "warning"
+places-failed = "warning"            # крок «райони й ЖК» не вдався (фільтри — попередній стан)
+places-would-change = "warning"      # змінилось би вже визначене — чекає рішення
+# --- сам сторож ---
+# Перевірка сторожа впала (решта працюють). Загалом — попередження; але впала перевірка
+# КРИТИЧНОГО (тиша, бекап, сайт, база, джерела, запобіжник, ніч, вибірка) — критичне:
+# інакше аварія, яку вона мала б побачити, тихо опинилась би лише в зведенні (D58).
+watchdog = "warning"
+"watchdog:check_silence" = "critical"
+"watchdog:check_backup" = "critical"
+"watchdog:check_site" = "critical"
+"watchdog:check_db_integrity" = "critical"
+"watchdog:check_sources" = "critical"
+"watchdog:check_liveness" = "critical"
+"watchdog:check_night" = "critical"
+"watchdog:check_sample" = "critical"
+"watchdog:alerts-config" = "critical"
+
+[actions]
+# Рядок «👉 Що робити» критичного повідомлення (і активного попередження у зведенні).
+# {arg} — частина ключа після «:» (джерело, хост, служба).
+silence = "systemctl --user status realty-cycle.timer realty-cycle.service; journalctl --user -u realty-cycle -n 80"
+drop = "journalctl --user -u realty-cycle -n 120 (джерело {arg}); розмітка сайту чи карантин — /status"
+write = "journalctl --user -u realty-cycle -n 120; цілісність бази — cli.py backup status"
+backup-none = "journalctl --user -u realty-backup -n 60; ручний бекап: .venv/bin/python cli.py backup; Google Drive — CHECKPOINTS.md, «Google Drive»"
+backup-partial = "Google Drive — CHECKPOINTS.md, «Google Drive» (rclone config reconnect gdrive:)"
+db-integrity = "збір не перезапускати; .venv/bin/python cli.py backup status, остання копія — cli.py backup verify <архів>; рішення — власник"
+site-local = "systemctl --user status realty-web; journalctl --user -u realty-web -n 80"
+site-public = "systemctl --user status realty-tunnel realty-web; journalctl --user -u realty-tunnel -n 60"
+unit-failed = "systemctl --user status {arg}; journalctl --user -u {arg} -n 80"
+liveness-fuse = "переглянути приклади на /status («Зняті оголошення»); підпис справний — зняти там же або cli.py liveness fuse clear --source {arg}"
+liveness-sample-canary = "cli.py liveness sample --report; відомо живе показало «знято» — підпис зламався, рішення власника"
+liveness-sample-share = "cli.py liveness sample --report; підпис зняття спрацював на >20% випадкової вибірки — рішення власника"
+night-failed = "journalctl --user -u realty-night -n 120; cli.py liveness report"
+night-backup = "journalctl --user -u realty-night -n 80; cli.py backup status"
+night-missing = "systemctl --user list-timers 'realty-*'; journalctl --user -u realty-night -n 80"
+night-skipped = "journalctl --user -u realty-cycle -n 80 — чому цикл тримає замок так довго"
+night-hold = "cli.py liveness report; дозволити знову — cli.py night unhold --host {arg}"
+
+[digest]
+# 08:40 — після нічного вікна 04:10–05:55, бекапу 04:30 і циклу 06:05 (≤ 07:05) та
+# перевірки цілісності о 07:40: у зведенні — уся ніч і ранок. Таймер сторожа —
+# кожні 30 хв не за годинником, тож зведення прийде між 08:40 і 09:10.
+at = "08:40"
+timezone = "Europe/Kyiv"
+# Telegram обрізає на 4096 (notify.MESSAGE_LIMIT = 4000): решта — хвостом «ще N рядків».
+max_chars = 3900
+# Зниклі попередження тримаються в стані сторожа 3 доби — зведення бачить і ті, що
+# зникли вночі; пропущений день (машина вимкнена) не роздуває вікно понад 72 год.
+keep_resolved_hours = 72
+max_window_hours = 72
+
+[site]
+# Сайт на машині; 2 запуски сторожа поспіль (~1 год) — перезапуск realty-web триває
+# 13–15 с (D54), один невдалий запит — ще не аварія.
+local_url = "http://127.0.0.1:8000/healthz"
+# Публічна адреса — з data/public_url (її пише тунель) + public_path; /healthz відкритий
+# без пароля (auth.OPEN_PATHS), як і в tunnel.responds.
+check_public = true
+public_path = "/healthz"
+timeout_s = 15
+fail_runs = 2
+
+[integrity]
+# PRAGMA quick_check раз на добу через з'єднання лише для читання. 07:40 — між циклом
+# 06:05 (≤ 07:05) і зведенням 08:40. Замір на копії (64 МБ, Mac): 0,22 с; Fedora
+# повільніша в 6–12 разів (D58). Стеля — progress handler SQLite: не встигла —
+# «перервано» (у зведенні), не тривога; сторож має TimeoutStartSec=5min.
+enabled = true
+at = "07:40"
+max_seconds = 120
+databases = ["realty", "ops"]
+
+[units]
+# `cli.py alert unit-failed` (OnFailure=realty-alert@%n): служба з Restart= може падати
+# щохвилини — одне повідомлення на службу не частіше ніж раз на стільки хвилин, далі —
+# лічильник «упала N разів».
+repeat_minutes = 60
+# Останні рядки journalctl служби в повідомленні (рядки зі схожим на секрет — маскуються).
+log_lines = 15
