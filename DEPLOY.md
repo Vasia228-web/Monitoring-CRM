@@ -104,9 +104,21 @@ systemctl --user list-timers 'realty-*'            # realty-identity є, realty-
 
 Ранкова звірка після нічного вікна (`cli.py liveness report --last 2`): актуальних
 після = до + повернуто − знято + нові оголошення дозбору identity; подій ціни —
-лише від дозбору identity. Дозбір identity LUN/flombu — це прохід стрічки (звичайний
-збір: нові оголошення, події ціни, last_seen — D43), тому ці два доданки — не помилка;
-будь-що понад них звіт показує як «НЕЗВІРЕНО».
+лише від дозбору identity. З E11 (D60) прохід стрічки LUN/flombu — уже НЕ збір: нових
+оголошень, подій ціни й last_seen він не пише, тож обидва доданки — 0, і будь-яка
+різниця — «НЕЗВІРЕНО».
+
+Нічні роботи доказів Блоків 3/4 (E11, D60) — розгортання між циклами, як вище:
+`config check` (нова тема `seller`), `db migrate` (realty.db — без змін: колонки
+seller_evidence/seller_profile/place_raw є з S3; ops.db — `night_state`, `olx_tab_seen`,
+`night_runs.evidence`: їх додає init_ops(), `db migrate --dry-run` показує), юніти не
+змінюються (Chromium для смуги рендерів — той самий, що й для збору OLX; MemoryMax
+нічного юніта 2600M). Перевірка: `cli.py night --dry-run` — розділ «ДОЗБІР ДОКАЗІВ»
+(рендери OLX, стрічка LUN/flombu, GET rieltor замість HEAD); уранці — `cli.py liveness
+report --last 2` (рядки «дозбір доказів», «прохід стрічки», «мітки вкладок OLX»),
+`GET /api/status/night` (покриття доказами за групами). Відкат — попередній коміт (нові
+таблиці й колонку ops.db старий код ігнорує; докази, вже дописані в seller_evidence і
+place_raw, — лише нові ключі JSON, старий код їх не читає).
 
 Тривоги на два рівні, права друга, контрольна вибірка (хвиля W3, D58) — між циклами,
 звичайним порядком вище (`config check` перевіряє нові `alerts.toml` і `sample.toml`;
@@ -130,7 +142,7 @@ systemctl --user list-timers 'realty-*'            # коли наступні �
 journalctl --user -u realty-cycle -n 50            # що було в останньому циклі
 journalctl --user -u realty-night -n 80            # останнє нічне вікно (бекап, смуги, пакети)
 .venv/bin/python cli.py liveness report --last 2   # дві останні нічні вікна по сайтах
-.venv/bin/python cli.py night --dry-run            # план наступного вікна: ключі × крок
+.venv/bin/python cli.py night --dry-run            # план наступного вікна: ключі × крок, дозбір доказів
 cat ~/realty/data/public_url                       # поточна адреса ззовні
 python cli.py watchdog --test                      # перевірити канал Telegram
 .venv/bin/python cli.py alert digest --dry-run     # зведення попереджень за добу (без надсилання)

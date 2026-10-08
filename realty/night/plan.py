@@ -73,6 +73,10 @@ class HostPlan:
     overdue_share: float | None = None
     held_keys: int = 0                                    # ключів під запобіжником — не питаємо
     attempted_tonight: int = 0                            # уже пробували цієї ночі
+    body_gets: int = 0                                    # GET замість HEAD — для доказів (E11)
+    # Дозбір доказів Блоків 3/4 після Блоку 1 (E11, D60; night/evidence.py): "spec" —
+    # план для смуги (рендери OLX), решта — числа для звіту й `--dry-run`.
+    evidence: dict = field(default_factory=dict)
 
     @property
     def requests(self) -> int:
@@ -88,7 +92,8 @@ class HostPlan:
                 "seconds": round(self.seconds, 1), "tiers": dict(self.tiers),
                 "identity": self.identity, "skipped": self.skipped,
                 "overdue_share": self.overdue_share, "held_keys": self.held_keys,
-                "attempted_tonight": self.attempted_tonight}
+                "attempted_tonight": self.attempted_tonight, "body_gets": self.body_gets,
+                "evidence": {k: v for k, v in self.evidence.items() if k != "spec"}}
 
 
 @dataclass
@@ -101,7 +106,7 @@ class NightPlan:
     def lanes(self) -> dict[str, HostPlan]:
         """Хости, яким є що робити (ключі чи дозбір) і яких не зупинено."""
         return {h: p for h, p in self.hosts.items()
-                if p.skipped is None and (p.items or p.identity)}
+                if p.skipped is None and (p.items or p.identity or p.evidence.get("spec"))}
 
     def as_dict(self) -> dict:
         return {h: p.as_dict() for h, p in sorted(self.hosts.items())}
@@ -299,6 +304,7 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
         spread_canaries(p, lcfg.hosts[host].canaries_per_run, ncfg.jobs.canaries_per_batch,
                         ncfg.lanes.batch_minutes,
                         ncfg.report.typical_request_seconds.get(host))
+    _mark_body_gets(session, lcfg, plans)
     return NightPlan(hosts=plans, held=held, now=now)
 
 
@@ -365,3 +371,22 @@ def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int, night: str) -> list[s
         random.Random(f"{seed}:{night}:{host}").shuffle(keys)
         out += keys
     return out
+
+
+def _mark_body_gets(session, lcfg, plans: dict[str, HostPlan]) -> None:
+    """Ключі хостів capture.body_hosts, рядкам яких бракує доказів Блоків 3/4, — GET
+    замість HEAD у тому самому слоті (класифікація та сама; інтеграція, конфлікт 4: «для
+    rieltor у M3 замість HEAD робимо GET»; E11, D60). Кількість запитів не змінюється."""
+    from ..liveness import capture
+
+    if not lcfg.capture.enabled:
+        return
+    for host, cap in lcfg.capture.body_hosts.items():
+        p = plans.get(host)
+        if p is None or not p.items:
+            continue
+        need = capture.body_need_keys(session, lcfg, host)
+        for item in p.items:
+            if item.key in need:
+                item.body_cap = int(cap)
+                p.body_gets += 1

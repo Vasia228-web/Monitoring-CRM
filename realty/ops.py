@@ -493,6 +493,9 @@ class NightRun(OpsBase):
     liquidity_before: Mapped[str | None] = mapped_column(Text)  # JSON
     liquidity_after: Mapped[str | None] = mapped_column(Text)   # JSON
     message: Mapped[str | None] = mapped_column(Text)
+    # JSON: дозбір доказів Блоків 3/4 (E11, D60) — по смугах (рендери OLX, прохід стрічки
+    # LUN/flombu, GET rieltor), мітки вкладок OLX, покриття доказами на кінець вікна.
+    evidence: Mapped[str | None] = mapped_column(Text)
 
 
 class PlacesRun(OpsBase):
@@ -529,6 +532,36 @@ class PlacesRun(OpsBase):
     rows_synced: Mapped[int | None] = mapped_column(Integer)
     seconds: Mapped[float | None] = mapped_column(Float)
     message: Mapped[str | None] = mapped_column(Text)
+
+
+class NightState(OpsBase):
+    """Стан нічних робіт доказів (E11, D60): прохід стрічки LUN/flombu (з якої сторінки
+    продовжити, коли закінчився й скільки дав), вкладки OLX (коли «Приватні» й
+    «Бізнес»), невдалі рендери сторінок деталей (ключ → коли). Пишуть смуги-процеси, тож
+    тут, а не у файлі в data/ (паралельні смуги не затирають одна одну)."""
+
+    __tablename__ = "night_state"
+
+    name: Mapped[str] = mapped_column(String(48), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text)               # JSON
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class OlxTabSeen(OpsBase):
+    """Членство оголошень OLX у вкладках пошуку «Приватні»/«Бізнес» (Блок 3, E11, D60).
+
+    Сирий робочий запис, а не доказ: у seller_evidence.olx_tab він потрапляє лише після
+    звірки з чипом сторінок деталей (config/seller.toml olx_tabs.chip_min_*) — інакше
+    зламаний параметр вкладок записав би хибну мітку назавжди (лише туди, де порожньо)."""
+
+    __tablename__ = "olx_tab_seen"
+
+    site_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tab: Mapped[str] = mapped_column(String(16))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    # Скільки разів бачили в іншій вкладці, ніж `tab` (мітка такого ключа не пишеться).
+    conflicts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class NightHold(OpsBase):

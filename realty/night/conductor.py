@@ -24,6 +24,12 @@
   7. Уже без замка — зведення для /status (ops.liveness_runs, kind «night»; сайт лише
      читає готовий рядок), строк продажу до/після, рядок ops.night_runs.
 
+E11 (D60): після ярусів Блоку 1 у тих самих смугах — дозбір доказів Блоків 3/4
+(night/evidence.py): рендери OLX (вкладки, сторінки деталей), прохід стрічки LUN/flombu
+(робота identity), GET rieltor замість HEAD. Вікно, що їх писатиме, бекапиться за
+правилом одноразових робіт (onetime_max_age_hours); мітки вкладок OLX — на старті вікна
+після бекапу, лише після звірки з чипом; покриття доказами — у запис ночі (evidence).
+
 Під запобіжником нічого не знімаємо й не повертаємо (apply.py) — і вночі смуга навіть
 не питає таких ключів. Недоторкане правило — те саме: «знято» лише за явним сигналом.
 
@@ -288,6 +294,7 @@ class Reader:
         self.pos = 0
         self.done: dict | None = None
         self.identity: dict | None = None
+        self.evidence: dict | None = None
         self.skipped = 0
         self.bad_lines = 0
         self.buffer: list = []
@@ -330,6 +337,8 @@ class Reader:
                     self.skipped += 1
                 elif kind == "identity":
                     self.identity = rec
+                elif kind == "evidence":
+                    self.evidence = rec
                 elif kind == "done":
                     self.done = rec
             except (ValueError, KeyError, IndexError, TypeError) as e:
@@ -384,6 +393,9 @@ class Conductor:
         self.trips: list = []
         self.lanes_info: dict = {}
         self.identity: dict = {}
+        # Дозбір доказів Блоків 3/4 (E11, D60): план вікна, звіти смуг, мітки вкладок.
+        self.evidence: dict = {}
+        self.scfg = self._seller_config()
         self.plan = None
         self.held_path: Path | None = None
         self.rec: Record | None = None
@@ -393,6 +405,45 @@ class Conductor:
         self.handles: dict = {}
         self._merged: set[str] = set()
         self._lrun_closed = False
+
+    @staticmethod
+    def _seller_config():
+        """config/seller.toml; зламаний — ніч іде без дозбору доказів (журнал), а не падає."""
+        from .. import configfiles
+
+        try:
+            return configfiles.load("seller")
+        except configfiles.ConfigError as e:
+            log.error("ніч: config/seller.toml не читається — дозбір доказів вимкнено: %s", e)
+            return None
+
+    def _plan_evidence(self, s, plan, began: float) -> dict:
+        """Робота доказів у плані смуг (HostPlan.evidence); збій — ніч без дозбору."""
+        from . import evidence
+
+        if self.scfg is None:
+            return {"error": "config/seller.toml не читається", "writes": 0}
+        try:
+            return evidence.attach(s, self.lcfg, self.ncfg, self.scfg, plan,
+                                   now=self.env.utcnow(), night_start=_utc_naive(began))
+        except Exception as e:                          # noqa: BLE001 — Блок 1 важливіший
+            log.exception("ніч: план дозбору доказів не побудовано")
+            for hp in plan.hosts.values():
+                hp.evidence = {}
+            return {"error": f"{type(e).__name__}: {e}"[:300], "writes": 0}
+
+    def _tab_labels(self) -> dict | None:
+        """Мітки вкладок OLX у seller_evidence — після бекапу, лише після звірки з чипом."""
+        from . import evidence
+
+        if self.scfg is None or "olx_tabs" not in self.ncfg.jobs.order:
+            return None
+        try:
+            return evidence.apply_tab_labels(self.env.session_scope, self.scfg,
+                                             now=self.env.utcnow())
+        except Exception as e:                          # noqa: BLE001
+            log.exception("ніч: мітки вкладок OLX не записано")
+            return {"status": "error", "error": f"{type(e).__name__}: {e}"[:300]}
 
     # --- головне ---------------------------------------------------------------------
 
@@ -534,16 +585,21 @@ class Conductor:
             self.plan = plan = night_plan.build(
                 s, self.lcfg, self.ncfg, now=env.utcnow(), held=held,
                 attempted_since=_utc_naive(began), skip_hosts=skip, night=win.night_date)
+            ev_plan = self._plan_evidence(s, plan, began)
         onetime = sum(n for hp in plan.lanes.values() for t, n in hp.tiers.items()
                       if t in ONETIME_TIERS)
+        self.evidence = {"plan": ev_plan}
         rec.update(plan={"hosts": plan.as_dict(), "held": sorted(held),
                          "drain_waited_s": drain_waited, "onetime_keys": onetime},
-                   active_before=before["active"], totals={"before": before})
+                   active_before=before["active"], totals={"before": before},
+                   evidence=self.evidence)
         # Бекап на старті: за правилом max_age_hours, а вікно з одноразовими роботами
         # (M2/M3 — тисячі повернень і знять) — за onetime_max_age_hours (рецензія E9).
         due, last_ok = env.backup_due(self.ncfg.backup.max_age_hours)
         rule = "max_age_hours"
-        if not due and onetime:
+        # Дозбір доказів (E11, D60) теж дописує ключі в непорожні JSON — правило
+        # одноразових робіт (свіжий бекап перед зміною непорожніх даних).
+        if not due and (onetime or ev_plan.get("writes")):
             due, last_ok = env.backup_due(self.ncfg.backup.onetime_max_age_hours)
             rule = "onetime_max_age_hours"
         if due:
@@ -564,6 +620,10 @@ class Conductor:
         if c.time() > win.stop_requests - min_work:
             return {"status": "ok", "message": "до stop_requests лишилось менше за "
                                                "lock.min_work_minutes — смуг не запускаю"}
+        labels = (ev_plan.get("tab_labels") or {})
+        if labels.get("status") == "calibrated" and labels.get("pending_rows"):
+            self.evidence["tab_labels"] = self._tab_labels()
+            rec.update(evidence=self.evidence)
         lanes = plan.lanes
         if not lanes:
             return {"status": "ok", "message": "робити нічого: усі ключі мають відповідь, "
@@ -605,7 +665,7 @@ class Conductor:
         with env.session_scope() as s:
             after = self._totals(s)
         rec.update(active_after=after["active"], totals={"before": before, "after": after},
-                   lanes=self.lanes_info, identity=self.identity)
+                   lanes=self.lanes_info, identity=self.identity, evidence=self.evidence)
         partial = any(d.get("stopped") in BLOCK_STOPS or d.get("killed") or d.get("code")
                       for d in self.lanes_info.values())
         shutil.rmtree(work, ignore_errors=True)
@@ -623,6 +683,8 @@ class Conductor:
                 # Смуга перевіряє, що цей замок тримає її батьківський процес (lane.refusal).
                 "lock_path": str(self.env.lock_path),
                 "identity": hp.identity,
+                # Рендери OLX після Блоку 1 (E11, D60): вкладки й черга сторінок деталей.
+                "evidence": hp.evidence.get("spec"),
                 "max_consecutive_blocks": self.lcfg.run.max_consecutive_blocks,
                 "block_share": self.ncfg.lanes.block_share,
                 "block_min_requests": self.ncfg.lanes.block_min_requests,
@@ -698,6 +760,8 @@ class Conductor:
             info["bad_lines"] = r.bad_lines
         if r.identity is not None:
             self.identity[host] = r.identity
+        if r.evidence is not None:
+            self.evidence.setdefault("lanes", {})[host] = r.evidence.get("report")
 
     def _stop_all(self, handles: dict) -> None:
         """Зупинити смуги РАЗОМ: SIGTERM усім групам одразу, далі кожну — з KILL_GRACE
@@ -858,6 +922,22 @@ class Conductor:
 
     # --- після замка ---------------------------------------------------------------------
 
+    def _coverage(self) -> None:
+        """Покриття доказами на кінець вікна — у запис ночі (/api/status/night читає
+        готове; інтеграція, конфлікт 10). Лише читання, без замка."""
+        from . import evidence
+
+        if self.scfg is None:
+            return
+        try:
+            started = time.perf_counter()
+            with self.env.session_scope() as s:
+                self.evidence["coverage"] = evidence.coverage(s, self.scfg)
+            self.evidence["coverage_s"] = round(time.perf_counter() - started, 2)
+            self.rec.update(evidence=self.evidence)
+        except Exception as e:                          # noqa: BLE001 — звіт не важливіший
+            log.warning("ніч: покриття доказами не пораховано: %s", e)
+
     def _after_release(self, win: windows.Window) -> str | None:
         """Зведення для /status, строк продажу «після», утримання хостів — без замка.
         Повертає повідомлення для запису ночі (хости, що чекають рішення)."""
@@ -865,6 +945,7 @@ class Conductor:
 
         env, rec = self.env, self.rec
         holds = self._open_holds(win)
+        self._coverage()
         totals = {k: sum(int(d.get(k, 0)) for d in self.per_host.values())
                   for k in ("rows", "delisted", "restored", "repaired", "unknown")}
         status_report = None
@@ -964,11 +1045,12 @@ def dry_run(*, ncfg=None, lcfg=None, now: float | None = None, scope=None) -> di
         p = night_plan.build(s, lcfg, ncfg, now=utcnow(), held=held,
                              attempted_since=_utc_naive(c._night_began(win)), skip_hosts=skip,
                              night=win.night_date)
+        ev_plan = c._plan_evidence(s, p, c._night_began(win))
     onetime = sum(n for hp in p.lanes.values() for t, n in hp.tiers.items()
                   if t in ONETIME_TIERS)
     due, last_ok = default_backup_due(ncfg.backup.max_age_hours)
     rule = "max_age_hours"
-    if not due and onetime:
+    if not due and (onetime or ev_plan.get("writes")):
         due, last_ok = default_backup_due(ncfg.backup.onetime_max_age_hours)
         rule = "onetime_max_age_hours"
     backup_s = ((_last_backup_seconds() or ncfg.backup.timeout_minutes * 60) if due else 0.0)
@@ -997,6 +1079,9 @@ def dry_run(*, ncfg=None, lcfg=None, now: float | None = None, scope=None) -> di
         d.update(rate=round(rate, 2), rate_source=source, window_capacity=cap,
                  first_window_capacity=cap1, windows_needed=need, left_after_windows=proj,
                  seconds_real=round(hp.requests * rate, 1))
+        ev = _evidence_estimate(ncfg, host, hp, rate, span, backup_s)
+        if ev:
+            d["evidence_estimate"] = ev
         hosts[host] = d
     notes = []
     if lcfg.fuse.mode == "literal":
@@ -1019,7 +1104,62 @@ def dry_run(*, ncfg=None, lcfg=None, now: float | None = None, scope=None) -> di
                        "seconds": backup_s, "onetime_keys": onetime},
             "held": sorted(held), "skip": skip, "fuse_mode": lcfg.fuse.mode,
             "order": list(ncfg.jobs.order), "hosts": hosts, "notes": notes,
+            "evidence": {k: v for k, v in ev_plan.items() if k != "feed"},
             "disabled": DISABLED_FLAG.exists()}
+
+
+def _evidence_estimate(ncfg, host: str, hp, b1_rate: float, span: float,
+                       backup_s: float) -> dict | None:
+    """Дозбір доказів смуги в `--dry-run` (E11, D60): скільки запитів і за який крок —
+    ПІСЛЯ Блоку 1 у тому самому вікні (той самий дедлайн), прогноз на вікна 1–4."""
+    e = hp.evidence or {}
+    if hp.skipped is not None:
+        return None
+    if "est_renders" in e:
+        rcfg = ncfg.olx_render
+        tabs = e.get("tabs_est_renders", 0) if any(
+            (t or {}).get("due") for t in (e.get("tabs") or {}).values()) else 0
+        # Уся черга без доказів (у вікнах з M2/M3 Блоку 1 її ключі ще в ярусах — вони
+        # стануть у чергу деталей, щойно Блок 1 їх пройде).
+        total = tabs + int((e.get("detail") or {}).get("missing", 0))
+        out = {"job": "olx_render", "rate": round(max(hp.pace, rcfg.typical_seconds), 2),
+               "rate_source": "типовий рендер", "total": total, "tabs": tabs,
+               "cap_per_window": rcfg.max_per_window,
+               "detail_missing": int((e.get("detail") or {}).get("missing", 0))}
+    elif (e.get("feed") or {}).get("due"):
+        source = next((s for s, h in (("lun", "lun.ua"), ("flombu", "flombu.com"))
+                       if h == host), None)
+        if source is None:
+            return None
+        f = e["feed"]
+        out = {"job": f"feed:{source}", "rate": round(max(
+                   hp.pace, ncfg.feed.typical_page_seconds[source]), 2),
+               "rate_source": "типова сторінка", "total": int(f.get("pages_est") or 0),
+               "cap_per_window": int(f.get("max_pages") or 0), "need": f.get("need")}
+    elif (e.get("feed") or {}):
+        return {"job": "feed", "total": 0, "why": e["feed"].get("why")}
+    else:
+        return None
+    # Вікна: спершу Блок 1 (його крок), у решті часу — дозбір (не більше стелі вікна).
+    b1_left, ev_left, per_window, used = hp.requests, out["total"], [], []
+    for w in range(4):
+        t = max(0.0, span - backup_s) if w == 0 else span
+        take = min(b1_left, int(t // b1_rate)) if b1_rate > 0 else b1_left
+        b1_left -= take
+        t -= take * b1_rate
+        n = 0
+        if b1_left == 0 and ev_left and out["rate"] > 0:
+            n = min(ev_left, int(t // out["rate"]), out["cap_per_window"] or ev_left)
+            ev_left -= n
+        per_window.append(n)
+        used.append(round((take * b1_rate + n * out["rate"]) / 60, 1))
+    full = min(out["cap_per_window"] or 10 ** 9, int(span // out["rate"])) if out["rate"] else 0
+    out.update(per_window=per_window, left_after_windows=[
+        max(0, out["total"] - sum(per_window[:i + 1])) for i in range(4)],
+        minutes_used=used, window_minutes=round(span / 60, 1),
+        # Вікно без Блоку 1 (після M2/M3 — сталий режим): скільки запитів дозбору і вікон.
+        full_window=full, windows_alone=(-(-out["total"] // full) if full else None))
+    return out
 
 
 def run(*, budget_min: float | None = None, env: Env | None = None) -> dict:

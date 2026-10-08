@@ -377,6 +377,10 @@ class LivenessCapture:
     ria_seller: dict[str, str]
     ria_profile: str
     ria_profile_prefix: str
+    # Хост → стеля тіла, байт: уночі ключ, якому бракує доказів Блоків 3/4, смуга хоста
+    # питає GET замість HEAD — класифікація та сама (лише за кодом), тіло — лише гачкам
+    # доказів (інтеграція, конфлікт 4: «для rieltor у M3 замість HEAD робимо GET»; E11, D60).
+    body_hosts: dict[str, int]
 
     def problems(self) -> list[str]:
         import re
@@ -391,6 +395,9 @@ class LivenessCapture:
                     out.append(f"{table}.{name}: шлях {path!r} — realty.… чи data.…")
         if self.ria_profile and not rx.match(self.ria_profile):
             out.append(f"ria_profile: шлях {self.ria_profile!r} — realty.… чи data.…")
+        for host, size in self.body_hosts.items():
+            if not 10_000 <= size <= 5_000_000:
+                out.append(f"body_hosts.{host}: {size} — стеля тіла 10 000…5 000 000 байт")
         return out
 
 
@@ -520,6 +527,13 @@ class LivenessConfig:
             out.append("hosts: жоден хост не перевіряється")
         if not self.ui.unconfirmed_label.strip():
             out.append("ui.unconfirmed_label: порожньо")
+        for host in self.capture.body_hosts:
+            spec = self.hosts.get(host)
+            # GET замість HEAD — лише там, де вердикт дає сам код (signature = code):
+            # тоді класифікація та сама, а тіло йде лише гачкам доказів (E11, D60).
+            if spec is None or not spec.checkable or spec.signature != "code":
+                out.append(f"capture.body_hosts.{host}: хоста, що перевіряється за кодом "
+                           f"(signature = code), немає в hosts")
         for name in ("alerts.snapshot_stale_hours", "snapshot.interval_hours"):
             table = self.alerts.snapshot_stale_hours if name.startswith("alerts") \
                 else self.snapshot.interval_hours
@@ -772,11 +786,19 @@ class PrivacyApply:
 # --- Нічний диригент (`cli.py night`, E9, D53) -------------------------------------------
 
 # Роботи реєстру — у порядку пріоритету всередині смуги хоста (config/night.toml,
-# jobs.order). Перші вісім — яруси перевірки актуальності (realty/liveness/queue.py),
-# identity — колишній realty-identity.timer (дозбір ознак квартири).
+# jobs.order). Перші вісім — яруси перевірки актуальності (realty/liveness/queue.py);
+# далі — дозбір (NIGHT_POST_JOBS), строго ПІСЛЯ всіх ярусів Блоку 1 (інтеграція,
+# конфлікт 3): olx_tabs і olx_detail — смуга рендерів OLX (Блоки 3/4, E11, D60),
+# identity — колишній realty-identity.timer: картки DOM.RIA, а в LUN і flombu — ОДИН
+# прохід стрічки за ніч (identity + place_raw + seller_evidence, лише туди, де порожньо).
 NIGHT_JOBS = ("canary", "held", "legacy_404", "onetime_reseen", "onetime_hinted",
-              "onetime_blind", "rm_sample", "overdue", "identity")
+              "onetime_blind", "rm_sample", "overdue", "olx_tabs", "olx_detail", "identity")
+NIGHT_POST_JOBS = ("olx_tabs", "olx_detail", "identity")
 IDENTITY_SOURCES = ("domria", "lun", "flombu")
+# Джерела спільного нічного проходу стрічки (night.toml [feed]).
+FEED_SOURCES = ("lun", "flombu")
+# Хост смуги рендерів OLX (liveness.toml hosts) — робіт olx_tabs / olx_detail.
+OLX_RENDER_HOST = "olx.ua"
 
 
 def hhmm_minutes(text: str) -> int | None:
@@ -859,6 +881,15 @@ class NightJobs:
         if "identity" in self.order and self.order[-1] != "identity":
             out.append("order: identity — останньою (пріоритет Блоку 1 над дозбором; "
                        "інтеграція, конфлікт 3)")
+        post = [i for i, job in enumerate(self.order) if job in NIGHT_POST_JOBS]
+        tiers = [i for i, job in enumerate(self.order) if job not in NIGHT_POST_JOBS]
+        if post and tiers and min(post) < max(tiers):
+            out.append("order: дозбір (olx_tabs, olx_detail, identity) — після всіх ярусів "
+                       "перевірки актуальності (Блок 1 > дозбір; інтеграція, конфлікт 3)")
+        if "olx_detail" in self.order and "olx_tabs" in self.order and \
+                self.order.index("olx_tabs") > self.order.index("olx_detail"):
+            out.append("order: olx_tabs — перед olx_detail (вкладка «Приватні» ставить "
+                       "приватних першими в чергу сторінок деталей; E11, D60)")
         for host, n in self.rm_sample_per_host.items():
             if n < 0:
                 out.append(f"rm_sample_per_host.{host}: має бути ≥ 0")
@@ -883,13 +914,108 @@ class NightReport:
 
 
 @dataclass(frozen=True)
+class NightFeed:
+    """Спільний нічний прохід стрічки LUN і flombu — робота identity їхніх смуг (E11, D60).
+
+    Не збір: нових оголошень не додає, ціни, last_seen і стан актуальності не чіпає;
+    пише лише identity (якщо NULL), place_raw і seller_evidence (нові ключі) і
+    seller_profile (якщо NULL) — після кожної сторінки, з місця зупинки."""
+
+    # Прохід — лише якщо стільки АКТУАЛЬНИХ рядків джерела ще без доказів (identity,
+    # позначки стрічки в place_raw і seller_evidence) — як FULL_PASS_MIN дозбору
+    # identity (D42) і план Блоку 3 («поки ≥50 активних LUN без доказів»).
+    min_missing_active: int = field(**_limits(min=1))
+    # Після завершеного проходу — не раніше ніж через стільки годин, а якщо він закрив
+    # менше за low_gain рядків — через cooldown_low_gain_days (D42: прохід LUN двічі
+    # за ніч дав 3 783 і 80 записів).
+    cooldown_hours: float = field(**_limits(min=1))
+    cooldown_low_gain_days: float = field(**_limits(min=1))
+    low_gain: int = field(**_limits(min=0))
+    # Стеля сторінок проходу за джерелом.
+    max_pages: dict[str, int]
+    # Незавершений прохід продовжується з наступної сторінки, якщо почався не давніше
+    # за стільки годин; інакше — новий із першої (стрічка за дні зсувається).
+    resume_max_age_hours: float = field(**_limits(min=1))
+    # Типовий час сторінки, с (запит + розбір на N3540) — для `night --dry-run`.
+    typical_page_seconds: dict[str, float]
+
+    def problems(self) -> list[str]:
+        out = []
+        for name in ("max_pages", "typical_page_seconds"):
+            table = getattr(self, name)
+            out += [f"{name}.{s}: невідоме джерело (лише {list(FEED_SOURCES)})"
+                    for s in table if s not in FEED_SOURCES]
+            missing = [s for s in FEED_SOURCES if s not in table]
+            if missing:
+                out.append(f"{name}: бракує {missing}")
+        out += [f"max_pages.{s}: має бути 1…1000" for s, n in self.max_pages.items()
+                if not 1 <= n <= 1000]
+        out += [f"typical_page_seconds.{s}: має бути > 0"
+                for s, v in self.typical_page_seconds.items() if not v > 0]
+        return out
+
+
+@dataclass(frozen=True)
+class NightOlxRender:
+    """Смуга рендерів OLX (Chromium) — у нічній смузі olx.ua, ПІСЛЯ перевірок Блоку 1:
+    вкладки пошуку «Приватні»/«Бізнес», потім одна черга сторінок деталей для Блоків 3
+    і 4 (E11, D60). Темп — той самий темп смуги olx.ua (max(liveness delay, OLX
+    full_delay) = 2,8 с старт-до-старту), блокування — ті самі «5 поспіль»."""
+
+    # Стеля рендерів Chromium за вікно (вкладки + сторінки деталей разом).
+    max_per_window: int = field(**_limits(min=0))
+    detail_per_window: int = field(**_limits(min=0))
+    private_tab_max_pages: int = field(**_limits(min=0, max=25))
+    # Вкладки «Бізнес» (зрізи кімнати × ціна) — раз на стільки діб.
+    business_tab_every_days: float = field(**_limits(min=1))
+    business_tab_max_pages: int = field(**_limits(min=1, max=25))
+    # Карток на сторінці видачі OLX — оцінка сторінок вкладки «Бізнес» для `--dry-run`.
+    cards_per_page: int = field(**_limits(min=1))
+    settle_ms: int = field(**_limits(min=0, max=10_000))
+    # Стеля одного рендера, с (сторож убиває браузер), і запас до stop_requests, за
+    # який новий рендер уже не починаємо: рендер, почате до межі, має закінчитись до
+    # примусової зупинки смуги (stop_requests + kill_grace) — це перевіряє схема.
+    render_timeout_seconds: float = field(**_limits(min=5))
+    deadline_margin_seconds: float = field(**_limits(min=0))
+    # Браузер перезапускається після стількох рендерів (пам'ять Chromium росте).
+    restart_every: int = field(**_limits(min=1))
+    # MemAvailable нижче — рендери зупиняються до кінця вікна (Linux).
+    min_mem_available_mb: int = field(**_limits(min=0))
+    block_resources: tuple[str, ...] = field(**_limits(
+        choices=("image", "media", "font", "stylesheet", "other")))
+    launch_args: tuple[str, ...]
+    # Сторінка 200 без змісту, але з таким текстом — капча/відмова: рахується як
+    # блокування (у «5 поспіль»), а не як «оголошення без чипа».
+    captcha_markers: tuple[str, ...]
+    # Невдалий рендер ключа (не 200, сторінка без змісту) — повтор не раніше ніж через
+    # стільки годин (і точно не цієї ночі).
+    failed_retry_hours: float = field(**_limits(min=12))
+    # Типовий час одного рендера, с — для `night --dry-run` (ops: 1 074 с на 158
+    # сторінок деталей ≈ 6,8 с; план Блоку 3).
+    typical_seconds: float = field(**_limits(min=0.1))
+
+    def problems(self) -> list[str]:
+        out = []
+        if self.private_tab_max_pages + self.detail_per_window > self.max_per_window:
+            out.append("private_tab_max_pages + detail_per_window — понад max_per_window")
+        for arg in self.launch_args:
+            if not arg.startswith("--"):
+                out.append(f"launch_args: {arg!r} — прапорець Chromium «--…»")
+        if any(not m.strip() for m in self.captcha_markers):
+            out.append("captcha_markers: порожній рядок")
+        return out
+
+
+@dataclass(frozen=True)
 class NightConfig:
     """`config/night.toml` — нічний диригент (`cli.py night`, E9, D53).
 
     Вікна (місцевий час машини), замок циклу, бекап на старті ночі, смуги хостів і
     пакети застосування, порядок робіт реєстру. Темп кожного хоста — НЕ тут, а в
     config/liveness.toml (`policy.pace(mode="night")` = max(delay, SOURCES.full_delay);
-    інтеграція, конфлікт 4); запобіжник — fuse.* там само.
+    інтеграція, конфлікт 4); запобіжник — fuse.* там само. Дозбір доказів Блоків 3/4
+    (E11, D60): прохід стрічки LUN/flombu — [feed], рендери OLX — [olx_render]; що
+    саме брати зі сторінок — config/seller.toml і config/places/rules.toml.
     """
 
     windows: tuple[NightWindow, ...] = field(**_limits(min_len=1))
@@ -898,6 +1024,8 @@ class NightConfig:
     lanes: NightLanes
     jobs: NightJobs
     report: NightReport
+    feed: NightFeed
+    olx_render: NightOlxRender
 
     def problems(self) -> list[str]:
         out: list[str] = []
@@ -915,6 +1043,14 @@ class NightConfig:
                            f"kill_grace_seconds + 2 хв")
             if (stop - start) <= self.lock.min_work_minutes:
                 out.append(f"windows[{i}]: вікно коротше за lock.min_work_minutes")
+        # Рендер, почате за deadline_margin до stop_requests, мусить закінчитись до
+        # примусової зупинки смуги (stop_requests + kill_grace) з 10 с запасу: інакше
+        # диригент убиває смугу посеред рендера (нічого не губиться, але й не пишеться).
+        r = self.olx_render
+        if r.render_timeout_seconds > r.deadline_margin_seconds + \
+                self.lanes.kill_grace_seconds - 10:
+            out.append(f"olx_render.render_timeout_seconds: {r.render_timeout_seconds:g} с — "
+                       f"понад deadline_margin_seconds + lanes.kill_grace_seconds − 10 с")
         out += self._liveness_problems()
         return out
 
@@ -934,6 +1070,11 @@ class NightConfig:
                 if spec is None or not spec.checkable:
                     out.append(f"{table}.{host}: такого хоста, що перевіряється, немає "
                                f"в config/liveness.toml")
+        if {"olx_tabs", "olx_detail"} & set(self.jobs.order):
+            spec = hosts.get(OLX_RENDER_HOST)
+            if spec is None or not spec.checkable:
+                out.append(f"jobs.order: рендери OLX — у смузі {OLX_RENDER_HOST}, а такого "
+                           f"хоста, що перевіряється, немає в config/liveness.toml")
         return out
 
 
@@ -1422,6 +1563,223 @@ class SampleConfig:
     hints: SampleHints
 
 
+# --- Тип продавця: ДОКАЗИ (Блок 3, крок E11, D60) -------------------------------------------
+# Лише те, що потрібно збирачам і нічним роботам, щоб ЗБЕРІГАТИ сирі докази
+# (listings.seller_evidence, seller_profile — лише туди, де порожньо). Класи, правила,
+# пороги й інтерфейс — наступні кроки Блоку 3 (E12–E13), разом із кодом, що їх читає.
+# Імена, телефони, аватари, адреси профілів, пошта — ніколи: схема не пропускає шляхів
+# через такі поля (ownerPhoneId flombu — теж: похідний від телефону).
+SELLER_FORBIDDEN_SEGMENTS = frozenset({
+    "phone", "phones", "viberphone", "hiddenphones", "phonesinfo_phone", "name", "avatar",
+    "tgusername", "imageurl", "url", "email", "ownerphoneid", "lastlogindate", "bankid",
+    "diia"})
+SELLER_TAB_KEYS = ("private", "business")
+
+
+def _evidence_key_problems(where: str, name: str) -> list[str]:
+    import re
+
+    return ([] if re.fullmatch(r"[a-z][a-z0-9_]{1,31}", name)
+            else [f"{where}: ім'я ключа {name!r} — малі латинські, цифри й _ (≤32)"])
+
+
+def _evidence_path_problems(where: str, path: str) -> list[str]:
+    """Шлях у JSON джерела: «a.b» — скаляр; «a?» — лише наявність; «a[].b» — чи є
+    хоч один елемент списку a з істинним b (лише логічне)."""
+    import re
+
+    out = []
+    if not re.fullmatch(r"[A-Za-z_]\w*(?:\[\])?(?:\.[A-Za-z_]\w*(?:\[\])?)*\??", path) \
+            or path.rstrip("?").endswith("[]") or path.count("[]") > 1:
+        out.append(f"{where}: шлях {path!r} — «a.b», «a?» чи «a[].b»")
+    segs = [s.replace("[]", "").lower() for s in path.rstrip("?").split(".")]
+    bad = [s for s in segs if s in SELLER_FORBIDDEN_SEGMENTS]
+    if bad:
+        out.append(f"{where}: шлях {path!r} веде до {bad} — імена, телефони, контакти не "
+                   f"зберігаємо")
+    return out
+
+
+@dataclass(frozen=True)
+class SellerFeed:
+    """Поля об'єкта стрічки (LUN — payload, flombu — attributes JSON:API)."""
+
+    fields: dict[str, str]
+    # Позначка «стрічку з цим оголошенням бачили» (дата) — пишеться завжди: лише з нею
+    # порожній доказ означає «джерело нічого не сказало», а не «не дивились».
+    checked_key: str
+
+    def problems(self) -> list[str]:
+        out = _evidence_key_problems("checked_key", self.checked_key)
+        for name, path in self.fields.items():
+            out += _evidence_key_problems(f"fields.{name}", name)
+            out += _evidence_path_problems(f"fields.{name}", path)
+        if self.checked_key in self.fields:
+            out.append("checked_key: збігається з ключем fields")
+        return out
+
+
+@dataclass(frozen=True)
+class SellerOlx:
+    """Сторінка оголошення OLX: чип «Приватна особа»/«Бізнес» (листовий вузол без
+    двокрапки в контейнері параметрів — той самий, що читає збір: sources/olx.DETAIL),
+    прапорці, «Тип угоди», ключ профілю."""
+
+    chip_key: str
+    chip_values: dict[str, str]
+    flag_values: dict[str, str]
+    deal_key: str
+    deal_param: str
+    deal_values: dict[str, str]
+    profile_selector: str
+    # Префікс ключа профілю → регулярний вираз з ОДНІЄЮ групою (slug / піддомен).
+    profile_patterns: dict[str, str]
+    checked_key: str
+
+    def problems(self) -> list[str]:
+        import re
+
+        out = []
+        for name in ("chip_key", "deal_key", "checked_key"):
+            out += _evidence_key_problems(name, getattr(self, name))
+        for text, code in self.chip_values.items():
+            if code not in SELLER_TAB_KEYS:
+                out.append(f"chip_values.{text}: {code!r} — не з {list(SELLER_TAB_KEYS)}")
+        for text, key in self.flag_values.items():
+            out += _evidence_key_problems(f"flag_values.{text}", key)
+        for text, code in self.deal_values.items():
+            out += _evidence_key_problems(f"deal_values.{text}", code)
+        for prefix, pattern in self.profile_patterns.items():
+            if not re.fullmatch(r"olx:[a-z]+:", prefix):
+                out.append(f"profile_patterns.{prefix}: префікс «olx:<вид>:»")
+            problems = _regex_problems(f"profile_patterns.{prefix}", pattern)
+            if not problems and re.compile(pattern).groups != 1:
+                problems = [f"profile_patterns.{prefix}: рівно одна група (slug)"]
+            out += problems
+        return out
+
+
+@dataclass(frozen=True)
+class SellerOlxTabs:
+    """Вкладки пошуку OLX «Приватні»/«Бізнес» — членство оголошень (Блок 3, E11, D60)."""
+
+    param: str
+    values: dict[str, str]
+    # Підпис вкладки, що має бути АКТИВНОЮ на відрендереній сторінці: інакше параметр
+    # не спрацював, і членства не пишемо (живої проби параметра ще не було).
+    labels: dict[str, str]
+    active_selector: str
+    card_selector: str
+    # Картки з такою причиною показу (search_reason=…) у членство не беремо.
+    skip_card_reasons: tuple[str, ...]
+    # Ключі доказу в seller_evidence: вкладка й дата.
+    tab_key: str
+    tab_at_key: str
+    rooms_param: str
+    rooms: tuple[str, ...] = field(**_limits(min_len=1))
+    price_from_param: str
+    price_to_param: str
+    price_bands_usd: tuple[tuple[int, ...], ...] = field(**_limits(min_len=1))
+    # Мітка вкладки йде в seller_evidence лише якщо на оголошеннях, де відомі і вкладка,
+    # і чип сторінки деталей, збіг ≥ chip_min_agreement при n ≥ chip_min_n.
+    chip_min_agreement: float = field(**_limits(min=0.5, max=1))
+    chip_min_n: int = field(**_limits(min=1))
+    member_max_age_days: float = field(**_limits(min=1))
+
+    def problems(self) -> list[str]:
+        out = []
+        for name in ("values", "labels"):
+            if set(getattr(self, name)) != set(SELLER_TAB_KEYS):
+                out.append(f"{name}: ключі мають бути рівно {list(SELLER_TAB_KEYS)}")
+        for name in ("tab_key", "tab_at_key"):
+            out += _evidence_key_problems(name, getattr(self, name))
+        for i, band in enumerate(self.price_bands_usd):
+            if len(band) != 2 or band[0] < 0 or (band[1] and band[1] <= band[0]):
+                out.append(f"price_bands_usd[{i}]: [від, до] (до = 0 — без стелі)")
+        return out
+
+
+@dataclass(frozen=True)
+class SellerRieltor:
+    """Картка rieltor.ua (LUN→rieltor): роль («Рієлтор»/«Власник»), агенція."""
+
+    role_selector: str
+    role_key: str
+    # Лише ці тексти ролі зберігаються як є; будь-що інше — `role_other` (у вузлі ролі
+    # могло б опинитись ім'я — тоді його не збережемо).
+    role_values: tuple[str, ...] = field(**_limits(min_len=1))
+    role_other: str
+    agency_selector: str
+    has_agency_key: str
+    # Агенція — непрозорий id (хеш піддомену чи шляху посилання), не адреса: піддомен
+    # агенції буває номером телефону (D52).
+    agency_key: str
+    agency_prefix: str
+    checked_key: str
+
+    def problems(self) -> list[str]:
+        out = []
+        for name in ("role_key", "has_agency_key", "agency_key", "checked_key"):
+            out += _evidence_key_problems(name, getattr(self, name))
+        if not self.agency_prefix.endswith(":"):
+            out.append("agency_prefix: має закінчуватись «:»")
+        return out
+
+
+@dataclass(frozen=True)
+class SellerProfile:
+    """Непрозорий id профілю (OLX, агенція rieltor): хеш slug-а, без імен і адрес."""
+
+    # Байтів хешу (blake2b) — довжина id у hex удвічі більша.
+    hash_bytes: int = field(**_limits(min=6, max=16))
+    # Slug із більшою кількістю цифр — схожий на телефон: не зберігаємо зовсім (хеш
+    # номера — теж «похідне від телефону», як ownerPhoneId flombu).
+    max_digits: int = field(**_limits(min=0, max=9))
+
+
+@dataclass(frozen=True)
+class SellerCoverage:
+    """Покриття доказами для `/api/status/night` і щоденного зведення."""
+
+    # Група «джерело>сімейство сайту» → ключі seller_evidence, наявність будь-якого з
+    # яких означає «докази є» (і кожен рахується окремо).
+    groups: dict[str, tuple[str, ...]]
+    labels: dict[str, str]
+
+    def problems(self) -> list[str]:
+        out = [f"labels: бракує підпису групи {g}" for g in self.groups if g not in self.labels]
+        for g, keys in self.groups.items():
+            if ">" not in g:
+                out.append(f"groups.{g}: «джерело>сімейство»")
+            for k in keys:
+                out += _evidence_key_problems(f"groups.{g}", k)
+        return out
+
+
+@dataclass(frozen=True)
+class SellerConfig:
+    """`config/seller.toml` — Блок 3, тип продавця: поки що лише ДОКАЗИ (крок E11, D60).
+
+    Що брати з об'єкта стрічки LUN і flombu, зі сторінки OLX (чип, «Тип угоди», профіль),
+    з вкладок пошуку OLX і з картки rieltor.ua. Пишеться лише туди, де порожньо
+    (seller_evidence — нові ключі, seller_profile — якщо NULL). DOM.RIA — config/liveness.toml
+    [capture]. Класифікація — E12.
+    """
+
+    lun: SellerFeed
+    flombu: SellerFeed
+    olx: SellerOlx
+    olx_tabs: SellerOlxTabs
+    rieltor: SellerRieltor
+    profile: SellerProfile
+    coverage: SellerCoverage
+
+    def problems(self) -> list[str]:
+        keys = [self.lun.checked_key, self.flombu.checked_key, self.olx.checked_key,
+                self.rieltor.checked_key]
+        return ["checked_key: позначки джерел мають різнитися"] if len(set(keys)) < 4 else []
+
+
 # Реєстр тем: ім'я файлу без .toml (з підтекою, якщо є) → схема.
 SCHEMAS: dict[str, type] = {
     "speed": SpeedConfig,
@@ -1435,6 +1793,7 @@ SCHEMAS: dict[str, type] = {
     "cycle": CycleConfig,
     "alerts": AlertsConfig,
     "sample": SampleConfig,
+    "seller": SellerConfig,
 }
 
 

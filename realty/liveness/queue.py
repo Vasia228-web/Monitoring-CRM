@@ -193,6 +193,9 @@ class WorkItem:
     streak404: tuple[datetime, ...] = ()
     # Завдання черги перевірки при відкритті, які цей ключ закриває.
     jobs: tuple[int, ...] = ()
+    # Стеля тіла, байт: > 0 — уночі GET замість HEAD (класифікація та сама — за кодом),
+    # тіло — лише гачкам доказів Блоків 3/4 (capture.body_hosts; E11, D60).
+    body_cap: int = 0
 
     @property
     def listing_ids(self) -> list[int]:

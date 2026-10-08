@@ -216,6 +216,7 @@ def test_job_names_in_the_config_schema_are_the_queue_tiers():
     from realty.liveness import queue
 
     tiers = {queue.TIER_CANARY, queue.TIER_HELD, queue.TIER_SAMPLE, *queue.NIGHT_TIERS}
-    assert set(configfiles.NIGHT_JOBS) - {"identity"} == tiers
+    # Дозбір (identity, а з E11 — і рендери OLX olx_tabs/olx_detail, D60) — не яруси.
+    assert set(configfiles.NIGHT_JOBS) - set(configfiles.NIGHT_POST_JOBS) == tiers
     # Робота «held» пише ще й ярус held_return (незастосоване «живе», рецензія E9, D53).
     assert all(len(t) <= 16 for t in tiers | {queue.TIER_HELD_RETURN})

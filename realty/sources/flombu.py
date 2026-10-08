@@ -21,6 +21,7 @@ from ..normalize import (
     parse_rooms,
 )
 from ..places import extract as place_extract
+from ..seller import evidence as seller_evidence
 from .base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -55,6 +56,13 @@ def parse_detail(html: str) -> dict:
     if condition is not Condition.UNKNOWN:
         out["condition"] = condition
     return out
+
+
+def _seller(attributes: dict) -> dict | None:
+    cfg = seller_evidence.config()
+    if cfg is None:
+        return None
+    return seller_evidence.from_feed_item(attributes, cfg.flombu)
 
 
 def _city_by_coords() -> bool:
@@ -117,6 +125,25 @@ class FlombuSource(BaseSource):
             "filter[estate_type]": "flat",
             "page": page,
         }
+
+    def parse_page(self, data: dict) -> tuple[list[dict], int, int | None]:
+        """Записи однієї сторінки JSON:API, скільки на ній записів і скільки сторінок
+        каже сайт (meta.pages) — для нічного проходу стрічки (E11, D60): той самий розбір
+        (`_parse`, гео-відбір), що й у збору, без запису."""
+        items = data.get("data") or []
+        geo = {inc["id"]: inc.get("attributes", {}) for inc in (data.get("included") or [])
+               if inc.get("type") == "estateRecordLocation"}
+        pages = (data.get("meta") or {}).get("pages")
+        recs = []
+        for item in items:
+            try:
+                rec = self._parse(item, geo)
+            except Exception as e:                     # noqa: BLE001 — запис, не сторінка
+                log.debug("flombu: запис %s не розібрався: %s", item.get("id"), e)
+                continue
+            if rec:
+                recs.append(rec)
+        return recs, len(items), pages if isinstance(pages, int) else None
 
     def iter_listings(self) -> Iterator[dict]:
         total = None                      # meta.pages — скільки сторінок каже сам сайт
@@ -225,6 +252,9 @@ class FlombuSource(BaseSource):
             # Франківськ» районом не є; D57).
             "district": g.get("sublocality1") or _village(g.get("locality")) or None,
             "place_raw": place_extract.from_flombu_location(g) or None,
+            # Докази типу продавця (Блок 3, E11, D60): ownerType і комісія агента з білого
+            # списку config/seller.toml [flombu]; ownerPhoneId (похідний від телефону) — ні.
+            "seller_evidence": _seller(a),
             "published_at": parse_date(a.get("publishedAtHumanVal")),
             "market_type": classify_market(title, accents),
             "condition": classify_condition(title, accents),

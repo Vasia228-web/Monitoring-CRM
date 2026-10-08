@@ -92,5 +92,40 @@ def parse_detail(html: str) -> dict:
 
     from ..places import extract as place_extract
     out["place_raw"] = place_extract.from_rieltor_soup(soup, date.today().isoformat())
+    # Роль продавця й агенція (Блок 3, E11, D60): роль — лише з білого списку текстів,
+    # агенція — наявність і непрозорий id; ім'я агента не читається.
+    out["seller_evidence"] = _seller(soup)
 
     return {k: v for k, v in out.items() if v is not None}
+
+
+def _seller(soup) -> dict | None:
+    from ..seller import evidence as seller_evidence
+
+    cfg = seller_evidence.config()
+    return seller_evidence.from_rieltor_detail(soup, cfg) if cfg is not None else None
+
+
+# Ознака справжньої картки оголошення (Етап 0: title «Оголошення №<id>» — 51 з 51
+# живих; сторінка 410 — «Сторінка видалена» без нього).
+_CARD_TITLE = re.compile(r"Оголошення\s*№\s*(\d+)")
+
+
+def page_evidence(html: str, want_id: str | None = None) -> dict | None:
+    """Докази Блоків 3/4 з картки rieltor.ua — для гачка нічного GET перевірки (E11,
+    D60): {"place_raw": …, "seller_evidence": …} або None, якщо це не картка оголошення
+    `want_id` (сторінка 410, капча, чужа картка)."""
+    from datetime import date
+
+    from ..places import extract as place_extract
+
+    soup = BeautifulSoup(html, "lxml")
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    m = _CARD_TITLE.search(title)
+    if not m or (want_id is not None and m.group(1) != str(want_id)):
+        return None
+    out = {"place_raw": place_extract.from_rieltor_soup(soup, date.today().isoformat())}
+    seller = _seller(soup)
+    if seller:
+        out["seller_evidence"] = seller
+    return out

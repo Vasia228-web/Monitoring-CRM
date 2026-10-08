@@ -5,8 +5,17 @@
 seller_profile) і «район/ЖК» (place_raw). Білий список шляхів — config/liveness.toml
 [capture]; лише скалярні значення (рядок, число, логічне) — вкладені об'єкти, імена,
 телефони не беруться ніколи. Записує apply.py ЛИШЕ туди, де порожньо.
+
+E11 (D60): уночі ключ хоста з capture.body_hosts (rieltor.ua), якому бракує доказів,
+смуга питає GET замість HEAD (вердикт — той самий, за кодом; engine.check_one), а тіло
+віддає `body_hook`: картка rieltor — роль і агенція (Блок 3, config/seller.toml
+[rieltor]), блок ЖК (Блок 4). Жодного зайвого запиту.
 """
 from __future__ import annotations
+
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def _walk(root: dict, parts: list[str]):
@@ -67,7 +76,62 @@ def ria_state_hook(cfg):
     return hook
 
 
+def _rieltor_page(body: str, key: str):
+    from ..sources import rieltor
+    from . import policy as pol
+
+    return rieltor.page_evidence(body, pol.id_of_key(key))
+
+
+def _rieltor_missing(scfg) -> list[tuple[str, str]]:
+    return [("seller_evidence", scfg.rieltor.checked_key), ("place_raw", "rieltor_checked_at")]
+
+
+# Хост тіла (capture.body_hosts) → (розбір картки, чого бракує рядку, щоб питати GET).
+BODY_EXTRACTORS = {"rieltor.ua": (_rieltor_page, _rieltor_missing)}
+
+
+def body_hook(cfg):
+    """Гачок для тіла нічного GET (capture.body_hosts): лише ЖИВА картка саме цього
+    ключа (чужа картка, сторінка 410, капча — нічого)."""
+    from .signatures import ALIVE
+
+    def hook(item, result, verdict):
+        if item.host not in cfg.capture.body_hosts or not item.body_cap:
+            return None
+        if verdict.kind != ALIVE or not getattr(result, "body", None):
+            return None
+        extractor = BODY_EXTRACTORS.get(item.host)
+        if extractor is None:
+            return None
+        return extractor[0](result.body, item.key) or None
+
+    hook.__name__ = "body_hook"
+    return hook
+
+
+def body_need_keys(session, cfg, host: str) -> set[str]:
+    """Ключі хоста з capture.body_hosts, рядкам яких бракує доказів (уночі — GET)."""
+    from sqlalchemy import func, or_, select
+
+    from ..models import Listing
+    from ..seller import evidence
+
+    entry = BODY_EXTRACTORS.get(host)
+    spec = cfg.hosts.get(host)
+    scfg = evidence.config()
+    if entry is None or spec is None or scfg is None:
+        return set()
+    cond = or_(*[func.json_extract(getattr(Listing, column), f"$.{key}").is_(None)
+                 for column, key in entry[1](scfg)])
+    return set(session.scalars(select(Listing.site_key).where(
+        Listing.site_key.like(f"{spec.family}:%"), cond).distinct()))
+
+
 def default_hooks(cfg) -> list:
     if not cfg.capture.enabled:
         return []
-    return [ria_state_hook(cfg)]
+    hooks = [ria_state_hook(cfg)]
+    if cfg.capture.body_hosts:
+        hooks.append(body_hook(cfg))
+    return hooks

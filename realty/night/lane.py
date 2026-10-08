@@ -14,11 +14,15 @@
     диригент переписує після кожного пакета), не питає зовсім;
   * run.max_consecutive_blocks 401/403/429 поспіль або частка блокувань понад
     lanes.block_share (після block_min_requests запитів) — смуга стоїть до кінця ночі;
-  * далі — дозбір identity свого джерела (identity_backfill.work), якщо лишився час, —
-    ТИМ САМИМ потоком (IdentityGate): та сама пауза старт-до-старту, той самий дедлайн і
-    ті самі лічильники блокувань (рецензія E9, D53); прохід стрічки LUN/flombu — лише
-    стрічка (`scrape --no-detail --min-delay <темп>`), без сторінок деталей на чужих
-    хостах.
+  * далі — дозбір доказів Блоків 3/4 (E11, D60), якщо лишився час: у смузі olx.ua —
+    рендери Chromium (вкладки «Приватні»/«Бізнес», сторінки деталей; night/evidence.py)
+    через EvidenceGate — та сама пауза, дедлайн із запасом на рендер і ті самі
+    блокування (капча — теж блокування);
+  * далі — дозбір identity свого джерела, якщо лишився час, — ТИМ САМИМ потоком
+    (IdentityGate): та сама пауза старт-до-старту, той самий дедлайн і ті самі лічильники
+    блокувань (рецензія E9, D53): картки DOM.RIA (identity_backfill.work), а в LUN і
+    flombu — спільний прохід стрічки (night/feed.py, E11): лише стрічка свого хоста,
+    запис лише туди, де порожньо, без нових оголошень, цін і last_seen.
 SIGTERM диригента — рядок «done» із причиною й вихід.
 
 Процес смуги запускає лише диригент: `cli.py night lane` без змінної LANE_ENV або без
@@ -114,12 +118,15 @@ class Lane:
     """Смуга за планом `spec` (див. conductor.lane_spec); результати — у `out`."""
 
     def __init__(self, spec: dict, out, *, fetcher, cfg, hooks=(), clock=time,
-                 now_fn=None, identity_fn=None, snapshots=None) -> None:
+                 now_fn=None, identity_fn=None, snapshots=None, evidence_fn=None) -> None:
         self.host = spec["host"]
         self.pace = float(spec["pace"])
         self.stop_at = float(spec["stop_at"])
         self.items = [codec.item_from_json(d) for d in spec["items"]]
         self.identity = spec.get("identity")
+        # Дозбір доказів Блоків 3/4 після ярусів Блоку 1 (E11, D60): план від диригента.
+        self.evidence = spec.get("evidence") or None
+        self.evidence_fn = evidence_fn
         self.held_path = Path(spec["held_path"]) if spec.get("held_path") else None
         self.block_share = float(spec["block_share"])
         self.block_min_requests = int(spec["block_min_requests"])
@@ -146,6 +153,9 @@ class Lane:
         # у тих самих блокуваннях (поспіль і частка).
         self.id_requests = 0
         self.id_blocked = 0
+        # Запити дозбору доказів (рендери OLX) — теж у тих самих блокуваннях (E11, D60).
+        self.ev_requests = 0
+        self.ev_blocked = 0
         self.check_seconds = 0.0                       # від старту до останньої перевірки
         self.stopped: str | None = None
         self.finished = False
@@ -223,8 +233,8 @@ class Lane:
         смуга стоїть до кінця ночі. Рахуються й запити дозбору identity."""
         if self.stopped in BLOCK_STOPS:
             return True
-        total = self.stats.requests + self.id_requests
-        blocked = self.stats.blocked + self.id_blocked
+        total = self.stats.requests + self.id_requests + self.ev_requests
+        blocked = self.stats.blocked + self.id_blocked + self.ev_blocked
         if self.consecutive >= self.max_consecutive:
             self.stopped = "blocks"
         elif total >= self.block_min_requests and blocked / total > self.block_share:
@@ -236,7 +246,8 @@ class Lane:
         return True
 
     def finish(self, stopped: str | None = None) -> dict:
-        """Дозбір identity (якщо смугу не зупинили блокування й лишився час) і «done»."""
+        """Дозбір доказів Блоків 3/4, потім identity (якщо смугу не зупинили блокування й
+        лишився час) і «done»."""
         if self.finished:
             return {}
         self.finished = True
@@ -244,8 +255,20 @@ class Lane:
             self.stopped = stopped
         identity = None
         interrupted: BaseException | None = None
-        if (self.identity and self.identity_fn is not None and not self.late()
+        if (self.evidence and self.evidence_fn is not None and not self.late()
                 and self.stopped not in (*BLOCK_STOPS, "sigterm")):
+            try:
+                ev = self.evidence_fn(self.evidence, EvidenceGate(self))
+            except SystemExit as e:                    # SIGTERM диригента посеред рендерів
+                ev = {"status": "interrupted"}
+                self.stopped = self.stopped or "sigterm"
+                interrupted = e
+            except Exception as e:                     # noqa: BLE001 — дозбір не важливіший за звіт
+                log.exception("%s: дозбір доказів упав", self.host)
+                ev = {"status": "failed", "error": f"{type(e).__name__}: {e}"[:300]}
+            self._write({"t": "evidence", "report": ev})
+        if (interrupted is None and self.identity and self.identity_fn is not None
+                and not self.late() and self.stopped not in (*BLOCK_STOPS, "sigterm")):
             try:
                 identity = self.identity_fn(self.identity, self.stop_at,
                                             gate=IdentityGate(self))
@@ -266,6 +289,8 @@ class Lane:
                    "check_seconds": self.check_seconds,
                    "identity_requests": self.id_requests,
                    "identity_blocked": self.id_blocked,
+                   "evidence_requests": self.ev_requests,
+                   "evidence_blocked": self.ev_blocked,
                    "signatures": dict(self.stats.signatures)}
         self._write(summary)
         if interrupted is not None:
@@ -302,16 +327,24 @@ class IdentityGate:
         self.lane = lane
         self.pace = lane.pace
 
-    def stopped(self) -> bool:
+    def stopped(self, margin: float = 0.0) -> bool:
+        """Зупинено блокуваннями, або наступний слот (+ `margin` — запас на довгий
+        запит, напр. рендер) уже не вкладається до stop_at."""
         lane = self.lane
-        return lane.stopped in BLOCK_STOPS or lane._slot_epoch() >= lane.stop_at
+        return lane.stopped in BLOCK_STOPS or lane._slot_epoch() + margin >= lane.stop_at
 
-    def wait(self) -> None:
+    def blocked(self) -> bool:
+        return self.lane.stopped in BLOCK_STOPS
+
+    def why(self) -> str:
+        return self.lane.stopped if self.blocked() else "deadline"
+
+    def wait(self, margin: float = 0.0) -> None:
         """Перед кожним запитом дозбору: зупинено — виняток ДО запиту (картку не
         питали); інакше пауза смуги."""
         from ..identity_backfill import Stop
 
-        if self.stopped():
+        if self.stopped(margin):
             raise Stop(f"смугу {self.lane.host} зупинено ({self.lane.stopped or 'дедлайн'})")
         self.lane.pacer.wait()
 
@@ -325,16 +358,40 @@ class IdentityGate:
             lane.consecutive = 0
         lane.check_blocks()
 
-    def fetcher(self, delay: float, label: str) -> Fetcher:
-        f = Fetcher(delay=delay, label=label)
+    def fetcher(self, delay: float, label: str, use_cache: bool = True) -> Fetcher:
+        f = Fetcher(delay=delay, label=label, use_cache=use_cache)
         f.limiter = _GateLimiter(self, f.limiter)
         f.on_status = self.observe
         return f
 
 
+class EvidenceGate(IdentityGate):
+    """Ворота дозбору доказів (рендери OLX, E11, D60): усе як у IdentityGate, але запити
+    й відмови — у власних лічильниках смуги (у звіті окремо), а «5 поспіль» і частка —
+    спільні з перевірками смуги."""
+
+    def observe(self, code: int) -> None:
+        lane = self.lane
+        lane.ev_requests += 1
+        if code in BLOCKING_CODES:
+            lane.ev_blocked += 1
+            lane.consecutive += 1
+        else:
+            lane.consecutive = 0
+        lane.check_blocks()
+
+
 def identity_job(source: str, stop_at: float, gate: IdentityGate | None = None) -> dict:
-    """Дозбір identity одного джерела до `stop_at` (epoch) — у процесі смуги."""
+    """Дозбір identity одного джерела до `stop_at` (epoch) — у процесі смуги. LUN і
+    flombu — спільний нічний прохід стрічки (identity + place_raw + seller_evidence, лише
+    туди, де порожньо; E11, D60), DOM.RIA — картки, як і досі."""
     from .. import identity_backfill
+    from ..configfiles import FEED_SOURCES
+
+    if source in FEED_SOURCES:
+        from . import feed
+
+        return feed.lane_job(source, stop_at, gate)
 
     deadline = time.monotonic() + max(0.0, stop_at - time.time())
     report = {"done": {}, "left": {}, "errors": 0}
@@ -355,9 +412,17 @@ def main(plan_path: Path, out_path: Path) -> int:
         return 2
     cfg = policy.load()
     fetcher = Fetcher(delay=float(spec["pace"]), use_cache=False, label="night")
+    evidence_fn = None
+    if spec.get("evidence"):
+        import functools
+
+        from . import evidence, render
+
+        evidence_fn = functools.partial(evidence.run_olx_jobs,
+                                        renderer_factory=render.NightRenderer)
     with open(out_path, "a", encoding="utf-8") as out:
         lane = Lane(spec, out, fetcher=fetcher, cfg=cfg, hooks=capture.default_hooks(cfg),
-                    identity_fn=identity_job)
+                    identity_fn=identity_job, evidence_fn=evidence_fn)
 
         def on_term(*_):
             raise SystemExit(143)

@@ -291,6 +291,9 @@ class Pipeline:
             )
         )
         if existing is None:
+            if payload.get("seller_evidence") and not payload.get("seller_evidence_at"):
+                # Докази продавця з першого ж запису — з датою, як і доливання (E11, D60).
+                payload["seller_evidence_at"] = _utcnow()
             listing = Listing(**payload)
             session.add(listing)
             session.flush()
