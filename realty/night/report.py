@@ -460,6 +460,12 @@ PLACE_GROUPS = {"olx_checked_at": ("olx>olx", "lun>olx"), "rieltor_checked_at": 
                 "lun_geo_checked_at": ("lun>olx", "lun>rieltor", "lun>domria", "lun>lun")}
 
 
+# Чому рендери OLX стали до кінця вікна (звіт смуги «stopped») — для зведення. Капча — не
+# блокування смуги: Блок 1 тривав, утримання хоста немає (рецензія E11, 08.10).
+RENDER_STOPS_UA = {"memory": "мало пам'яті", "render_errors": "помилки браузера",
+                   "captcha": "капча (перевірки Блоку 1 тривали)"}
+
+
 def night_evidence(rows: list[dict]) -> dict:
     """Підсумки дозбору доказів за вікнами однієї ночі (з ops.night_runs)."""
     out = {"windows": [], "renders": 0, "render_blocked": 0, "detail_written": 0,
@@ -488,9 +494,9 @@ def night_evidence(rows: list[dict]) -> dict:
                     out["tab_keys"][tab] = out["tab_keys"].get(tab, 0) + int(t.get("keys") or 0)
             if rep.get("tabs", {}).get("param_failed"):
                 out["stops"].append(f"{host}: параметр вкладок OLX не спрацював")
-            if rep.get("stopped") in ("memory", "render_errors"):
-                why = "мало пам'яті" if rep["stopped"] == "memory" else "помилки браузера"
-                out["stops"].append(f"{host} (вікно {d.get('window')}): рендери зупинено — {why}")
+            if rep.get("stopped") in RENDER_STOPS_UA:
+                out["stops"].append(f"{host} (вікно {d.get('window')}): рендери зупинено — "
+                                    f"{RENDER_STOPS_UA[rep['stopped']]}")
         for host, rec in (d.get("identity") or {}).items():
             feed = ((rec or {}).get("report") or {}).get("feed")
             if feed and feed.get("pages"):
@@ -501,7 +507,7 @@ def night_evidence(rows: list[dict]) -> dict:
         for host, ln in (d.get("lanes") or {}).items():
             if ln.get("stopped") in ("blocks", "block_share"):
                 out["stops"].append(f"{host} (вікно {d.get('window')}): смугу зупинили "
-                                    f"блокування (401/403/429/капча)")
+                                    f"блокування (401/403/429)")
         if ev.get("tab_labels"):
             out["tab_labels"] = ev["tab_labels"]
     return out

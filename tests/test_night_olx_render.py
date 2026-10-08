@@ -47,6 +47,10 @@ class FakeRenderer:
         self.answer, self.clock = answer, clock
         self.log: list[tuple[float, str]] = []
         self.closed = 0
+        self.allowance = 0.0                 # запас на (пере)запуск браузера перед рендером
+
+    def launch_allowance(self) -> float:
+        return 0.0 if self.log else self.allowance
 
     def render(self, url):
         from realty.night.render import RenderResult
@@ -76,7 +80,8 @@ def _row(lid, url, **kw):
     return queue.Row(**base)
 
 
-def _lane(db, items, evidence_spec, answer, *, stop_after=3600, mem=5000, **render):
+def _lane(db, items, evidence_spec, answer, *, stop_after=3600, mem=5000, allowance=0.0,
+          **render):
     """Справжня Lane смуги olx.ua: HEAD Блоку 1 (FakeNet) → рендери (FakeRenderer)."""
     from realty.liveness import capture
     from realty.night import codec, evidence
@@ -91,6 +96,7 @@ def _lane(db, items, evidence_spec, answer, *, stop_after=3600, mem=5000, **rend
     clock = FakeClock(T0)
     net = TimedNet(FakeNet(default=200))
     renderer = FakeRenderer(answer, clock)
+    renderer.allowance = allowance
     fn = functools.partial(evidence.run_olx_jobs, renderer_factory=lambda rcfg: renderer,
                            scope=scope_of(db), scfg=scfg, ncfg=ncfg,
                            now_fn=lambda: utc_of(clock.time()), mem_fn=lambda: mem)
@@ -193,25 +199,86 @@ def test_business_partitions_that_ignore_the_filter_stop_the_sweep(db):
     assert not plan["business"]["due"]
 
 
-def test_five_captchas_in_a_row_stop_the_lane_and_the_watchdog_alerts(db):
+def _night_record(summary, ev=None):
+    ops.init_ops()
+    with ops.ops_session() as s:
+        s.add(ops.NightRun(status="ok", window="01:10", night_date="2026-10-09",
+                           started_at=utc_of(time.time()),
+                           lanes=json.dumps({"olx.ua": {k: v for k, v in summary.items()
+                                                        if k != "t"}}),
+                           evidence=json.dumps({"lanes": {"olx.ua": ev}}) if ev else None))
+
+
+def test_five_403_in_a_row_stop_the_lane_and_the_watchdog_alerts(db):
     from realty import watchdog
 
     entries = [_entry(db, f"10Cp{i:03d}")[1] for i in range(8)]
-    captcha = "<html><body><div>Please solve the captcha</div></body></html>"
-    summary, ev, _n, rnd = _lane(db, [], {"olx_detail": entries}, lambda url: (200, captcha))
-    assert len(rnd.log) == 5 and ev["stopped"] == "blocks" and ev["captcha"] == 5
+    summary, ev, _n, rnd = _lane(db, [], {"olx_detail": entries}, lambda url: (403, None))
+    assert len(rnd.log) == 5 and ev["stopped"] == "blocks" and ev["blocked"] == 5
     assert summary["stopped"] == "blocks" and summary["evidence_blocked"] == 5
     with db() as s:
         assert all(not r.seller_evidence for r in s.scalars(select(Listing)))
-    ops.init_ops()
-    with ops.ops_session() as s:
-        s.add(ops.NightRun(status="partial", window="01:10", night_date="2026-10-09",
-                           started_at=utc_of(time.time()),
-                           lanes=json.dumps({"olx.ua": {k: v for k, v in summary.items()
-                                                        if k != "t"}})))
+    _night_record(summary)
     alerts = watchdog.check_night(utc_of(time.time()))
     alert = next(a for a in alerts if a.key == "night-blocked:olx.ua")
     assert "5 із 5 запитів" in alert.text                     # рендери — у тих самих числах
+
+
+def test_captchas_stop_only_the_renders_of_the_window_not_the_lane(db):
+    """Рецензія E11 (08.10): капча — не блокування смуги. Друга така ніч інакше ставила б
+    olx.ua на утримання — і перевірки Блоку 1 теж; тепер captcha_stop_after поспіль
+    зупиняють лише рендери вікна, а сторож дає попередження night-captcha."""
+    from realty import watchdog
+
+    entries = [_entry(db, f"10Cp{i:03d}")[1] for i in range(8)]
+    captcha = ('<html><body><div class="g-recaptcha" data-sitekey="x"></div>'
+               '<p>Підтвердіть, що ви не робот</p></body></html>')
+    summary, ev, _n, rnd = _lane(db, [], {"olx_detail": entries}, lambda url: (200, captcha))
+    stop_after = configfiles.load("night").olx_render.captcha_stop_after
+    assert len(rnd.log) == stop_after and ev["stopped"] == "captcha"
+    assert ev["captcha"] == stop_after and ev["blocked"] == 0
+    assert summary["stopped"] is None and summary["evidence_blocked"] == 0
+    with db() as s:
+        assert all(not r.seller_evidence for r in s.scalars(select(Listing)))
+    _night_record(summary, ev)
+    alerts = watchdog.check_night(utc_of(time.time()))
+    keys = {a.key for a in alerts}
+    assert "night-captcha:olx.ua" in keys and not any(k.startswith("night-blocked") for k in keys)
+    cfg = watchdog._alerts_cfg()
+    assert watchdog.level_of("night-captcha:olx.ua", cfg.levels) == "warning"
+    # Друга ніч із капчею утримання хоста не відкриває (лише блокування).
+    from realty.night.conductor import BLOCK_STOPS
+
+    assert summary["stopped"] not in BLOCK_STOPS
+    # Зведення: рядок «рендери зупинено — капча».
+    from realty.night import report
+
+    n = report.night_evidence([{"id": 1, "window": "01:10", "status": "ok",
+                                "evidence": {"lanes": {"olx.ua": ev}}}])
+    assert any("капча" in x for x in n["stops"])
+
+
+def test_ordinary_pages_mentioning_captcha_are_not_a_captcha():
+    from realty.night import evidence
+
+    rcfg = configfiles.load("night").olx_render
+    # Порожня видача / сторінка без змісту, у скриптах якої є слово «captcha».
+    plain = ('<html><head><script src="/static/recaptcha-loader.js"></script>'
+             '<script>window.captchaEnabled=false</script></head><body>Нічого не знайдено'
+             '</body></html>')
+    assert not evidence.is_captcha(plain, rcfg)
+    for marker in ('<script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script>',
+                   '<div class="g-recaptcha"></div>', "Підтвердіть, що ви не робот"):
+        assert evidence.is_captcha(f"<html><body>{marker}</body></html>", rcfg), marker
+    # Зі змістом (картки чи параметри) — не капча навіть з ознакою.
+    assert not evidence.is_captcha('<div data-cy="l-card"></div><div class="g-recaptcha">',
+                                   rcfg)
+    # Схема не пропускає надто загальних ознак і кешу на диску.
+    import dataclasses as dc
+
+    bad = dc.replace(rcfg, captcha_markers=("captcha",), launch_args=("--disable-gpu",))
+    probs = " ".join(bad.problems())
+    assert "надто загальна" in probs and "--disk-cache-size" in probs
 
 
 def test_no_render_starts_within_the_deadline_margin_or_with_low_memory(db):
@@ -223,6 +290,69 @@ def test_no_render_starts_within_the_deadline_margin_or_with_low_memory(db):
     _s, ev, _n, rnd = _lane(db, [], {"olx_detail": entries}, _detail_answer,
                             stop_after=75 + 2.8 + 1)
     assert len(rnd.log) == 2 and ev["stopped"] == "deadline"
+
+
+def test_a_render_that_needs_a_browser_launch_keeps_a_bigger_margin(db):
+    """Рецензія E11 (08.10): (пере)запуск браузера (до render_timeout_seconds під
+    сторожем) не входив у запас дедлайну — рендер із запуском міг перейти stop_requests +
+    kill_grace. 100 с до межі: без запуску рендер почався б (запас 75 с), із запуском
+    (+60 с) — ні."""
+    entries = [_entry(db, f"10Ml{i:03d}")[1] for i in range(3)]
+    _s, ev, _n, rnd = _lane(db, [], {"olx_detail": entries}, _detail_answer, stop_after=100,
+                            allowance=60.0)
+    assert rnd.log == [] and ev["stopped"] == "deadline"
+    _s, ev, _n, rnd = _lane(db, [], {"olx_detail": entries}, _detail_answer, stop_after=140,
+                            allowance=60.0)
+    assert len(rnd.log) >= 2                     # запуск лише перед першим — далі запас 75 с
+
+
+def test_rendered_keys_are_not_asked_again_tonight(db):
+    """Рецензія E11 (08.10): рендер не ставить last_attempt (поле Блоку 1), тож вікно 2 могло
+    питати той самий ключ удруге — HEAD контрольних/прострочених чи ще раз рендером.
+    Відрендерені ключі ночі — у ops.night_state; план ночі й черга деталей їх не беруть."""
+    from realty.night import evidence, plan
+
+    night_start = NOW - timedelta(hours=1)
+    gone, eg = _entry(db, "10Rt001")
+    _s, ev, _n, rnd = _lane(db, [], {"olx_detail": [eg],
+                                     "night_start": night_start.isoformat(timespec="seconds")},
+                            lambda url: (200, "<html><body>порожньо</body></html>"))
+    assert len(rnd.log) == 1 and ev["detail"]["no_content"] == 1
+    assert evidence.rendered_tonight(night_start) == {"olx:10Rt001"}
+    assert evidence.rendered_tonight(night_start - timedelta(days=1)) == set()   # інша ніч
+    lcfg, ncfg = policy.load(), configfiles.load("night")
+    with db() as s:
+        p = plan.build(s, lcfg, ncfg, now=NOW, attempted_since=night_start)
+        q, counts = evidence.olx_detail_queue(s, lcfg, ncfg, configfiles.load("seller"),
+                                              now=NOW, night_start=night_start)
+    hp = p.hosts["olx.ua"]
+    assert "olx:10Rt001" not in {i.key for i in hp.items} and hp.attempted_tonight >= 1
+    assert q == [] and counts["tried_tonight"] == 1
+    # Наступної ночі — знову можна (стан однієї ночі).
+    with db() as s:
+        p2 = plan.build(s, lcfg, ncfg, now=NOW + timedelta(days=1),
+                        attempted_since=night_start + timedelta(days=1))
+    assert "olx:10Rt001" in {i.key for i in p2.hosts["olx.ua"].items}
+
+
+def test_a_complex_name_with_a_phone_never_reaches_the_database(db):
+    """Рецензія E11 (08.10): «Назва ЖК» OLX — вільний текст продавця; слухачі ORM чистять
+    лише опис і заголовок. Назву з номером не пишемо зовсім (ні замаскованою, ні
+    позначкою «сторінку бачили» — інакше порожній ЖК читався б як «OLX ЖК не показав»)."""
+    from seller_kit import PHONE as phone
+
+    lid, e = _entry(db, "10Ph001")
+
+    def answer(url):
+        return 200, olx_detail_html(chip="Бізнес", zhk=f"ЖК Сонячний, дзвоніть {phone}")
+
+    _s, ev, _n, _r = _lane(db, [], {"olx_detail": [e]}, answer)
+    assert ev["detail"]["written"] == 1
+    row = get(db, lid)
+    assert row.seller_evidence["olx_chip"] == "business"          # доказ продавця — є
+    text = json.dumps([row.place_raw, row.seller_evidence], ensure_ascii=False)
+    assert phone not in text and "000 00 01" not in text and "Сонячний" not in text
+    assert not (row.place_raw or {}).get("olx_checked_at")
 
 
 def test_render_cap_per_window(db):

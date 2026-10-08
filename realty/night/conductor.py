@@ -422,6 +422,7 @@ class Conductor:
         from . import evidence
 
         if self.scfg is None:
+            self._drop_body_gets(plan)
             return {"error": "config/seller.toml не читається", "writes": 0}
         try:
             return evidence.attach(s, self.lcfg, self.ncfg, self.scfg, plan,
@@ -430,7 +431,18 @@ class Conductor:
             log.exception("ніч: план дозбору доказів не побудовано")
             for hp in plan.hosts.values():
                 hp.evidence = {}
+            self._drop_body_gets(plan)
             return {"error": f"{type(e).__name__}: {e}"[:300], "writes": 0}
+
+    @staticmethod
+    def _drop_body_gets(plan) -> None:
+        """План дозбору не побудовано — і GET rieltor замість HEAD теж ні: тіло дописало б
+        place_raw/seller_evidence у непорожні рядки без бекапу за правилом 3 год
+        (`writes` = 0; рецензія E11, 08.10). Перевірки — звичайний HEAD, як у циклі."""
+        for hp in plan.hosts.values():
+            for item in hp.items:
+                item.body_cap = 0
+            hp.body_gets = 0
 
     def _tab_labels(self) -> dict | None:
         """Мітки вкладок OLX у seller_evidence — після бекапу, лише після звірки з чипом."""

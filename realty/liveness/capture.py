@@ -49,6 +49,8 @@ def _value(roots: dict, path: str):
 
 def ria_state_hook(cfg):
     """Гачок для сторінок DOM.RIA: place_raw, seller_evidence, seller_profile."""
+    from ..places import extract as place_extract
+
     cap = cfg.capture
 
     def hook(item, result, verdict):
@@ -58,8 +60,11 @@ def ria_state_hook(cfg):
             return None
         roots = {"realty": realty, "data": data if isinstance(data, dict) else {}}
         out: dict = {}
+        # Рядки місця (назва району, новобудови) — без номера телефону (рецензія E11,
+        # 08.10: слухачі ORM чистять лише опис і заголовок).
         place = {k: v for k, p in cap.ria_place.items()
-                 if (v := _value(roots, p)) not in (None, "")}
+                 if (v := _value(roots, p)) not in (None, "")
+                 and not (isinstance(v, str) and place_extract.has_phone(v))}
         seller = {k: v for k, p in cap.ria_seller.items()
                   if (v := _value(roots, p)) not in (None, "")}
         if place:

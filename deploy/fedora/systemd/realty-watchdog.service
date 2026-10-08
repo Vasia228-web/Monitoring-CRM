@@ -1,5 +1,9 @@
 [Unit]
 Description=Realty: сигнал тиші й інші тривоги в Telegram
+# Сторож сам упав (виняток, TimeoutStartSec) — критична тривога одразу окремим шляхом
+# (realty-alert@ → cli.py alert unit-failed; рецензія W3, 08.10): інакше сторож, що
+# падає, мовчав би про все, включно з власним падінням.
+OnFailure=realty-alert@%n.service
 
 [Service]
 Type=oneshot

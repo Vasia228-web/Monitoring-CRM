@@ -234,6 +234,7 @@ def test_integrity_runs_once_per_local_day_after_its_time(env, monkeypatch):
         return "ok" if path is None or path.name != "realty.db" or len(calls) < 3 else \
             "*** in database main *** Page 7: btreeInitPage() returns error code 11"
     monkeypatch.setattr(watchdog, "INTEGRITY_CHECK", check)
+    monkeypatch.setattr(watchdog, "INTEGRITY_SLEEP", lambda s: None)
     early = datetime(2026, 10, 9, 4, 30)          # 07:30 за Києвом — ще не час (07:40)
     env["run"](early)
     assert calls == []
@@ -245,7 +246,8 @@ def test_integrity_runs_once_per_local_day_after_its_time(env, monkeypatch):
     env["run"](datetime(2026, 10, 10, 0, 30))
     assert len(calls) == 2
     rep = env["run"](datetime(2026, 10, 10, 4, 41))   # наступна доба — пошкоджено
-    assert len(calls) == 4 and "db-integrity:realty" in rep["sent"]
+    # realty — двічі (повтор перед тривогою, рецензія W3), ops — раз.
+    assert len(calls) == 5 and "db-integrity:realty" in rep["sent"]
     assert "db-integrity:ops" not in rep["active"]
     assert any("btreeInitPage" in m and m.startswith(watchdog.CRITICAL_HEAD)
                for m in env["sent"])
@@ -564,3 +566,154 @@ def test_broken_outbox_or_state_does_not_stop_critical_alerts(env, monkeypatch):
     assert rep["sent"] == ["backup-none"] and any("черга" in e for e in rep["errors"])
     assert rep["resolved"] == ["night-late"]
     assert [r["key"] for r in env["state"]()["_resolved"]] == ["night-late"]
+
+
+# --- Рецензія W3 (08.10) ----------------------------------------------------------------------
+
+
+def test_one_failed_backup_after_a_recent_offsite_copy_is_a_warning(env, cfg):
+    """Drive зламаний, Telegram о 01:10 спрацював, о 04:30 — тайм-аут Telegram: копія поза
+    машиною Є (≤ 30 год) — попередження backup-failed, а не критичне, що повторювалось би
+    кожні 6 год. Друга невдала поспіль чи давній успіх — критичне backup-none."""
+    _backup("ok", NOW - timedelta(hours=11), offsite="telegram:1",
+            message="rclone: couldn't fetch token")
+    _backup("failed", NOW - timedelta(hours=7), message="telegram: ReadTimeout", restored=1)
+    rep = env["run"](NOW)
+    assert "backup-failed" in rep["warned"] and "backup-none" not in rep["active"]
+    assert rep["sent"] == []
+    assert watchdog.level_of("backup-failed", cfg.levels) == "warning"
+    assert "Копія поза машиною є" in env["state"]()["backup-failed"]["text"]
+    _backup("failed", NOW - timedelta(hours=1), message="telegram: ReadTimeout", restored=1)
+    rep = env["run"](NOW + timedelta(minutes=30))
+    assert rep["sent"] == ["backup-none"] and "backup-failed" not in rep["active"]
+
+
+def test_a_failed_backup_without_a_recent_offsite_copy_stays_critical(env):
+    _backup("ok", NOW - timedelta(hours=40), offsite="telegram:1")
+    _backup("failed", NOW - timedelta(hours=2), message="telegram: ReadTimeout", restored=1)
+    assert env["run"](NOW)["sent"] == ["backup-none"]
+
+
+def _night_run(**kw):
+    base = dict(night_date="2026-10-09", window="04:10", status="partial",
+                started_at=NOW - timedelta(hours=8))
+    base.update(kw)
+    with ops.ops_session() as s:
+        s.add(ops.NightRun(**base))
+
+
+def test_crashed_night_lane_and_failed_evidence_plan_are_critical(env, cfg):
+    """Процес смуги впав (код ≠ 0, без підсумку) і план доказів не побудовано — статус ночі
+    лише «partial», а сторож мовчав (реагував тільки на блокування)."""
+    _night_run(lanes=json.dumps({"olx.ua": {"stopped": "no_summary", "code": 1},
+                                 "dom.ria.com": {"stopped": "deadline", "requests": 50},
+                                 "lun.ua": {"stopped": "killed", "killed": True, "code": -15}}),
+               evidence=json.dumps({"plan": {"error": "RuntimeError: тест", "writes": 0}}))
+    keys = {a.key for a in watchdog.check_night(NOW)}
+    assert {"night-failed:olx.ua", "night-failed:evidence"} <= keys
+    assert not any(k.startswith("night-failed:dom") or k == "night-failed:lun.ua" for k in keys)
+    for k in ("night-failed:olx.ua", "night-failed:evidence"):
+        assert watchdog.level_of(k, cfg.levels) == "critical"
+    text = "\n".join(digest.section_night(digest.Ctx(NOW, NOW - timedelta(hours=24), {}, cfg)))
+    assert "olx.ua" in text and "СМУГА ВПАЛА" in text
+
+
+def test_digest_night_section_survives_a_broken_evidence_summary(env, cfg, monkeypatch):
+    from realty.night import report as night_report
+
+    _night_run(per_host=json.dumps({"dom.ria.com": {"keys": 40, "delisted": 3}}))
+
+    def broken(session):
+        raise RuntimeError("тестова поломка підсумку доказів")
+    monkeypatch.setattr(night_report, "evidence_summary", broken, raising=False)
+    lines = digest.section_night(digest.Ctx(NOW, NOW - timedelta(hours=24), {}, cfg))
+    text = "\n".join(lines)
+    assert "dom.ria.com: перевірено 40, знято 3" in text
+    assert "Докази нічних робіт: не зібрано (RuntimeError)" in text
+
+
+def test_integrity_date_is_saved_before_the_check_so_a_killed_run_does_not_repeat_it(
+        env, cfg, monkeypatch):
+    seen, calls = [], []
+
+    def killed(path, deadline):
+        calls.append(path)
+        st = json.loads(env["path"].read_text())             # стан на диску — ДО перевірки
+        seen.append(st["_integrity"]["date"])
+        raise SystemExit(143)                                # TimeoutStartSec: сторожа вбито
+    monkeypatch.setattr(watchdog, "INTEGRITY_CHECK", killed)
+    with pytest.raises(SystemExit):
+        env["run"](NOW)
+    assert seen == ["2026-10-09"]
+    monkeypatch.setattr(watchdog, "INTEGRITY_CHECK", lambda path, deadline: calls.append(path)
+                        or "ok")
+    rep = env["run"](NOW + timedelta(minutes=30))
+    assert len(calls) == 1                                   # не повторює того самого дня
+    assert not any(k.startswith("db-integrity") for k in rep["active"])
+    text = digest.build(NOW + timedelta(minutes=31), env["state"](), cfg)
+    assert "ПЕРЕРВАНО" in text
+
+
+def test_integrity_problem_is_rechecked_once_before_alerting(env, monkeypatch):
+    answers = {"realty.db": ["database is locked", "ok"]}
+    calls, slept = [], []
+
+    def check(path, deadline):
+        calls.append(path.name if path else None)
+        queue = answers.get(path.name if path else "", [])
+        return queue.pop(0) if queue else "ok"
+    monkeypatch.setattr(watchdog, "INTEGRITY_CHECK", check)
+    monkeypatch.setattr(watchdog, "INTEGRITY_SLEEP", slept.append)
+    rep = env["run"](NOW)
+    assert not any(k.startswith("db-integrity") for k in rep["active"])
+    assert calls.count("realty.db") == 2 and slept == [10]
+    res = env["state"]()["_integrity"]["results"]["realty"]
+    assert res["result"] == "ok" and res["first"] == "database is locked"
+    # Обидві спроби — проблема: тривога (і лише дві спроби).
+    answers["realty.db"] = ["database is locked", "database is locked"]
+    calls.clear()
+    rep = env["run"](NOW + timedelta(days=1))
+    assert "db-integrity:realty" in rep["sent"] and calls.count("realty.db") == 2
+
+
+def test_stuck_sample_run_counts_as_failed(env, cfg):
+    from realty.liveness import sample
+
+    with ops.ops_session() as s:
+        s.add(ops.LivenessSampleRun(status="running", started_at=NOW - timedelta(minutes=90)))
+    assert watchdog.check_sample(NOW) == []                  # ще може йти (90 < 120 хв)
+    later = NOW + timedelta(hours=1)
+    alerts = watchdog.check_sample(later)
+    assert [a.key for a in alerts] == ["liveness-sample-failed"]
+    assert "убито" in alerts[0].text
+    assert watchdog.level_of("liveness-sample-failed", cfg.levels) == "warning"
+    lines = digest.section_sample(digest.Ctx(later, later - timedelta(hours=24), {}, cfg))
+    assert "АВАРІЯ" in lines[0]
+    assert sample.is_stuck(sample.last_run(), later)
+    with ops.ops_session() as s:
+        s.add(ops.LivenessSampleRun(status="failed", started_at=later,
+                                    finished_at=later + timedelta(minutes=3),
+                                    message="RuntimeError: тест"))
+    alerts = watchdog.check_sample(later + timedelta(minutes=5))
+    assert [a.key for a in alerts] == ["liveness-sample-failed"] and "RuntimeError" in alerts[0].text
+
+
+def test_healthz_does_not_need_the_threadpool():
+    import inspect
+
+    from realty.web import app as web_app
+
+    route = next(r for r in web_app.app.routes if getattr(r, "path", None) == "/healthz")
+    assert inspect.iscoroutinefunction(route.endpoint)
+
+
+def test_watchdog_unit_alerts_on_its_own_failure_and_web_comment_is_right():
+    import configparser
+
+    units = ROOT / "deploy" / "fedora" / "systemd"
+    q = configparser.ConfigParser(strict=False, interpolation=None)
+    q.optionxform = str
+    q.read(units / "realty-watchdog.service", encoding="utf-8")
+    assert q["Unit"].get("OnFailure") == "realty-alert@%n.service"
+    web = (units / "realty-web.service").read_text(encoding="utf-8")
+    assert "RestartMode" in web and "зазвичай не доходить до failed (перезапуск)" not in web

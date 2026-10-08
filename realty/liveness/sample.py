@@ -416,7 +416,22 @@ def _run_locked(run_id, scfg, lcfg, *, per_source, seed, waited, fetcher, scope,
 
 STATUS_UA = {"running": "триває", "ok": "гаразд", "lock_timeout":
              "НЕ ВІДБУЛАСЬ — цикл не звільнив замок", "disabled":
-             "не запускалась — збір вимкнено (COLLECTOR_OFF)", "failed": "АВАРІЯ"}
+             "не запускалась — збір вимкнено (COLLECTOR_OFF)", "failed": "АВАРІЯ",
+             "stuck": "АВАРІЯ — запис «триває» надто довго (процес, схоже, убито)"}
+
+
+def is_stuck(d: dict, now: datetime, scfg=None) -> bool:
+    """Запис «триває» довше за run.stuck_minutes — процес убито, свій запис він не закриє;
+    вважаємо аварією (рецензія W3, 08.10)."""
+    from datetime import timedelta
+
+    from .. import configfiles
+
+    if d.get("status") != "running" or d.get("started_at") is None:
+        return False
+    if scfg is None:
+        scfg = configfiles.load("sample")
+    return now - d["started_at"] > timedelta(minutes=scfg.run.stuck_minutes)
 VERDICT_UA = {"pass": "✅ гаразд", "fail": "⚠️ понад межу", "fuse_share":
               "🚨 понад межу запобіжника — рішення власника", "canary":
               "🚨 контрольне «знято» — джерело зупинено", "too_few": "замало відповідей",

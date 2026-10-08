@@ -983,10 +983,17 @@ class NightOlxRender:
     min_mem_available_mb: int = field(**_limits(min=0))
     block_resources: tuple[str, ...] = field(**_limits(
         choices=("image", "media", "font", "stylesheet", "other")))
+    # Прапорці Chromium; кешу на диску бути не має (сторінка містить ім'я продавця) —
+    # схема вимагає --disk-cache-size (рецензія E11, 08.10).
     launch_args: tuple[str, ...]
-    # Сторінка 200 без змісту, але з таким текстом — капча/відмова: рахується як
-    # блокування (у «5 поспіль»), а не як «оголошення без чипа».
+    # Сторінка 200 без змісту, але з такою ознакою — капча/відмова: рендер не вдався, а
+    # не «оголошення без чипа». Ознаки — конкретні (сторінка-виклик), не слово «captcha»
+    # (буває у скриптах звичайних сторінок; рецензія E11, 08.10).
     captcha_markers: tuple[str, ...]
+    # Стільки капч поспіль — рендери стоять до кінця ВІКНА (попередження night-captcha у
+    # зведенні). Капча не йде в блокування смуги: перевірки Блоку 1 olx.ua не стоять і
+    # утримання хоста через капчу не буває (рецензія E11, 08.10).
+    captcha_stop_after: int = field(**_limits(min=1, max=20))
     # Невдалий рендер ключа (не 200, сторінка без змісту) — повтор не раніше ніж через
     # стільки годин (і точно не цієї ночі).
     failed_retry_hours: float = field(**_limits(min=12))
@@ -1001,8 +1008,17 @@ class NightOlxRender:
         for arg in self.launch_args:
             if not arg.startswith("--"):
                 out.append(f"launch_args: {arg!r} — прапорець Chromium «--…»")
+            if arg.startswith(("--user-data-dir", "--disk-cache-dir")):
+                out.append(f"launch_args: {arg!r} — каталог профілю й кешу задає код "
+                           f"(night/render.py: стирається на старті й закритті)")
+        if not any(a.startswith("--disk-cache-size=") for a in self.launch_args):
+            out.append("launch_args: бракує --disk-cache-size=… (кеш сторінок OLX з "
+                       "іменами продавців не має лишатися на диску)")
         if any(not m.strip() for m in self.captcha_markers):
             out.append("captcha_markers: порожній рядок")
+        out += [f"captcha_markers: {m!r} — надто загальна ознака (буває у скриптах "
+                f"звичайних сторінок)" for m in self.captcha_markers
+                if m.strip().lower() in ("captcha", "recaptcha", "robot", "access denied")]
         return out
 
 
@@ -1477,9 +1493,15 @@ class AlertsIntegrity:
     at: str
     max_seconds: float = field(**_limits(min=1, max=240))
     databases: tuple[str, ...] = field(**_limits(min_len=1, choices=("realty", "ops")))
+    # Результат не «ok» і не «перервано» (напр., «database is locked») — ще одна спроба
+    # через стільки секунд, і лише її результат іде в тривогу (рецензія W3, 08.10).
+    retry_wait_seconds: float = field(**_limits(min=0, max=60))
 
     def problems(self) -> list[str]:
-        return [] if hhmm_minutes(self.at) is not None else [f"at: {self.at!r} — час «ГГ:ХХ»"]
+        out = [] if hhmm_minutes(self.at) is not None else [f"at: {self.at!r} — час «ГГ:ХХ»"]
+        if self.retry_wait_seconds >= self.max_seconds:
+            out.append("retry_wait_seconds: має бути менше за max_seconds (спільна стеля)")
+        return out
 
 
 @dataclass(frozen=True)
@@ -1533,6 +1555,15 @@ class SampleRun:
     max_minutes: float = field(**_limits(min=1, max=90))
     lock_wait_minutes: float = field(**_limits(min=0, max=60))
     seed: int
+    # Запис прогону «триває» довше — процес убито (TimeoutStartSec, OOM, вимкнення):
+    # прогін вважається аварією (попередження liveness-sample-failed; рецензія W3, 08.10).
+    stuck_minutes: float = field(**_limits(min=10, max=600))
+
+    def problems(self) -> list[str]:
+        if self.stuck_minutes <= self.lock_wait_minutes + self.max_minutes:
+            return ["stuck_minutes: має бути більше за lock_wait_minutes + max_minutes "
+                    "(інакше живий прогін вважався б завислим)"]
+        return []
 
 
 @dataclass(frozen=True)
@@ -1787,7 +1818,8 @@ LOOKUP_MESSAGES = (
     "empty", "no_url", "unrecognized", "unsupported_host", "short_link", "chat_link",
     "not_listing", "not_flat", "own_not_property", "case_lost",
     "not_in_db", "check_hint", "check_unavailable", "own_missing", "number_not_found",
-    "not_placed", "multi_property", "multi_property_owner", "number_choice",
+    "not_placed", "not_placed_quarantine", "other_city", "multi_property",
+    "multi_property_owner", "number_choice",
     "need_full_link", "blago_unverifiable", "found_banner",
     "status_active", "status_removed", "status_manual_off", "status_quarantine",
     "status_pending",
@@ -1796,7 +1828,7 @@ LOOKUP_MESSAGES = (
     "check_restored", "check_unchanged", "check_alive_not_added", "check_removed",
     "check_not_found_on_source", "check_not_city", "check_not_flat", "check_blocked",
     "check_unknown", "check_failed", "check_rate_limited", "check_disabled",
-    "check_off_for_role", "check_collector_off",
+    "check_off_for_role", "check_collector_off", "check_held",
 )
 LOOKUP_ROLES = ("owner", "friend")
 
@@ -1844,6 +1876,29 @@ class LookupCheck:
 
 
 @dataclass(frozen=True)
+class LookupCity:
+    """Місце з адреси оголошення (рецензія E14, 08.10): slug DIM.RIA і сегмент місця
+    rieltor.ua називають місто. Не з цього переліку — «схоже, не з Івано-Франківська»
+    ще до запиту (кнопка перевірки лишається — як підтвердження)."""
+
+    # Транслітерації міста й сіл громади так, як їх пишуть DIM.RIA і rieltor.ua (лише
+    # малі латинські літери й дефіс; числовий хвіст rieltor «-637» відкидається).
+    known_places: tuple[str, ...] = field(**_limits(min_len=1))
+    # Початок slug квартири на продаж DIM.RIA; далі — місце. Інший початок (інший вид чи
+    # скорочений slug) — місця не читаємо.
+    domria_slug_prefix: str
+
+    def problems(self) -> list[str]:
+        import re
+
+        out = [f"known_places: {p!r} — лише a-z і дефіс" for p in self.known_places
+               if not re.fullmatch(r"[a-z]+(?:-[a-z]+)*", p)]
+        if not re.fullmatch(r"realty-[a-z-]+-", self.domria_slug_prefix):
+            out.append("domria_slug_prefix: «realty-…-» (малі літери й дефіси)")
+        return out
+
+
+@dataclass(frozen=True)
 class LookupConfig:
     """`config/lookup.toml` — пошук за посиланням і «Перевірити зараз» (Блок 5, E14, D59).
 
@@ -1853,6 +1908,7 @@ class LookupConfig:
 
     ui: LookupUi
     check: LookupCheck
+    city: LookupCity
     # Назви сайтів для людини (сімейства links.toml і «own» — наш сайт).
     sites: dict[str, str]
     messages: dict[str, str]

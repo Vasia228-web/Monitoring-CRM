@@ -24,7 +24,8 @@ write = "critical"                   # зібране не записуєтьс�
 low = "warning"                      # нових за добу < 20% звичайного, але не нуль
 blocks = "warning"                   # частка 401/403/429 збору зросла
 # --- бекап і база ---
-backup-none = "critical"             # копії поза машиною немає ніде / бекапу понад 30 год
+backup-none = "critical"             # копії поза машиною немає ніде за 30 год / 2 спроби поспіль
+backup-failed = "warning"            # одна спроба не вдалась, але копія поза машиною ≤ 30 год є (рецензія W3)
 backup-partial = "warning"           # одне сховище не спрацювало (напр., Drive), інше — так
 db-integrity = "critical"            # PRAGMA quick_check чи integrity_check бекапу — не «ok»
 # --- сайт і служби ---
@@ -37,6 +38,7 @@ liveness-sample-canary = "critical"  # контрольна вибірка: ві
 liveness-sample-share = "critical"   # контрольна вибірка: «знято» > fuse.share випадкових
 liveness-sample-removed = "warning"  # контрольна вибірка: «знято» > max_removed_share, ≤ fuse.share
 liveness-sample-skipped = "warning"  # контрольна вибірка не дочекалась замка циклу
+liveness-sample-failed = "warning"   # прогін упав чи «триває» > 2 год (падіння служби — ще й unit-failed; рецензія W3)
 verify-blocks = "warning"            # блокування на перевірці актуальності зросли
 liveness-coverage = "warning"        # черга перевірки не встигає
 liveness-ria-unrecognized = "warning"  # сторінки DOM.RIA не розпізнано (нічого не знімається)
@@ -51,6 +53,7 @@ night-missing = "critical"           # за 26 год жодного нічно�
 night-skipped = "critical"           # два вікна поспіль пропущено (цикл не звільнив замок)
 night-hold = "critical"              # хост чекає рішення (блокування дві ночі поспіль)
 night-blocked = "warning"            # смугу одного хоста зупинили блокування цієї ночі
+night-captcha = "warning"            # капча зупинила рендери OLX до кінця вікна (Блок 1 триває; рецензія E11)
 night-late = "warning"               # замок звільнено пізніше межі
 # --- зведення квартир, райони й ЖК (Блок 4) ---
 dedup-suspicious = "warning"
@@ -80,6 +83,7 @@ silence = "systemctl --user status realty-cycle.timer realty-cycle.service; jour
 drop = "journalctl --user -u realty-cycle -n 120 (джерело {arg}); розмітка сайту чи карантин — /status"
 write = "journalctl --user -u realty-cycle -n 120; цілісність бази — cli.py backup status"
 backup-none = "journalctl --user -u realty-backup -n 60; ручний бекап: .venv/bin/python cli.py backup; Google Drive — CHECKPOINTS.md, «Google Drive»"
+backup-failed = "journalctl --user -u realty-backup -n 60; повториться наступна спроба — стане критичним (backup-none)"
 backup-partial = "Google Drive — CHECKPOINTS.md, «Google Drive» (rclone config reconnect gdrive:)"
 db-integrity = "збір не перезапускати; .venv/bin/python cli.py backup status, остання копія — cli.py backup verify <архів>; рішення — власник"
 site-local = "systemctl --user status realty-web; journalctl --user -u realty-web -n 80"
@@ -127,6 +131,11 @@ enabled = true
 at = "07:40"
 max_seconds = 120
 databases = ["realty", "ops"]
+# Не «ok» і не «перервано» (напр., «database is locked» — запис саме тримав замок) — ще
+# одна спроба через 10 с у межах тієї ж стелі; тривога — лише за другою (рецензія W3,
+# 08.10). Дата перевірки пишеться в стан ДО неї: убитий сторож (TimeoutStartSec 5 хв) не
+# повторює 120-секундну перевірку на кожному наступному запуску.
+retry_wait_seconds = 10
 
 [units]
 # `cli.py alert unit-failed` (OnFailure=realty-alert@%n): служба з Restart= може падати

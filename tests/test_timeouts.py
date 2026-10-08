@@ -36,6 +36,16 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/hangpage"):
+            # Сторінка відкрилась, далі головний потік сторінки зайнятий назавжди:
+            # page.content() тайм-ауту не має — спрацьовує лише сторож.
+            body = (b'<html><body>x<script>setTimeout(()=>{while(true){}},50)</script>'
+                    b'</body></html>')
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/silent"):
             # Прийняли з'єднання й замовкли: ні заголовків, ні тіла.
             time.sleep(60)
@@ -151,6 +161,33 @@ def test_real_browser_hang_is_killed_and_source_abandoned():
     time.sleep(1)
     alive = [p for p in family if _alive(p)]
     assert not alive, f"лишились процеси браузера: {alive}"
+
+
+@pytest.mark.skipif(not _chromium_available(), reason="Chromium для Playwright не встановлено")
+@pytest.mark.allow_browser          # справжній Chromium, лише 127.0.0.1
+def test_real_render_of_a_hung_page_gives_up_instead_of_spinning(bad_site):
+    """Рецензія E11 (08.10): сторож убив драйвер посеред render(), а page.close() у finally
+    (`dead` ставиться лише ПІСЛЯ нього) крутився вічно на 100% процесора — джерело стояло
+    до SOURCE_TIMEOUT. Тепер — DeadlineExceeded за стелю операції. Сценарій — у потоці з
+    межею часу: на старому коді він не повертався."""
+    out: dict = {}
+
+    def scenario():
+        b = BrowserFetcher(label="тест", op_timeout=4)
+        b.cache.get = lambda key: None                       # без кешу
+        t0 = time.monotonic()
+        try:
+            b.render(bad_site + "/hangpage", settle_ms=300)
+        except DeadlineExceeded:
+            out["raised"] = True
+        out["seconds"] = time.monotonic() - t0
+        b.close()
+
+    th = threading.Thread(target=scenario, daemon=True)
+    th.start()
+    th.join(60)
+    assert not th.is_alive(), "render() після вбивства браузера не повернувся (завис)"
+    assert out.get("raised") and out["seconds"] < 20
 
 
 def _alive(pid: int) -> bool:

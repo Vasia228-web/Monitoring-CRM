@@ -37,9 +37,10 @@
 {% endif %}
 
 <div class="fwhy" role="status">
-  <p>{{ msg[res.code] if res.code in msg else msg.unrecognized }}</p>
+  <p>{{ msg[res.code] if res.code in msg else msg.unrecognized }}{% if res.code == 'other_city' and res.city %} (у адресі — «{{ res.city }}»){% endif %}</p>
+  {% if res.code == 'not_placed_quarantine' %}{% for f in res.found if f.quality == 'quarantine' and f.quality_reason %}{% if loop.first %}<p>Причина: {{ f.quality_reason[:200] }}</p>{% endif %}{% endfor %}{% endif %}
   {% if res.kind == 'choice' and res.code == 'multi_property' and is_owner %}<p>{{ msg.multi_property_owner }}</p>{% endif %}
-  {% if res.code == 'not_in_db' %}
+  {% if res.code in ('not_in_db', 'other_city') %}
     {% if offer.q %}<p>{{ msg.check_hint }}</p>
     {% elif offer.why %}<p>{{ msg[offer.why] }}</p>{% endif %}
   {% endif %}

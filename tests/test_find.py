@@ -655,13 +655,28 @@ def test_rate_limit_per_role_from_config(env, monkeypatch):
 
 def test_repeated_submits_reuse_one_job_and_one_request(env):
     env.net.answers["realty/data/39999997"] = (200, card(39999997, city_id=10))
-    first = _check(env.owner, RIA.format(39999997)).json()["job"]
-    second = _check(env.friend, "https://m.dom.ria.com/ru/realty-x-39999997.html#gal").json()
+    first = _check(env.friend, RIA.format(39999997)).json()["job"]
+    # Власник бачить усі завдання — повтор того самого оголошення бере завдання друга.
+    second = _check(env.owner, "https://m.dom.ria.com/ru/realty-x-39999997.html#gal").json()
     assert second["job"] == first and second["reused"]
     _drain(first)
-    third = _check(env.owner, RIA.format(39999997)).json()
+    third = _check(env.friend, RIA.format(39999997)).json()
     assert third["job"] == first and third["final"] and third["outcome"] == "check_not_city"
     assert len(env.net.calls) == 1
+
+
+def test_check_status_of_another_role_is_404_for_the_friend(env):
+    """Рецензія E14 (08.10): стан «Перевірити зараз» читався будь-якою роллю за номером.
+    Друг не бачить завдань власника (404, як неіснуюче) і не отримує їх повтором; власник
+    бачить усі."""
+    env.net.answers["realty/data/39999986"] = (200, card(39999986, city_id=10))
+    owner_job = _check(env.owner, RIA.format(39999986)).json()["job"]
+    assert env.friend.get(f"/api/find/check/{owner_job}").status_code == 404
+    assert env.owner.get(f"/api/find/check/{owner_job}").status_code == 200
+    mine = _check(env.friend, RIA.format(39999986)).json()
+    assert mine["job"] != owner_job and not mine["reused"]
+    assert env.friend.get(f"/api/find/check/{mine['job']}").status_code == 200
+    assert env.owner.get(f"/api/find/check/{mine['job']}").status_code == 200
 
 
 def test_check_waits_for_the_cycle_and_never_takes_its_lock(env, monkeypatch):
@@ -753,3 +768,157 @@ def test_new_singleton_property_survives_the_next_rebuild(env):
         s.commit()
     r = env.owner.get(pid + "?verify=0")
     assert r.status_code in (200, 302)
+
+
+# --- Рецензія E14 (08.10) ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text,city", [
+    ("https://dom.ria.com/uk/realty-prodaja-kvartira-kiev-pecherskiy-lesi-ukrainki-39999970.html",
+     "kiev"),
+    ("https://rieltor.ua/kiev/flats-sale/view/13999970/", "kiev"),
+    ("https://www.rieltor.ua/lvov-2105/flats-sale/view/13999971/?utm_source=x", "lvov"),
+])
+def test_other_city_from_the_url_is_told_without_a_request(env, text, city):
+    """Рецензія E14 (08.10): місто з адреси (slug DIM.RIA, сегмент rieltor) — не наше:
+    «схоже, не з Івано-Франківська» одразу, без запиту; кнопка лишається підтвердженням."""
+    loc = _find(env.owner, text).headers["location"]
+    page = env.owner.get(loc).text
+    assert "схоже, не з Івано-Франківська" in page and f"«{city}»" in page
+    assert "ще немає" not in page and "Перевірити зараз" in page
+    assert env.net.calls == []
+
+
+@pytest.mark.parametrize("text", [
+    "https://dom.ria.com/uk/realty-prodaja-kvartira-krihovtsy-x-39999972.html",
+    "https://rieltor.ua/nikitintsy-637/flats-sale/view/13999973/",
+    "https://rieltor.ua/flats-sale/view/13999974/",                  # без сегмента — не знаємо
+    "https://dom.ria.com/realty/data/39999975?lang_id=4",            # картка API — не знаємо
+])
+def test_own_area_or_unknown_place_stays_not_in_db(env, text):
+    page = env.owner.get(_find(env.owner, text).headers["location"]).text
+    assert "ще немає" in page and "схоже, не з" not in page
+
+
+def test_unplaced_quarantined_row_shows_the_quarantine_reason(env):
+    """Рецензія E14 (08.10): незведене оголошення в карантині не стане квартирою після
+    «дублі» — пишемо карантин і причину, а не «ще не зведене»."""
+    with env.Session() as s:
+        s.add(_l(14, None, external_id="30000014", original_url=RIA.format(30000014),
+                 quality_status="review", quality_reason="площа менша за мінімум"))
+        s.commit()
+    page = env.owner.get(_find(env.owner, RIA.format(30000014)).headers["location"]).text
+    assert "в карантині якості" in page and "площа менша за мінімум" in page
+    assert "ще не зведене" not in page
+
+
+def test_trailing_slash_inside_share_text_is_stripped(env):
+    """Рецензія E14 (08.10): «Глянь https://…-ID10BkYC.html/ гарна» — not_listing, бо
+    повтор без слеша робився лише для тексту без пробілів."""
+    from realty.web.find_routes import parse_input
+
+    for text in ("Глянь https://www.olx.ua/d/uk/obyavlenie/kvartyra-ID10BkYC.html/ гарна",
+                 "Глянь https://www.olx.ua/d/uk/obyavlenie/kvartyra-ID10BkYC.html/, гарна",
+                 "dom.ria.com/uk/realty-prodaja-kvartira-ivano-frankovsk-x-34616500.html/ ось"):
+        got = parse_input(text)
+        assert getattr(got, "key", None) in ("olx:10BkYC", "domria:34616500"), (text, got)
+    r = _find(env.owner, "Глянь https://www.olx.ua/d/uk/obyavlenie/kvartyra-ID10BkYC.html/ гарна")
+    assert r.headers["location"].startswith("/property/2?hl=olx:10BkYC")
+
+
+def test_host_pauses_apply_between_link_jobs_of_one_run(env, monkeypatch):
+    """Рецензія E14 (08.10): свіжий фетчер на кожне завдання починав паузи хостів з нуля —
+    два завдання до одного сайту в одному прогоні йшли без паузи. Тепер обмежувач спільний
+    на прогін: другий запит до olx.ua бачить перший."""
+    from urllib.parse import urlsplit
+
+    from realty import fetcher as fetcher_mod
+
+    seen: list[tuple[str, bool]] = []
+
+    class Recording(fetcher_mod.RateLimiter):
+        def wait(self, url, delay=None):
+            host = urlsplit(url).netloc
+            seen.append((host, host in self._last))           # чи пам'ятає попередній
+            self._last[host] = 0.0
+
+    class Paced(FakeNet):
+        def __init__(self):
+            super().__init__()
+            self.limiter = Recording(1.0)
+
+        def check(self, url, method="HEAD", delay=None, max_bytes=0):
+            self.limiter.wait(url, delay)
+            return super().check(url, method, delay, max_bytes)
+
+    monkeypatch.setattr(fetcher_mod, "RateLimiter", Recording)
+    monkeypatch.setattr(env.link, "_make_fetcher", Paced)
+    jobs = [_check(env.owner, f"https://www.olx.ua/d/uk/obyavlenie/nova-ID9zZz{c}.html").json()["job"]
+            for c in "AB"]
+    done = _drain(jobs[0])
+    assert [st for _j, st in done] == ["done", "done"]
+    assert [h for h, _ in seen] == ["www.olx.ua", "www.olx.ua"]
+    assert seen[1][1] is True                                  # пауза хоста діє між завданнями
+
+
+def test_cycle_started_during_a_known_key_check_writes_nothing(env, monkeypatch):
+    """Рецензія E14 (08.10): шлях наявного ключа (Блок 1) застосовував вердикт, навіть якщо
+    цикл почався, поки йшов запит. Тепер — перевірка замка перед записом, відкладення."""
+    env.net.answers["IDabc12"] = (410, None)
+    job = _check(env.owner, "https://www.olx.ua/d/uk/obyavlenie/x-IDabc12.html").json()["job"]
+    cycle = runner.CycleLock(env.opened.CYCLE_LOCK)
+    real = env.net.check
+
+    def check_then_cycle(*a, **k):
+        res = real(*a, **k)
+        if not cycle.path.exists() or runner.lock_busy(cycle.path) is None:
+            assert cycle.acquire()
+        return res
+    monkeypatch.setattr(env.net, "check", check_then_cycle)
+    try:
+        assert _drain(job) == [(job, "deferred")]
+        with env.Session() as s:
+            assert s.get(Listing, 2).is_active is True               # нічого не записано
+    finally:
+        cycle.release()
+    monkeypatch.setattr(env.net, "check", real)
+    assert _drain(job) == [(job, "done")]
+    assert env.owner.get(f"/api/find/check/{job}").json()["outcome"] == "check_delisted"
+    with env.Session() as s:
+        assert s.get(Listing, 2).is_active is False
+
+
+def test_fuse_held_source_gets_a_plain_message(env):
+    """Рецензія E14 (08.10): ключ сайту під запобіжником — «сайт не дав однозначної
+    відповіді» було неправдою; тепер — check_held простими словами."""
+    from realty.liveness import fuse
+
+    fuse.trip([fuse.Trip(source="lun", reason="share", checked=20, removed=10, share=0.5)],
+              run_id=None, mode="literal")
+    env.net.answers["IDabc12"] = (410, None)
+    job = _check(env.owner, "https://www.olx.ua/d/uk/obyavlenie/x-IDabc12.html").json()["job"]
+    _drain(job)
+    st = env.owner.get(f"/api/find/check/{job}").json()
+    assert st["outcome"] == "check_held" and "запобіжник" in st["text"]
+    with env.Session() as s:
+        assert s.get(Listing, 2).is_active is True
+
+
+def test_expired_and_stale_jobs_forget_the_target_url(env):
+    """Рецензія E14 (08.10): target (адреса запиту) стирався лише в finish — у відкладених,
+    що застаріли, і в покинутих у черзі він лишався в ops.db назавжди."""
+    from realty.lookup import queue
+
+    old = NOW - timedelta(days=2)
+    with ops.ops_session() as s:
+        for state in ("deferred", "queued", "running"):
+            s.add(ops.LookupCheck(kind=queue.KIND_LINK, key=f"link:olx:9zZz{state[:2]}",
+                                  state=state, role="owner", created_at=old, started_at=old,
+                                  target="https://www.olx.ua/d/uk/obyavlenie/x-ID9zZzZ.html"))
+    fresh = _check(env.owner, "https://m.olx.ua/d/uk/obyavlenie/nova-ID9zZzY.html").json()["job"]
+    _drain(fresh)
+    with ops.ops_session() as s:
+        rows = s.scalars(select(ops.LookupCheck)).all()
+        assert all(r.target is None for r in rows), [(r.state, r.target) for r in rows]
+        states = sorted(r.state for r in rows if r.id != fresh)
+    assert states == ["failed", "skipped", "skipped"]

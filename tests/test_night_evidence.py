@@ -157,6 +157,32 @@ def test_steady_window_without_evidence_keeps_the_20_hour_rule(db, tmp_path):
     assert calls["backup"] == 0, res
 
 
+@pytest.mark.parametrize("broken", ["attach", "seller_toml"])
+def test_failed_evidence_plan_also_drops_rieltor_get_with_body(db, tmp_path, monkeypatch,
+                                                               broken):
+    """Рецензія E11 (08.10): план дозбору не побудовано (виняток чи зламаний seller.toml) —
+    `writes` = 0, тож бекап — за правилом 20 год; GET rieltor із тілом тоді дописав би
+    place_raw/seller_evidence без свіжого бекапу. Тепер — звичайний HEAD, нічого не пише."""
+    from realty.night import conductor, evidence
+
+    _lid, rl = _seed(db)
+    if broken == "attach":
+        def boom(*_a, **_k):
+            raise RuntimeError("тестова поломка плану доказів")
+        monkeypatch.setattr(evidence, "attach", boom)
+    else:
+        monkeypatch.setattr(conductor.Conductor, "_seller_config", staticmethod(lambda: None))
+    res, timed, _r, calls = _night(db, tmp_path)
+    from realty.night import report
+
+    row = report.runs(1, run_id=res["night_run_id"])[0]
+    assert row["evidence"]["plan"]["error"] and row["evidence"]["plan"]["writes"] == 0
+    assert row["plan"]["hosts"]["rieltor.ua"]["body_gets"] == 0
+    methods = {u: m for _h, _t, u, m in timed.log}
+    assert methods[rieltor_url(13400001)] == "HEAD"
+    assert not get(db, rl).place_raw and not get(db, rl).seller_evidence
+
+
 def test_api_status_night_is_owner_only_and_reads_the_record(site):
     c, _Session, _engine = site
     with ops.ops_session() as s:

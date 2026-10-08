@@ -223,10 +223,18 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
         return bool(held) and (queue.family_held(u, lcfg, key, held)
                                or any(r.source in held for r in u.groups[key]))
 
+    # Сторінки деталей OLX, відрендерені цієї ночі (рендер last_attempt не ставить), —
+    # теж «уже пробували»: один запит на ключ за ніч (рецензія E11, 08.10).
+    rendered: set[str] = set()
+    if attempted_since is not None and "olx_detail" in ncfg.jobs.order:
+        from .evidence import rendered_tonight
+
+        rendered = rendered_tonight(attempted_since)
+
     def tried_tonight(key: str) -> bool:
-        return attempted_since is not None and any(
+        return attempted_since is not None and (key in rendered or any(
             r.last_attempt is not None and r.last_attempt >= attempted_since
-            for r in u.groups[key])
+            for r in u.groups[key]))
 
     def take(key: str, tier: str) -> bool:
         host = u.key_host.get(key)

@@ -241,6 +241,9 @@ def test_opaque_id_never_keeps_a_phone_like_slug():
 
     cfg = configfiles.load("seller").profile
     assert evidence.opaque_id("olx:u:", "0670000001", cfg) is None
+    # 6 цифр — міський номер Івано-Франківська без коду (рецензія E11, 08.10).
+    assert evidence.opaque_id("rieltor:ag:", "agent-523456", cfg) is None
+    assert evidence.opaque_id("rieltor:ag:", "progres-2024", cfg) is not None    # рік — можна
     a = evidence.opaque_id("olx:u:", "2hNbPy", cfg)
     assert a == evidence.opaque_id("olx:u:", "2HNBPY ", cfg) and a.startswith("olx:u:")
     # Рядок доказу з номером — не береться.

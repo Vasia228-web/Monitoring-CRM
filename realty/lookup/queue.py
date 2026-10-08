@@ -205,7 +205,8 @@ def back_to_deferred(job_id: int, *, message: str | None = None) -> bool:
 
 
 def expire_deferred(kind, *, max_age_s: float) -> int:
-    """Відкладені довше за `max_age_s` — закрити як skipped (їх уже ніхто не чекає)."""
+    """Відкладені довше за `max_age_s` — закрити як skipped (їх уже ніхто не чекає).
+    Адресу запиту (target) — стерти, як і в finish (рецензія E14, 08.10)."""
     cutoff = ops._now() - timedelta(seconds=max_age_s)
     ops.init_ops()
     with ops.ops_session() as s:
@@ -213,9 +214,31 @@ def expire_deferred(kind, *, max_age_s: float) -> int:
                         .where(_kind_is(kind),
                                ops.LookupCheck.state == "deferred",
                                ops.LookupCheck.created_at < cutoff)
-                        .values(state="skipped", finished_at=ops._now(),
+                        .values(state="skipped", finished_at=ops._now(), target=None,
                                 message="відкладена перевірка застаріла"))
         return res.rowcount or 0
+
+
+def expire_stale(kind, *, timeout_s: float) -> int:
+    """queued старші за тайм-аут процесу (їх уже не візьмуть) — skipped, running без
+    живого процесу понад тайм-аут — failed; target стирається (рецензія E14, 08.10:
+    інакше адреса запиту лишалась у ops.db назавжди)."""
+    now = ops._now()
+    cutoff = now - timedelta(seconds=timeout_s)
+    ops.init_ops()
+    with ops.ops_session() as s:
+        n = s.execute(update(ops.LookupCheck)
+                      .where(_kind_is(kind), ops.LookupCheck.state == "queued",
+                             ops.LookupCheck.created_at < cutoff)
+                      .values(state="skipped", finished_at=now, target=None,
+                              message="перевірка застаріла в черзі")).rowcount or 0
+        n += s.execute(update(ops.LookupCheck)
+                       .where(_kind_is(kind), ops.LookupCheck.state == "running",
+                              func.coalesce(ops.LookupCheck.started_at,
+                                            ops.LookupCheck.created_at) < cutoff)
+                       .values(state="failed", finished_at=now, target=None,
+                               message="процес перевірки не дожив")).rowcount or 0
+        return n
 
 
 def result_of(job: ops.LookupCheck) -> dict:
