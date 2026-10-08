@@ -74,7 +74,7 @@ class TimedNet:
 
 class VirtualLane:
     def __init__(self, host, plan_path, out_path, *, master: FakeClock, net: TimedNet, cfg,
-                 identity_fn=None, hang: bool = False) -> None:
+                 identity_fn=None, hang: bool = False, evidence_fn=None) -> None:
         from realty.liveness import capture
         from realty.night.lane import Lane
 
@@ -86,7 +86,9 @@ class VirtualLane:
         self.lane = Lane(spec, self.out, fetcher=net.for_lane(host, self.clock), cfg=cfg,
                          hooks=capture.default_hooks(cfg), clock=self.clock,
                          now_fn=lambda: utc_of(self.clock.time()), identity_fn=identity_fn,
-                         snapshots={})
+                         snapshots={},
+                         # Рендери OLX (E11, D60): фабрика отримує годинник смуги.
+                         evidence_fn=evidence_fn(self.clock) if evidence_fn else None)
         self.spec = spec
         self.hang = hang
         self.finished = False
@@ -114,15 +116,17 @@ class VirtualLane:
 
 class VirtualLauncher:
     def __init__(self, master: FakeClock, net: TimedNet, cfg, *, identity_fn=None,
-                 hang=()) -> None:
+                 hang=(), evidence_fn=None) -> None:
         self.master, self.net, self.cfg = master, net, cfg
         self.identity_fn = identity_fn
+        self.evidence_fn = evidence_fn
         self.hang = set(hang)
         self.lanes: dict[str, VirtualLane] = {}
 
     def start(self, host, plan_path, out_path):
         lane = VirtualLane(host, plan_path, out_path, master=self.master, net=self.net,
-                           cfg=self.cfg, identity_fn=self.identity_fn, hang=host in self.hang)
+                           cfg=self.cfg, identity_fn=self.identity_fn, hang=host in self.hang,
+                           evidence_fn=self.evidence_fn)
         self.lanes[host] = lane
         return lane
 
