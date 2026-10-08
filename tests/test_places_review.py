@@ -304,16 +304,30 @@ def test_sample_has_house_evidence_columns_and_hromada_stratum(tmp_path):
 # --- Вимикач кроку в циклі -----------------------------------------------------------------
 
 
-def test_cycle_step_off_until_owner_review(tmp_path):
+def test_cycle_step_follows_the_gate(tmp_path, monkeypatch):
+    """Рішення власника 08.10 (варіант (а), D57): крок «райони й ЖК» увімкнено з
+    розгортанням. Вимикач лишився: з `[places] enabled = false` диригент кроку не
+    ставить, а виклик у циклі виходить з кодом 0 і нічого не пише."""
+    import shutil
+
     from realty import runner
 
+    assert configfiles.load("cycle").places.enabled is True
+    assert runner.PLACES_STEP in [s.name for s in runner.default_steps(sources=["domria"])]
+    cfg_dir = tmp_path / "config"
+    shutil.copytree(configfiles.ROOT / "config", cfg_dir)
+    cycle = cfg_dir / "cycle.toml"
+    cycle.write_text(cycle.read_text(encoding="utf-8").replace("enabled = true", "enabled = false"),
+                     encoding="utf-8")
+    monkeypatch.setenv(configfiles.ENV_DIR, str(cfg_dir))
     assert configfiles.load("cycle").places.enabled is False
     assert runner.PLACES_STEP not in [s.name for s in runner.default_steps(sources=["domria"])]
     engine = kit.make_engine(tmp_path, "gate.db")
     kit.build(engine, n=30)
     before = kit.raw_checksum(engine), _keys(engine)
-    r = _cli(_cli_env(tmp_path, "gate.db", REALTY_CYCLE_STEP=runner.PLACES_STEP),
-             "places", "assign")
+    env = _cli_env(tmp_path, "gate.db", REALTY_CYCLE_STEP=runner.PLACES_STEP)
+    env[configfiles.ENV_DIR] = str(cfg_dir)
+    r = _cli(env, "places", "assign")
     assert r.returncode == 0 and "вимкнено до перегляду вибірки" in r.stdout, r.stdout
     assert (kit.raw_checksum(engine), _keys(engine)) == before
 

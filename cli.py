@@ -338,11 +338,12 @@ def _print_verify(st: dict) -> None:
         print(f"  полагоджено посилань: {st['repaired']}")
     if st.get("tiers"):
         print(f"\n  {'сайт':<20}" + "".join(f"{t:>11}" for t in (
-            "canary", "opened", "repeat404", "absent", "reseen", "held", "rm_sample", "sweep")))
+            "canary", "random", "opened", "repeat404", "absent", "reseen", "held",
+            "rm_sample", "sweep")))
         for host, tiers in sorted(st["tiers"].items()):
             print(f"  {host:<20}" + "".join(f"{tiers.get(t, 0):>11}" for t in (
-                "canary", "opened", "repeat404", "absent", "reseen", "held", "rm_sample",
-                "sweep")))
+                "canary", "random", "opened", "repeat404", "absent", "reseen", "held",
+                "rm_sample", "sweep")))
     if st["by_host"]:
         print(f"\n  {'сайт':<16}{'запитів':>9}{'відмов':>9}{'':>4}")
         for host, h in sorted(st["by_host"].items()):
@@ -366,6 +367,9 @@ def _print_verify(st: dict) -> None:
               f"({t['reason']}); нічого не знято й не повернуто, чекає рішення на /status")
     if st.get("held_sources"):
         print(f"  під запобіжником: {', '.join(st['held_sources'])}")
+    for g in st.get("canary_genuine") or []:
+        print(f"  контрольний {g['key']}: знято на джерелі {g['source_removed_at']}, після "
+              f"появи в стрічці {g['seen']} — справжнє зняття, запобіжник не тримає")
     print("=" * 64)
     print("  (blago не перевіряється: сайт не відрізняє видалене планування)")
 

@@ -84,6 +84,10 @@ class ApplyReport:
     longest_batch_s: float = 0.0
     trips: list = field(default_factory=list)
     held_sources: list = field(default_factory=list)
+    # Запобіжник (D56): пули, де прогін щось «зняв» (оцінено чи ні, частка, нижня межа
+    # Вілсона), і справжні зняття контрольних (дата зняття пізніша за появу в стрічці).
+    fuse_pools: list = field(default_factory=list)
+    canary_genuine: list = field(default_factory=list)
     by_source: dict = field(default_factory=dict)
     by_signature: dict = field(default_factory=dict)
     by_tier: dict = field(default_factory=dict)
@@ -161,7 +165,14 @@ def apply_outcomes(outcomes, *, cfg, scope, run_id: int | None = None,
     циклу; fuse.window_counts)."""
     rep = ApplyReport()
     done = [oc for oc in outcomes if oc.verdict is not None]
-    trips = fuse.evaluate(done, cfg, prior=prior)
+    notes: dict = {}
+    trips = fuse.evaluate(done, cfg, prior=prior, report=notes)
+    rep.fuse_pools = notes.get("pools", [])
+    rep.canary_genuine = notes.get("canary_genuine", [])
+    for g in rep.canary_genuine:
+        log.warning("контрольний %s знято на джерелі %s — після останньої появи у власній "
+                    "стрічці (%s): справжнє зняття, запобіжник не тримає", g["key"],
+                    g["source_removed_at"], g["seen"])
     if trips:
         newly = fuse.trip(trips, run_id=run_id, mode=cfg.fuse.mode)
         for t in trips:
@@ -170,7 +181,7 @@ def apply_outcomes(outcomes, *, cfg, scope, run_id: int | None = None,
                       t.source, t.removed, t.checked, t.reason, t.scope)
         rep.trips = [{"source": t.source, "reason": t.reason, "checked": t.checked,
                       "removed": t.removed, "share": t.share, "scope": t.scope,
-                      "new": t.source in newly}
+                      "lower": t.lower, "new": t.source in newly}
                      for t in trips]
     held = fuse.held_sources()
     rep.held_sources = sorted(held)

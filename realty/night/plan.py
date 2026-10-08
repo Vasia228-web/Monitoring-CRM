@@ -7,7 +7,9 @@
 через liveness.apply.
 
 Роботи перевірки актуальності (яруси — realty/liveness/queue.py):
-  canary          — контрольні «відомо живі», порція хоста `canaries_per_run`;
+  canary          — контрольні «відомо живі»: порція хоста `canaries_per_run` на
+                    початку смуги і по night jobs.canaries_per_batch у кожному
+                    наступному пакеті (spread_canaries, D56);
   held            — вердикт, не застосований через запобіжник, — щойно джерело й сайт
                     відпущено: «знято» актуальному рядку — ярус held (запобіжник його
                     не рахує: власник, відпускаючи, бачив саме ці вердикти), «живе»
@@ -25,8 +27,12 @@
                     перевіряємо знову;
   onetime_hinted  — M3: актуальні ключі без ЖОДНОЇ відповіді новим підписом, зниклі з
                     повного переліку (absent_since), — давніші першими;
-  onetime_blind   — M3: решта таких ключів, випадково із зерном (той самий порядок
-                    щоночі — до кого черга не дійшла, ті наступного вікна першими);
+  onetime_blind   — M3: решта таких ключів, рівномірно випадково (D56): зерно —
+                    onetime_seed і ніч (обидва вікна ночі — той самий порядок, до кого
+                    черга не дійшла в першому, ті в другому першими; наступна ніч —
+                    новий порядок). Прохід одноразовий і однаково дійде до всіх ключів:
+                    порядок впливає лише на зміщення оцінки частки «знято», а M3 у
+                    tiered — у пулі 20% запобіжника разом із контрольними;
   rm_sample       — вибірка знятих за removed_sample.window_days (порція — night.toml);
   overdue         — догін: лише якщо прострочених ключів хоста (немає зрозумілої
                     перевірки новим підписом за 2 × recheck_days) понад
@@ -41,6 +47,7 @@ M2 і M3 одноразові за визначенням стану, а не з
 """
 from __future__ import annotations
 
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -139,13 +146,61 @@ def overdue_share(u: queue.Universe, cfg, host: str) -> float | None:
     return round(late / len(keys), 4)
 
 
+def night_key(now: datetime, attempted_since: datetime | None = None,
+              night: str | None = None) -> str:
+    """Ключ ночі для зерна M3: місцева дата ночі (windows.Window.night_date), інакше —
+    старт першого вікна ночі (той самий для обох вікон), інакше — дата `now`."""
+    if night:
+        return night
+    if attempted_since is not None:
+        return attempted_since.isoformat(timespec="minutes")
+    return now.date().isoformat()
+
+
+def night_batches(ncfg) -> int:
+    """Скільки пакетів (lanes.batch_minutes) у найдовшому вікні ночі."""
+    from ..configfiles import hhmm_minutes
+
+    longest = max(hhmm_minutes(w.stop_requests) - hhmm_minutes(w.start) for w in ncfg.windows)
+    return max(1, math.ceil(longest / ncfg.lanes.batch_minutes))
+
+
+def spread_canaries(p: HostPlan, first: int, per_batch: int, batch_minutes: float,
+                    seconds: float | None = None) -> None:
+    """Контрольні — у кожен пакет смуги (D56): перші `first` — на початку, далі по
+    `per_batch` через кожні ~batch_minutes × 60 / pace запитів. Ті, що випали б за
+    кінець черги, не питаємо (запитів не більшає понад план)."""
+    canaries = [i for i in p.items if i.tier == queue.TIER_CANARY]
+    if len(canaries) <= first or per_batch <= 0:
+        return
+    rest = [i for i in p.items if i.tier != queue.TIER_CANARY]
+    # Удвічі частіше, ніж уміщує пакет за темпом: справжній крок довший за плановий
+    # (DOM.RIA 1,4 с проти 1,0; перевірки існування — тим самим темпом), і за плановим
+    # кроком частина пакетів лишалась би без контрольного (перевірка виправлень D56).
+    step = max(1, int(batch_minutes * 60 / max(p.pace, seconds or 0, 0.1) / 2))
+    extra = canaries[first:]
+    out = list(canaries[:first])
+    pos = 0
+    for b in range(1, len(extra) // per_batch + 1):
+        nxt = min(len(rest), b * step)
+        if b * step > len(rest):
+            break
+        out += rest[pos:nxt] + extra[(b - 1) * per_batch: b * per_batch]
+        pos = nxt
+    out += rest[pos:]
+    p.items = out
+    p.tiers[queue.TIER_CANARY] = sum(1 for i in out if i.tier == queue.TIER_CANARY)
+
+
 def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
           attempted_since: datetime | None = None, skip_hosts: dict | None = None,
-          hosts=None) -> NightPlan:
+          hosts=None, night: str | None = None) -> NightPlan:
     """План ночі. `now` — UTC без зони (як у базі); `held` — джерела й сайти під
     запобіжником; `attempted_since` — старт першого вікна цієї ночі (UTC): ключі, які
-    відтоді вже пробували, не беруться; `skip_hosts` — {хост: чому без смуги}."""
+    відтоді вже пробували, не беруться; `skip_hosts` — {хост: чому без смуги};
+    `night` — місцева дата ночі (зерно порядку M3, `night_key`)."""
     held = set(held)
+    nkey = night_key(now, attempted_since, night)
     skip_hosts = dict(skip_hosts or {})
     order = [j for j in ncfg.jobs.order if j != "identity"]
     u = queue.universe(session, lcfg, now=now, hosts=hosts, history_since=EPOCH)
@@ -210,9 +265,12 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
             legacy, by_404 = legacy_removals(session)
         return _m2_keys(u, lcfg, tier, legacy, by_404)
 
+    batches = night_batches(ncfg)
     for job in order:
         if job == queue.TIER_CANARY:
-            fill(job, queue.canary_keys(u, lcfg), lambda h: lcfg.hosts[h].canaries_per_run)
+            fill(job, queue.canary_keys(u, lcfg),
+                 lambda h: lcfg.hosts[h].canaries_per_run + 2 * ncfg.jobs.canaries_per_batch
+                 * max(0, batches - 1))
         elif job == queue.TIER_HELD:
             fill(queue.TIER_HELD, queue.unapplied_removal_keys(u, lcfg, held))
             # Незастосоване «живе» ключа M2 повертає сам M2 (причина події — його ярус).
@@ -222,7 +280,7 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
         elif job in (queue.TIER_M2_LEGACY404, queue.TIER_M2_RESEEN):
             fill(job, m2(job))
         elif job in (queue.TIER_M3_HINTED, queue.TIER_M3_BLIND):
-            fill(job, _m3_keys(u, lcfg, job, ncfg.jobs.onetime_seed))
+            fill(job, _m3_keys(u, lcfg, job, ncfg.jobs.onetime_seed, nkey))
         elif job == queue.TIER_SAMPLE:
             rng = random.Random(f"{ncfg.jobs.onetime_seed}:{now.date().isoformat()}")
             sample = queue.removed_sample_keys(u, lcfg, rng, exclude=taken)
@@ -237,6 +295,10 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
             if late:
                 fill(job, [k for k in queue.due_keys(u, lcfg, session, held=held, exclude=taken)
                            if u.key_host[k] in late])
+    for host, p in plans.items():
+        spread_canaries(p, lcfg.hosts[host].canaries_per_run, ncfg.jobs.canaries_per_batch,
+                        ncfg.lanes.batch_minutes,
+                        ncfg.report.typical_request_seconds.get(host))
     return NightPlan(hosts=plans, held=held, now=now)
 
 
@@ -274,9 +336,11 @@ def _m2_keys(u: queue.Universe, cfg, tier: str, legacy: set[int], by_404: set[in
     return [k for _, k in out]
 
 
-def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int) -> list[str]:
+def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int, night: str) -> list[str]:
     """Ключі M3: актуальні без жодної відповіді новим підписом; hinted — зниклі з
-    переліку (давніші першими), blind — решта, випадково із зерном (по хостах)."""
+    переліку (давніші першими), blind — решта, рівномірно випадкова перестановка (по
+    хостах) із зерном onetime_seed + ніч + хост: від `_order` чи порядку рядків у базі
+    не залежить (кандидати спершу впорядковано за ключем), щоночі — нова (D56)."""
     hinted, blind = [], defaultdict(list)
     for key in u.active_keys:
         if _answered(u.hist(key)):
@@ -287,6 +351,10 @@ def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int) -> list[str]:
         absent = [r.absent_since for r in rows if r.is_active and r.absent_since]
         if absent:
             hinted.append((min(absent), key))
+        elif not all(r.is_active for r in rows):
+            # Змішаний ключ (рядок уже знято, копія ще актуальна) — не сліпий: «знято» на
+            # ньому здебільшого справжнє і здувало б частку пулу випадкових (D56).
+            hinted.append((datetime.min, key))
         else:
             blind[u.key_host[key]].append(key)
     if tier == queue.TIER_M3_HINTED:
@@ -294,6 +362,6 @@ def _m3_keys(u: queue.Universe, cfg, tier: str, seed: int) -> list[str]:
     out = []
     for host in sorted(blind):
         keys = sorted(blind[host])
-        random.Random(f"{seed}:{host}").shuffle(keys)
+        random.Random(f"{seed}:{night}:{host}").shuffle(keys)
         out += keys
     return out

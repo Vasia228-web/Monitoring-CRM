@@ -99,7 +99,8 @@ def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", host
     `started` — time.monotonic() старту процесу кроку (cli.py): стеля мережевої
     фази `run.budget_minutes` рахується від нього, а не від кінця плану (рецензія E8,
     D52). Малий прогін (не `cycle`) рахує запобіжник разом із перевірками за вікно
-    `fuse.window_hours` (fuse.window_counts).
+    `fuse.window_hours` (fuse.prior_counts); у tiered пул випадкових і контрольних, що
+    сам не набрав min_checked, — за `fuse.random_window_hours`, і в кроці циклу (D56).
     """
     from ..db import session_scope
     from ..fetcher import Fetcher
@@ -143,11 +144,11 @@ def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", host
         budget = budget_s if budget_s is not None else cfg.run.budget_minutes * 60
         outcomes, lanes = engine.run_items(engine.by_host(items), fetcher=fetcher, cfg=cfg,
                                            hooks=hooks, deadline=t0 + budget, now_fn=now_fn)
-        prior = None
-        if kind != "cycle":
-            with scope() as s:
-                prior = fuse.window_counts(s, cfg, since=fuse.window_since(cfg, now_fn()),
-                                           cleared=fuse.cleared_at())
+        # Вікно для пулів, що самі не набрали min_checked: малий прогін — усі пули; крок
+        # циклу — лише пул випадкових і контрольних у tiered (D56: rieltor, lun, flombu
+        # набирають min_checked лише за кілька циклів).
+        with scope() as s:
+            prior = fuse.prior_counts(s, cfg, now_fn(), cycle=kind == "cycle")
         rep = apply.apply_outcomes(outcomes, cfg=cfg, scope=scope, run_id=run_id, prior=prior)
         closed = _close_jobs(jobs, job_keys, outcomes, rep) if jobs else []
         for host, ln in lanes.items():
@@ -162,7 +163,8 @@ def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", host
                      by_signature=rep.by_signature, by_tier=rep.by_tier, trips=rep.trips,
                      held_sources=rep.held_sources, repaired=rep.repaired,
                      not_found=rep.not_found, stale=rep.stale, jobs_closed=closed,
-                     longest_batch_s=rep.longest_batch_s, batches=rep.batches)
+                     longest_batch_s=rep.longest_batch_s, batches=rep.batches,
+                     fuse_pools=rep.fuse_pools, canary_genuine=rep.canary_genuine)
         stats["blocked_sources"] = sorted(h for h, ln in lanes.items() if ln.stopped_early)
         status_report = None
         if kind == "cycle":
@@ -175,7 +177,8 @@ def run(*, kind: str = "cycle", ids=None, keys=None, reason: str = "sweep", host
                 removed=rep.delisted, returned=rep.restored, per_host=stats["by_host"],
                 per_source=rep.by_source, per_tier={"plan": stats["tiers"],
                                                     "verdicts": rep.by_tier},
-                fuse={"trips": rep.trips, "held": rep.held_sources, "mode": cfg.fuse.mode},
+                fuse={"trips": rep.trips, "held": rep.held_sources, "mode": cfg.fuse.mode,
+                      "pools": rep.fuse_pools, "canary_genuine": rep.canary_genuine},
                 report=status_report)
         return stats
     except BaseException as e:
