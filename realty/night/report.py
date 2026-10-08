@@ -191,6 +191,7 @@ def render_run(d: dict) -> str:
         rep = rec.get("report") or {}
         out.append(f"  дозбір identity ({host}, {rec.get('source')}): "
                    f"{json.dumps(rep.get('done', rep), ensure_ascii=False)[:160]}")
+    out += run_evidence_lines(d)
     out += reconcile_lines(d)
     lb, la = d.get("liquidity_before"), d.get("liquidity_after")
     if lb or la:
@@ -207,6 +208,43 @@ def render_run(d: dict) -> str:
                            f" дн. (подій {b0.get('events')} → {b1.get('events')})")
     out.append("=" * 96)
     return "\n".join(out)
+
+
+def run_evidence_lines(d: dict) -> list[str]:
+    """Підсумки дозбору доказів Блоків 3/4 у вікні (E11, D60)."""
+    ev = d.get("evidence") or {}
+    out = []
+    for host, rep in sorted((ev.get("lanes") or {}).items()):
+        if not isinstance(rep, dict):
+            continue
+        det, tabs = rep.get("detail") or {}, rep.get("tabs") or {}
+        parts = [f"рендерів {rep.get('renders', 0)} (блокувань {rep.get('blocked', 0)})"]
+        for tab in ("private", "business"):
+            if tabs.get(tab):
+                parts.append(f"вкладка {tab}: сторінок {tabs[tab].get('pages', 0)}, "
+                             f"оголошень {tabs[tab].get('keys', 0)}")
+        if tabs.get("param_failed"):
+            parts.append("ПАРАМЕТР ВКЛАДОК НЕ СПРАЦЮВАВ — членства не пишемо")
+        if det:
+            parts.append(f"сторінок деталей {det.get('rendered', 0)}, з доказами "
+                         f"{det.get('written', 0)}, невдалих {det.get('failed', 0)}")
+        if rep.get("stopped"):
+            parts.append(f"зупинка: {rep['stopped']}")
+        if rep.get("status") in ("failed", "interrupted"):
+            parts.append(f"{rep['status']}: {rep.get('error') or ''}")
+        out.append(f"  дозбір доказів ({host}): " + "; ".join(parts))
+    for host, rec in sorted((d.get("identity") or {}).items()):
+        feed = ((rec or {}).get("report") or {}).get("feed")
+        if feed:
+            out.append(f"  прохід стрічки ({feed.get('source')}): {feed.get('status')}, сторінок "
+                       f"{feed.get('pages', 0)}, рядків {feed.get('matched', 0)}, дописано "
+                       f"{json.dumps(feed.get('updated') or {}, ensure_ascii=False)}; без доказів "
+                       f"{feed.get('need_before')} → {feed.get('need_after', '—')}")
+    labels = ev.get("tab_labels")
+    if labels:
+        out.append(f"  мітки вкладок OLX: {TAB_LABELS_UA.get(labels.get('status'), labels.get('status'))}"
+                   f", записано рядків {labels.get('applied', 0)}")
+    return out
 
 
 def identity_written(identity: dict | None) -> dict:
@@ -284,7 +322,8 @@ def render_plan(d: dict) -> str:
     if d.get("disabled"):
         out.append("  УВАГА: data/COLLECTOR_OFF — нічний диригент нічого не робитиме")
     out.append(f"  порядок робіт: {', '.join(d['order'])}")
-    tiers = [t for t in d["order"] if t != "identity"]
+    # Колонки — лише яруси Блоку 1; дозбір (identity, рендери OLX) — окремим розділом.
+    tiers = [t for t in d["order"] if t not in ("identity", "olx_tabs", "olx_detail")]
     short = {"canary": "контр", "held": "утрим", "legacy_404": "M2·404",
              "onetime_reseen": "M2·reseen", "onetime_hinted": "M3·підк", "onetime_blind":
              "M3·сліпі", "rm_sample": "вибірка", "overdue": "догін"}
@@ -327,7 +366,77 @@ def render_plan(d: dict) -> str:
                "(policy.pace night = max(delay, full_delay)) — старт-до-старту;")
     out.append("  «у вікно» — запитів від старту до stop_requests; «лишиться» — перше вікно "
                "без бекапу, якщо він потрібен; без очікування замка циклу; хости паралельно.")
+    out += plan_evidence_lines(d)
     for note in d.get("notes") or []:
         out.append(f"  УВАГА: {note}")
     out.append("=" * 100)
     return "\n".join(out)
+
+
+JOB_UA = {"olx_render": "рендери OLX", "feed:lun": "стрічка LUN", "feed:flombu": "стрічка flombu",
+          "feed": "стрічка"}
+
+
+def _hm_minutes(minutes: float) -> str:
+    return f"{int(minutes // 60)} год {int(minutes % 60):02d} хв" if minutes >= 60 \
+        else f"{minutes:.0f} хв"
+
+
+def plan_evidence_lines(d: dict) -> list[str]:
+    """`night --dry-run`: дозбір доказів Блоків 3/4 по смугах (E11, D60) — після Блоку 1
+    у тому самому вікні; разом по хосту — чи вміщається у вікно до stop_requests."""
+    hosts = d.get("hosts") or {}
+    rows = [(h, x["evidence_estimate"]) for h, x in hosts.items() if x.get("evidence_estimate")]
+    body = [(h, x["body_gets"]) for h, x in hosts.items() if x.get("body_gets")]
+    if not rows and not body:
+        return []
+    out = ["", "  ДОЗБІР ДОКАЗІВ Блоків 3/4 (E11) — після всіх ярусів Блоку 1 у тих самих смугах,",
+           "  той самий темп і дедлайн; «у вікнах 1–4» — запитів дозбору, що вмістяться після "
+           "Блоку 1:"]
+    out.append(f"  {'сайт':<15}{'робота':<16}{'крок':>6}{'разом':>8}{'у вікнах 1–4':>22}"
+               f"{'лишиться після 1–4':>26}")
+    for host, e in rows:
+        if not e.get("total"):
+            out.append(f"  {host:<15}{JOB_UA.get(e['job'], e['job']):<16}  "
+                       f"{e.get('why') or 'черга порожня'}")
+            continue
+        per = " / ".join(str(x) for x in e.get("per_window") or [])
+        left = " / ".join(str(x) for x in e.get("left_after_windows") or [])
+        out.append(f"  {host:<15}{JOB_UA.get(e['job'], e['job']):<16}{e['rate']:>5.1f}с"
+                   f"{e['total']:>8}{per:>22}{left:>26}")
+        extra = []
+        if e["job"] == "olx_render":
+            extra.append(f"вкладки {e.get('tabs', 0)}, сторінки деталей "
+                         f"{e['total'] - e.get('tabs', 0)} (без доказів {e.get('detail_missing', 0)} "
+                         f"ключів), стеля {e.get('cap_per_window')} рендерів за вікно")
+        elif e.get("need") is not None:
+            extra.append(f"актуальних без доказів {e['need']}")
+        if e.get("windows_alone"):
+            extra.append(f"вікно без Блоку 1 — до {e['full_window']} запитів, уся черга ≈ "
+                         f"{e['windows_alone']} вікон")
+        used = e.get("minutes_used") or []
+        if used:
+            extra.append(f"вікно 1: Блок 1 + дозбір ≈ {_hm_minutes(used[0])} з "
+                         f"{_hm_minutes(e.get('window_minutes') or 0)}")
+        out.append(f"  {'':<15}  ↳ " + "; ".join(extra))
+    for host, n in body:
+        req = hosts[host].get("requests", 0)
+        out.append(f"  {host:<15}GET замість HEAD для доказів: {n} з {req} ключів вікна (запитів "
+                   f"стільки ж; тіло — лише гачкам доказів)")
+    ev = d.get("evidence") or {}
+    labels = ev.get("tab_labels") or {}
+    if labels:
+        out.append(f"  мітки вкладок OLX: {TAB_LABELS_UA.get(labels.get('status'), labels.get('status'))}"
+                   f" (членів {labels.get('members', 0)}, із чипом {labels.get('n', 0)}, збіг "
+                   f"{labels.get('agree', 0)}; без мітки рядків {labels.get('pending_rows', 0)})")
+    if ev.get("writes"):
+        out.append("  вікно допише докази в непорожні JSON — бекап на старті за правилом "
+                   "onetime_max_age_hours")
+    if ev.get("error"):
+        out.append(f"  УВАГА: план дозбору не побудовано: {ev['error']}")
+    return out
+
+
+TAB_LABELS_UA = {"no_members": "членства ще немає", "not_enough": "не пишемо — замало звірених",
+                 "disagree": "НЕ пишемо — збіг із чипом нижчий за поріг",
+                 "calibrated": "пишемо (звірку пройдено)", "error": "помилка"}
