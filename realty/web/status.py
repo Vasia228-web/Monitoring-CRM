@@ -229,6 +229,72 @@ def api_dedup():
     })
 
 
+@router.get("/api/status/liveness")
+def api_liveness():
+    """Панель «Зняті оголошення» (Блок 1, E8, D52) — лише власник (префікс /api/status).
+
+    Схема /api/status не змінюється (інтеграція, конфлікт 9): тут готове зведення
+    останнього прогону циклу з ops.liveness_runs (його рахує сам крок) і поточний
+    стан запобіжника — два короткі читання ops.db, без агрегацій на запит.
+    """
+    import json
+
+    from .. import configfiles
+    from ..liveness import fuse
+
+    ops.init_ops()
+    with ops.ops_session() as s:
+        last = s.scalars(select(ops.LivenessRun)
+                         .where(ops.LivenessRun.report.isnot(None))
+                         .order_by(ops.LivenessRun.id.desc()).limit(1)).first()
+        latest = s.scalars(select(ops.LivenessRun)
+                           .order_by(ops.LivenessRun.id.desc()).limit(1)).first()
+
+        def run_of(r):
+            if r is None:
+                return None
+            return {"id": r.id, "kind": r.kind, "status": r.status,
+                    "started_at": as_utc_iso(r.started_at),
+                    "finished_at": as_utc_iso(r.finished_at), "requests": r.requests,
+                    "checked": r.checked, "removed": r.removed, "returned": r.returned,
+                    "config_hash": r.config_hash, "fuse_mode": r.fuse_mode,
+                    "per_host": json.loads(r.per_host or "{}"),
+                    "fuse": json.loads(r.fuse or "{}"), "message": r.message}
+
+        body = {"report": json.loads(last.report) if last is not None else None,
+                "report_run": run_of(last), "latest_run": run_of(latest)}
+    try:
+        cfg = configfiles.get("liveness")
+        body["fuse_mode"] = cfg.fuse.mode
+        body["fuse_rule"] = {"share": cfg.fuse.share, "min_checked": cfg.fuse.min_checked,
+                             "hinted_share": cfg.fuse.hinted_share,
+                             "canary_trip_min": cfg.fuse.canary_trip_min}
+    except configfiles.ConfigError as e:
+        log.error("config/liveness.toml не читається: %s", e)
+        body["fuse_mode"] = None
+    body["fuse"] = fuse.state()
+    return JSONResponse(body)
+
+
+@router.post("/api/status/liveness-fuse")
+def api_liveness_fuse(payload: dict = Body(default={})):
+    """Зняти запобіжник джерела (лише власник; same-origin — як для будь-якого POST).
+
+    Після зняття наступний прогін перевіряє «знято», не застосоване під
+    запобіжником (ярус held), і застосовує вже за звичайними правилами.
+    """
+    from ..liveness import fuse
+
+    source = str(payload.get("source") or "").strip()
+    if payload.get("action") != "clear" or not source:
+        return JSONResponse({"ok": False, "error": "потрібно source і action=clear"},
+                            status_code=400)
+    released = fuse.clear(source, by="owner:/status")
+    log.warning("Запобіжник перевірки актуальності: %s — %s", source,
+                "знято власником" if released else "не тримався")
+    return JSONResponse({"ok": True, "source": source, "released": released})
+
+
 @router.get("/api/status/runs")
 def api_runs(limit: int = 20):
     return JSONResponse(ops.recent_runs(min(limit, 100)))

@@ -16,7 +16,6 @@ from .normalize import compute_price_per_sqm, to_uah, to_usd
 from .sources import REGISTRY
 from .quality import llm_check
 from .quality.staging import QualityGate
-from .verify import sweep_after_full_run
 from .sources.base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -27,12 +26,41 @@ CRITICAL = ("price", "rooms", "area_total")
 # виклик моделі: сторінка деталей часто містить опис, з якого їх видно.
 DESIRABLE = ("market_type", "condition")
 
-# Політики полів запису (інтеграція, конфлікт «pipeline._upsert», крок E6, D51).
+# Політики полів запису (інтеграція, конфлікт «pipeline._upsert», кроки E6/E8, D51/D52).
 # DERIVED — похідні поля: їх ставлять лише слухачі ORM (realty/models.py), запис
 # джерела їх не задає й не перезаписує: site_key = ключ «сайт:id» з original_url.
 # Телефони в description/title міняють ті самі слухачі — окремого кроку тут немає.
-# Поля «лише туди, де порожньо» (place_raw, seller_evidence) додадуть Блоки 1/3/4.
+# LIVENESS — поля перевірки актуальності (Блок 1): їх пише лише realty/liveness і
+# крок «різниця списків»; збір їх не задає й не чіпає (полагоджену адресу
+# probe_url наступний збір не скасовує — інтеграція, конфлікт 21).
+# LIVENESS_STATE — стан актуальності: знімає й повертає лише realty/liveness/apply.py
+# з подією в listing_events; запис джерела, що раптом приніс би is_active чи
+# delisted_at, тихо повернув би чи зняв оголошення без журналу (рецензія E8, D52).
+# FILL_ONLY_JSON — докази Блоків 3/4: з запису джерела — лише НОВІ ключі, наявні не
+# переписуються (інтеграція, конфлікт 11); FILL_ONLY_SCALAR — лише якщо NULL.
 DERIVED_FIELDS = frozenset({"site_key"})
+LIVENESS_FIELDS = frozenset({"absent_since", "source_removed_at", "probe_url"})
+LIVENESS_STATE_FIELDS = frozenset({"is_active", "delisted_at", "last_checked", "last_alive_at",
+                                   "last_attempt", "check_failures"})
+FILL_ONLY_JSON = frozenset({"place_raw", "seller_evidence"})
+FILL_ONLY_SCALAR = frozenset({"seller_profile"})
+
+
+def _fill_only(existing, rec: dict) -> None:
+    """Докази Блоків 3/4 із запису джерела — лише туди, де порожньо."""
+    for name in FILL_ONLY_JSON:
+        new = rec.get(name)
+        if not isinstance(new, dict) or not new:
+            continue
+        old = dict(getattr(existing, name) or {})
+        add = {k: v for k, v in new.items() if k not in old and v not in (None, "", [], {})}
+        if add:
+            setattr(existing, name, {**old, **add})
+            if name == "seller_evidence":
+                existing.seller_evidence_at = _utcnow()
+    for name in FILL_ONLY_SCALAR:
+        if rec.get(name) and getattr(existing, name) is None:
+            setattr(existing, name, rec[name])
 
 
 def _gaps(rec: dict) -> tuple[bool, bool]:
@@ -83,8 +111,14 @@ class RunReport:
 class Pipeline:
     def __init__(self, sources: list[str] | None = None, use_llm: bool = True,
                  mode: str = "fresh", start_pages: dict[str, int] | None = None,
-                 on_page=None, trigger: str = "cli", gate: QualityGate | None = None) -> None:
+                 on_page=None, trigger: str = "cli", gate: QualityGate | None = None,
+                 fetch_details: bool = True) -> None:
         self.source_names = sources or enabled_sources()
+        # Чи ходити на сторінки деталей (рівні 2 і 3). Нічний дозбір identity LUN/flombu
+        # (`cli.py scrape --no-detail`, рецензія E9, D53) — лише стрічка: original_url
+        # LUN веде на rieltor.ua, olx.ua і dom.ria.com, а в ці хости вночі ходить ЛИШЕ
+        # смуга свого хоста у своєму темпі (один потік на сайт; інтеграція, конфлікт 4).
+        self.fetch_details = fetch_details
         # "fresh" — щоденний інкрементальний прогін по свіжих оголошеннях;
         # "full"  — одноразовий історичний збір без стелі глибини.
         self.mode = mode
@@ -160,6 +194,8 @@ class Pipeline:
         Сторінка завантажується щонайбільше один раз і обслуговує обидва
         резервні рівні.
         """
+        if not self.fetch_details:
+            return rec  # лише стрічка: жодного запиту за межі сайту джерела
         missing_critical, missing_desirable = _gaps(rec)
         if not (missing_critical or missing_desirable):
             return rec
@@ -241,7 +277,7 @@ class Pipeline:
         повторні прогони оновлюють запис, а не створюють новий.
         """
         fields = {c.name for c in Listing.__table__.columns} - {"id", "first_seen"} \
-            - DERIVED_FIELDS
+            - DERIVED_FIELDS - LIVENESS_FIELDS - LIVENESS_STATE_FIELDS
         payload = {k: v for k, v in rec.items() if k in fields}
         existing = session.scalar(
             select(Listing).where(
@@ -260,9 +296,12 @@ class Pipeline:
 
         old_usd = existing.price_usd
         for k, v in payload.items():
+            if k in FILL_ONLY_JSON or k in FILL_ONLY_SCALAR:
+                continue
             # Не затираємо вже відомі значення порожніми.
             if v is not None or getattr(existing, k) is None:
                 setattr(existing, k, v)
+        _fill_only(existing, rec)
         # Оголошення щойно бачили у стрічці — це єдине місце, де ставиться
         # `last_seen` (D43): решта кроків лише читає дані й міняти дату не має.
         existing.last_seen = _utcnow()
@@ -336,7 +375,9 @@ class Pipeline:
         cache: dict[str, BaseSource] = {}
         updatable = [c.name for c in Listing.__table__.columns
                      if c.name not in ("id", "source", "external_id", "first_seen")
-                     and c.name not in DERIVED_FIELDS]
+                     and c.name not in DERIVED_FIELDS and c.name not in LIVENESS_FIELDS
+                     and c.name not in LIVENESS_STATE_FIELDS
+                     and c.name not in FILL_ONLY_JSON and c.name not in FILL_ONLY_SCALAR]
         with session_scope() as s:
             stmt = select(Listing).where(or_(
                 *[getattr(Listing, f).is_(None) for f in CRITICAL],
@@ -475,11 +516,9 @@ class Pipeline:
                 failure = f"{type(e).__name__}: {str(e)[:300]}"
                 src.stats["errors"] += 1
                 log.exception("Джерело %s перервано: %s", name, failure)
-                # Повний обхід бачив усю видачу джерела, тому все, чого в ній
-                # не було, більше не продається. Тільки за успішного прогону:
-                # після збою список побаченого неповний.
-                if self.mode == "full" and failure is None and not src.stats.get("errors"):
-                    self.report.delisted += sweep_after_full_run(name, src.seen_ids)
+                # Відсутність у видачі НІКОГО не знімає, і після повного обходу
+                # теж (рішення власника 1, D46; E8, D52): зникле з переліку —
+                # лише підказка для перевірки (realty/snapshot.py → absent_since).
             finally:
                 # Запис прогону закривається завжди — інакше він назавжди
                 # лишиться «виконується» і дашборд показуватиме хибний

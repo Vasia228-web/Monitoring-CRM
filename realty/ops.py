@@ -304,6 +304,149 @@ class LookupCheck(OpsBase):
     result: Mapped[str | None] = mapped_column(Text)             # JSON: checked/delisted/…
 
 
+class LivenessRun(OpsBase):
+    """Один прогін перевірки актуальності (Блок 1, E8, D52).
+
+    Крок циклу, завдання «перевірка при відкритті», ручний запуск. Наприкінці
+    прогону циклу сюди ж пишеться готове зведення для /status (`report`, JSON):
+    сторінка й /api/status/liveness читають цей рядок, а не агрегують check_events
+    на кожен запит (інтеграція, конфлікт 9). `config_hash` — версія
+    config/liveness.toml, з якою прогін працював.
+    """
+
+    __tablename__ = "liveness_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), default="cycle")   # cycle|opened|manual|explicit
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    config_hash: Mapped[str | None] = mapped_column(String(16))
+    fuse_mode: Mapped[str | None] = mapped_column(String(16))
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    checked: Mapped[int] = mapped_column(Integer, default=0)
+    removed: Mapped[int] = mapped_column(Integer, default=0)
+    returned: Mapped[int] = mapped_column(Integer, default=0)
+    per_host: Mapped[str | None] = mapped_column(Text)        # JSON
+    per_source: Mapped[str | None] = mapped_column(Text)      # JSON
+    per_tier: Mapped[str | None] = mapped_column(Text)        # JSON
+    fuse: Mapped[str | None] = mapped_column(Text)            # JSON: спрацювання прогону
+    report: Mapped[str | None] = mapped_column(Text)          # JSON: зведення для /status
+    message: Mapped[str | None] = mapped_column(Text)
+
+
+class LivenessFuse(OpsBase):
+    """Запобіжник перевірки актуальності — по джерелу (Блок 1, E8, D52).
+
+    `held` — для джерела нічого не знімаємо й не повертаємо, доки власник не зніме
+    запобіжник на /status (POST /api/status/liveness-fuse) чи `cli.py liveness
+    fuse clear`. Тривогу в Telegram шле сторож (watchdog.check_liveness), поки
+    джерело тримається. `examples` — до 10 безпечних адрес (без query й піддоменів).
+    """
+
+    __tablename__ = "liveness_fuse"
+
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    state: Mapped[str] = mapped_column(String(8), default="held")      # held | clear
+    mode: Mapped[str | None] = mapped_column(String(16))
+    reason: Mapped[str | None] = mapped_column(String(24))      # share | hinted_share | canary
+    tripped_at: Mapped[datetime | None] = mapped_column(DateTime)
+    run_id: Mapped[int | None] = mapped_column(Integer)
+    checked: Mapped[int] = mapped_column(Integer, default=0)
+    removed: Mapped[int] = mapped_column(Integer, default=0)
+    share: Mapped[float | None] = mapped_column(Float)
+    examples: Mapped[str | None] = mapped_column(Text)          # JSON
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cleared_by: Mapped[str | None] = mapped_column(String(32))
+
+
+class LivenessFuseLog(OpsBase):
+    """Журнал запобіжника, що лише дописується: кожне спрацювання й кожне зняття.
+
+    `liveness_fuse` — поточний стан (нове спрацювання переписує його рядок); тут —
+    історія рішень «тримати → власник відпустив → знову тримати» з тим, хто й коли
+    відпустив (правило ескалації; рецензія E8, D52).
+    """
+
+    __tablename__ = "liveness_fuse_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    action: Mapped[str] = mapped_column(String(8))                     # trip | clear
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    by: Mapped[str | None] = mapped_column(String(32))                 # clear: хто відпустив
+    run_id: Mapped[int | None] = mapped_column(Integer)
+    mode: Mapped[str | None] = mapped_column(String(16))
+    reason: Mapped[str | None] = mapped_column(String(24))
+    checked: Mapped[int | None] = mapped_column(Integer)
+    removed: Mapped[int | None] = mapped_column(Integer)
+    share: Mapped[float | None] = mapped_column(Float)
+    examples: Mapped[str | None] = mapped_column(Text)                 # JSON
+
+
+class NightRun(OpsBase):
+    """Одне нічне вікно диригента `cli.py night` (E9, D53).
+
+    Статус: running | ok | partial (смугу зупинено блокуваннями чи дедлайном не все
+    встигли — це норма) | backup_failed (нічого не писали) | lock_timeout (цикл не
+    звільнив замка) | outside_window | disabled (COLLECTOR_OFF) | failed (виняток).
+    Часи — UTC без зони, як і решта ops.db; `night_date` — місцева дата ночі (два
+    вікна однієї ночі мають ту саму). JSON-поля — план, смуги, пакети, підсумки по
+    хостах, строк продажу до/після; `liveness_run_id` — рядок ops.liveness_runs
+    (kind «night») із тими самими підсумками й зведенням для /status.
+    """
+
+    __tablename__ = "night_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    night_date: Mapped[str | None] = mapped_column(String(10), index=True)
+    window: Mapped[str | None] = mapped_column(String(5))
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    stop_requests_at: Mapped[datetime | None] = mapped_column(DateTime)
+    release_lock_at: Mapped[datetime | None] = mapped_column(DateTime)
+    lock_acquired_at: Mapped[datetime | None] = mapped_column(DateTime)
+    lock_released_at: Mapped[datetime | None] = mapped_column(DateTime)
+    lock_waited_s: Mapped[float] = mapped_column(Float, default=0.0)
+    config_hash: Mapped[str | None] = mapped_column(String(16))
+    liveness_hash: Mapped[str | None] = mapped_column(String(16))
+    fuse_mode: Mapped[str | None] = mapped_column(String(16))
+    liveness_run_id: Mapped[int | None] = mapped_column(Integer)
+    backup: Mapped[str | None] = mapped_column(Text)          # JSON
+    plan: Mapped[str | None] = mapped_column(Text)            # JSON: хост → яруси, темп
+    lanes: Mapped[str | None] = mapped_column(Text)           # JSON: хост → запити, зупинки
+    batches: Mapped[str | None] = mapped_column(Text)         # JSON: список пакетів
+    per_host: Mapped[str | None] = mapped_column(Text)        # JSON: хост → наслідки
+    per_tier: Mapped[str | None] = mapped_column(Text)        # JSON
+    fuse: Mapped[str | None] = mapped_column(Text)            # JSON: спрацювання ночі
+    identity: Mapped[str | None] = mapped_column(Text)        # JSON: дозбір по смугах
+    active_before: Mapped[int | None] = mapped_column(Integer)
+    active_after: Mapped[int | None] = mapped_column(Integer)
+    # JSON {"before"|"after": {active, listings, price_events}} — звірка ночі: дозбір
+    # identity LUN/flombu — це збір стрічки (нові оголошення, події ціни), рецензія E9.
+    totals: Mapped[str | None] = mapped_column(Text)
+    liquidity_before: Mapped[str | None] = mapped_column(Text)  # JSON
+    liquidity_after: Mapped[str | None] = mapped_column(Text)   # JSON
+    message: Mapped[str | None] = mapped_column(Text)
+
+
+class NightHold(OpsBase):
+    """Хост, чию нічну смугу зупиняли блокування дві ночі поспіль: чекає рішення
+    власника (інтеграція, D47: «повторилось наступної ночі — чекати рішення»).
+    Знімає `cli.py night unhold --host …`; поки тримається — смуги хоста немає,
+    сторож нагадує (watchdog.check_night)."""
+
+    __tablename__ = "night_holds"
+
+    host: Mapped[str] = mapped_column(String(32), primary_key=True)
+    state: Mapped[str] = mapped_column(String(8), default="held")      # held | clear
+    since: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    reason: Mapped[str | None] = mapped_column(Text)
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cleared_by: Mapped[str | None] = mapped_column(String(32))
+
+
 SUCCESS_STATUSES = ("ok", "partial")
 
 # Скільки чекати зайняту ops.db. Фоновий запис сайту ставить собі коротший

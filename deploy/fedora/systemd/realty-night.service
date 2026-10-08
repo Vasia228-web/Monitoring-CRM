@@ -1,0 +1,33 @@
+[Unit]
+Description=Realty: нічний диригент — перевірка актуальності, M2/M3, дозбір (не паралельно зі збором)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/realty
+EnvironmentFile=-%h/realty/.env
+Environment=PYTHONUNBUFFERED=1
+# Один диригент на один таймер замість realty-identity (E9, D53; інтеграція,
+# конфлікт 3): той самий замок, що й у циклу; вікна й дедлайни — config/night.toml
+# (нові запити до 02:47 і 05:47, замок — до 02:55 і 05:55). --budget-min — стеля
+# видачі запитів від старту (01:10 + 100 хв = 02:50 → діє 02:47 з конфігу).
+ExecStart=%h/realty/.venv/bin/python cli.py night --budget-min 100
+# Останній рубіж поверх дедлайнів у коді: 01:10 + 1 год 50 хв = 03:00, 04:10 + … =
+# 06:00 — до циклів о 03:05 і 06:05 systemd уб'є всю групу (смуги теж), і замок
+# звільниться разом із процесом.
+TimeoutStartSec=1h50min
+KillMode=control-group
+# Пріоритети — як у циклу й процесу перевірки (Блок 2, D50; інтеграція, конфлікт
+# 13): усе це діє в користувацькому менеджері без root; install.sh спершу пробує
+# саме ці значення через systemd-run --user. IOWeight СЬОГОДНІ НЕ ДІЄ: контролер io
+# користувацькому менеджеру не делеговано (делегування — лише пропозиція D50, кроку
+# в root-setup.sh немає); systemd його мовчки не застосовує — діє ionice нижче.
+Nice=15
+CPUWeight=20
+IOWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+OOMScoreAdjust=500
+# Місце для майбутніх рендерів OLX у Chromium (до 814 МБ, інтеграція); зараз смуги —
+# HEAD/GET без браузера.
+MemoryHigh=1800M
+MemoryMax=2600M

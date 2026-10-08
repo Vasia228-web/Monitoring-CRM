@@ -12,6 +12,7 @@
 | `realty-cycle.timer` | цикл кожні 3 год (00:05, 03:05…); пропущений — після старту |
 | `realty-backup.timer` | бекап о 04:30 з перевіркою відновлення й копією поза машиною |
 | `realty-watchdog.timer` | сторож кожні 30 хв: тиша, падіння джерел, блокування, бекап |
+| `realty-night.timer` | нічний диригент 01:10 і 04:10 (`cli.py night`, D53): бекап на старті, перевірка актуальності M2/M3 смугами хостів, дозбір identity; замість `realty-identity.timer` |
 | `realty-lookup@.service` | шаблон: перевірка квартири, яку щойно відкрили (запускає сайт) |
 
 Порядок першого розгортання:
@@ -38,11 +39,37 @@ systemctl --user restart realty-web                # нові кеші, стис
 .venv/bin/python cli.py speed priorities           # чи діють пріоритети (cgroup, nice, ionice)
 ```
 
+`install.sh` вмикає `realty-night.timer`, якщо увімкнений старий `realty-identity.timer`,
+сам нічний або `realty-cycle.timer`, і лише ПІСЛЯ цього вимикає й прибирає старий
+таймер (і зупиняє його службу, якщо та саме йде): обірваний запуск можна просто
+повторити — машина не лишиться без нічного таймера.
+
+Відкат нічного диригента (E9, D53) на попередній коміт:
+
+```bash
+systemctl --user disable --now realty-night.timer
+systemctl --user stop realty-night.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/realty-night.service ~/.config/systemd/user/realty-night.timer
+git checkout <попередній-коміт>
+bash deploy/fedora/install.sh                      # старий install.sh поверне realty-identity.*
+systemctl --user enable --now realty-identity.timer
+systemctl --user list-timers 'realty-*'            # realty-identity є, realty-night немає
+```
+
+Ранкова звірка після нічного вікна (`cli.py liveness report --last 2`): актуальних
+після = до + повернуто − знято + нові оголошення дозбору identity; подій ціни —
+лише від дозбору identity. Дозбір identity LUN/flombu — це прохід стрічки (звичайний
+збір: нові оголошення, події ціни, last_seen — D43), тому ці два доданки — не помилка;
+будь-що понад них звіт показує як «НЕЗВІРЕНО».
+
 Щоденне:
 
 ```bash
 systemctl --user list-timers 'realty-*'            # коли наступні запуски
 journalctl --user -u realty-cycle -n 50            # що було в останньому циклі
+journalctl --user -u realty-night -n 80            # останнє нічне вікно (бекап, смуги, пакети)
+.venv/bin/python cli.py liveness report --last 2   # дві останні нічні вікна по сайтах
+.venv/bin/python cli.py night --dry-run            # план наступного вікна: ключі × крок
 cat ~/realty/data/public_url                       # поточна адреса ззовні
 python cli.py watchdog --test                      # перевірити канал Telegram
 ```

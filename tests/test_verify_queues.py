@@ -61,7 +61,10 @@ def _add(session, host, n, **over):
 # --- недоторкане правило ------------------------------------------------------
 
 def test_only_explicit_gone_codes_delist():
-    assert verify.classify(404) is False and verify.classify(410) is False
+    """Змінено в E8 (D52): один 404 — «не знайдено», а не «знято» (рішення власника 1,
+    D46: DOM.RIA 8046 і OLX 22359 зняли за одним 404, а вони живі — Етап 0)."""
+    assert verify.classify(410) is False
+    assert verify.classify(404) is None, "один 404 — не вирок"
     for code in (200, 301, 302, 399):
         assert verify.classify(code) is True
     for code in (0, 401, 403, 429, 500, 502, 503):
@@ -274,17 +277,23 @@ def test_every_check_is_logged_including_failed_ones(session):
     alive = _add(session, "dom.ria.com", 1)
     gone = _add(session, "dom.ria.com", 2)
     murky = _add(session, "olx.ua", 3)
+    missing = _add(session, "olx.ua", 4)
     session.commit()
     stats = {"checked": 0, "alive": 0, "delisted": 0, "restored": 0, "unknown": 0,
              "by_source": {}}
-    verify._apply({alive.id: 200, gone.id: 404, murky.id: 403}, stats)
+    # Змінено в E8 (D52): «знято» — 410; 404 — «не знайдено» (рішення власника 1, D46).
+    verify._apply({alive.id: 200, gone.id: 410, murky.id: 403, missing.id: 404}, stats)
 
     session.expire_all()
     events = {e.listing_id: e for e in session.scalars(select(CheckEvent))}
-    assert len(events) == 3
+    assert len(events) == 4
     assert events[alive.id].alive is True and events[alive.id].code == 200
-    assert events[gone.id].alive is False and events[gone.id].code == 404
+    assert events[gone.id].alive is False and events[gone.id].code == 410
+    assert events[gone.id].signature == "status_410"
     assert events[murky.id].alive is None, "невдала спроба теж потрапляє в журнал"
+    assert events[missing.id].alive is None and events[missing.id].code == 404
+    assert events[missing.id].signature == "not_found"
+    assert session.get(Listing, missing.id).is_active is True, "один 404 не знімає"
     assert all(e.reason == "sweep" for e in events.values())
 
 
@@ -362,7 +371,10 @@ def test_hopeless_links_stay_behind_every_priority(session):
     from realty.models import PriceEvent
 
     now = verify._now()
-    hopeless = _add(session, "dom.ria.com", 1, check_failures=9, last_attempt=now,
+    # Змінено в E8 (D52): після незрозумілих відповідей ключ чекає графіка
+    # run.unknown_backoff_hours (до 72 год), тож «безнадійний» тут — давно спробуваний.
+    hopeless = _add(session, "dom.ria.com", 1, check_failures=9,
+                    last_attempt=now - timedelta(days=4),
                     published_at=now - timedelta(days=300))
     session.flush()
     for price in (60_000.0, 50_000.0):
@@ -383,8 +395,11 @@ def test_snapshot_covered_sources_match_the_snapshot_module():
 
 
 def test_each_host_has_its_own_sweep_portion(session):
-    """Сайт під наглядом переліку не має з'їдати стільки ж, скільки OLX."""
-    for i in range(300):
+    """Сайт під наглядом переліку не має з'їдати стільки ж, скільки OLX.
+
+    Змінено в E8 (D52): порції — з config/liveness.toml (OLX 200 → 400 за планом
+    Блоку 1), тож оголошень — більше за найбільшу порцію, а не 300."""
+    for i in range(max(h.sweep_limit for h in verify.HOSTS.values()) + 10):
         _add(session, "dom.ria.com", i, source="domria")
         _add(session, "olx.ua", i, source="olx")
     session.commit()

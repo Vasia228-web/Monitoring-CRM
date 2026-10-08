@@ -65,7 +65,7 @@
             {% endif %}
             {% if r.property_id %}
               <a class="sub analyse" href="/property/{{ r.property_id }}">аналіз об'єкта →</a>
-            {% endif %}
+            {% endif %}{# Благо не перевіряється (рішення власника 3, D46; Блок 1, E8): позначка з config/liveness.toml [ui]; рядок шаблону без нових пробілів — сторінки без позначки байт у байт ті самі. #}{% if unconfirmed and r.id in unconfirmed and unconfirmed_marker %}<!--unconfirmed--><span class="sub" style="color:var(--muted,#8a9099);font-style:italic" title="{{ unconfirmed_marker.hint }}">{{ unconfirmed_marker.label }}</span><!--/unconfirmed-->{% endif %}
             {% if r.quality_status and r.quality_status != 'ok' %}
               <span class="qflag {{ r.quality_status }}">{{ r.quality_reason or r.quality_status }}</span>
             {% endif %}

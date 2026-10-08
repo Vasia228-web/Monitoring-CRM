@@ -1,117 +1,105 @@
-"""Перевірка, чи оголошення ще живе.
+"""Перевірка, чи оголошення ще живе — тонка обгортка над realty/liveness (Блок 1, E8, D52).
 
 Без цього база лише зростає: продана квартира лишається в ній назавжди як
 активна, і будь-яка статистика рахується по суміші живих і знятих оголошень.
 
-НЕДОТОРКАНЕ ПРАВИЛО: з продажу знімаємо тільки за явним 404/410. Будь-яка
-інша відповідь — 403, таймаут, обрив мережі, капча, порожнеча — означає «не
-достукались», а не «знято». Одного разу це вже врятувало базу, коли ноутбук
-втратив мережу посеред прогону.
+НЕДОТОРКАНЕ ПРАВИЛО (рішення власника 1, D46): з продажу знімаємо тільки за явним
+сигналом — 410, явний банер/елемент сторінки (DOM.RIA: стан сторінки «archive» І
+банер «Оголошення видалено…»), або 404, що повторився `repeat_404.count` разів з
+інтервалом, І перевірка існування показала, що оголошення справді немає (інакше —
+ремонт посилання). Один 404 — «не знайдено», не знято. Будь-яка інша відповідь —
+403, таймаут, обрив мережі, капча, порожнеча — означає «не достукались», а не
+«знято». Відсутність у стрічці чи переліку не знімає НІКОЛИ (`sweep_after_full_run`
+прибрано).
 
-Сигнал у кожного сайту свій — заміряно на живих і завідомо мертвих посиланнях
-(`probes/p_liveness.py`):
+Сигнал у кожного сайту свій (Етап 0, D45; config/liveness.toml):
 
-    dom.ria.com  404/410 проти 200
-    rieltor.ua   410 проти 200
-    flombu.com   404 проти 200
-    olx.ua       404/410 проти 200 — але ТІЛЬКИ методом HEAD: на GET
-                 CloudFront віддає 403 і живому, і мертвому
+    dom.ria.com  GET сторінки: 410, або 200 зі станом «archive» і банером m-sold;
+                 HEAD тут сліпий — 18 з 18 знятих віддають 200
+    olx.ua       HEAD: 410 (на GET CloudFront дає 403 і живому, і мертвому)
+    rieltor.ua   HEAD: 410 (без www: www.rieltor.ua дає 404 живим)
+    lun.ua, flombu.com  явного сигналу немає — лише повторний 404
     blagodeveloper.com  сигналу немає взагалі: і живе, і вигадане планування
-                 дають 200, тому цей сайт не перевіряємо
+                 ведуть на каталог, тому цей сайт не перевіряємо (позначка на сайті)
 
-Черги нарізані по ХОСТАХ, а не по джерелах. LUN агрегує OLX, тож 2105 його
-посилань ведуть на olx.ua; окремі черги «lun» і «olx» били б в один сайт
-удвічі частіше за задумане. Обмеження темпу діє на рівні сайту, тому й черга
-має бути на рівні сайту.
+Одиниця перевірки — ключ «сайт:id» (listings.site_key): один запит на ключ, вердикт
+— усім рядкам ключа (копіям LUN теж). Черги нарізані по ХОСТАХ, а не по джерелах:
+LUN агрегує OLX і rieltor, і окремі черги «lun» і «olx» били б в один сайт удвічі
+частіше за задумане.
 """
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import select
 
 from .db import session_scope
 from .fetcher import Fetcher
-from .models import CheckEvent, DataReport, Listing, PriceEvent
+from .liveness import engine, policy as pol, queue as lq
+from .liveness.queue import (  # noqa: F401 — колишній публічний API модуля
+    OLD_LISTING_DAYS, PRICE_DROP_WINDOW_DAYS, SNAPSHOT_COVERED, VIEW_WINDOW_DAYS, _now,
+    _order,
+)
+from .liveness.signatures import classify_code, verdict_from_code
+from .models import Listing
 
 log = logging.getLogger(__name__)
 
-GONE_CODES = {404, 410}
 BLOCKED_CODES = {401, 403, 429}
-# Скільки відмов поспіль від одного сайту терпіти, перш ніж лишити його в
-# спокої до наступного прогону. Рахується по хосту: блокування rieltor.ua не
-# має зупиняти перевірку dom.ria.com.
-MAX_CONSECUTIVE_BLOCKS = 5
 
 
 @dataclass(frozen=True)
 class HostRule:
-    """Правило для одного сайту: пауза між запитами й розмір порції.
-
-    Порція своя в кожного не для краси. Там, де зникнення знаходить різниця
-    списків, сліпий обхід — лише підстраховка, і витрачати на неї стільки ж
-    запитів, скільки на сайт без переліку, означає платити ні за що.
-    """
+    """Правило сайту для сліпого обходу: пауза між запитами й розмір порції."""
 
     delay: float
     sweep_limit: int
 
 
-# Паузи підібрані під кожен сайт окремо. Сумарне навантаження на КОЖЕН сайт
-# від паралельної роботи не зростає — черги незалежні, бо й ліміти незалежні.
-# Джерела, за якими стежить різниця списків (`snapshot.ENUMERABLE`). Для них
-# сліпий обхід — підстраховка на випадок, коли оголошення лишилось у видачі,
-# але сторінка вже віддає 404. Дублюється тут навмисно: інакше два модулі
-# імпортували б один одного по колу. Збіг перевіряється тестом.
-SNAPSHOT_COVERED = {"domria", "lun", "flombu"}
+def _cfg():
+    """Чинний config/liveness.toml: перечитування за mtime не частіше ніж раз на 60 с.
 
-HOSTS: dict[str, HostRule] = {
-    # Різницю списків по DOM.RIA коштує 43 запити на 8.5 тисяч оголошень,
-    # тож сліпа черга тут потрібна лише як підстраховка.
-    "dom.ria.com": HostRule(delay=1.0, sweep_limit=40),
-    # 3.0, а не менше: заміряно, що при 1.8 с сайт починає віддавати 403 після
-    # п'яти запитів поспіль, а при 3.0 с — нуль відмов на тих самих посиланнях
-    # (`probes/p_rieltor_403.py`). Стара спільна конфігурація мала 1.5 с, тобто
-    # ще агресивніше; це не було видно лише тому, що черга сюди не доходила.
-    # Власна пауза на сайт — саме те, заради чого черги нарізані по хостах:
-    # вона нікого, крім rieltor.ua, не сповільнює.
-    "rieltor.ua": HostRule(delay=3.0, sweep_limit=40),
-    # А ось OLX перелічити не можна — видача обмежена 25 сторінками. Для нього
-    # поодинока черга не підстраховка, а єдиний механізм, тому порція більша:
-    # 200 за прогін × 8 прогонів на добу закривають 2488 оголошень за ~1.6 доби.
-    "olx.ua": HostRule(delay=2.0, sweep_limit=200),
-    "flombu.com": HostRule(delay=1.2, sweep_limit=15),
-}
+    `is_checkable`/`host_key` кличуть на кожну адресу (зокрема фоновий потік сайту
+    для перевірки при відкритті) — повний розбір TOML на кожен виклик був би зайвим.
+    Прогін (`liveness.service.run`) бере конфіг одним читанням із хешем на старті.
+    """
+    return pol.current()
+
+
+def _hosts() -> dict[str, HostRule]:
+    cfg = pol.load()
+    return {h: HostRule(delay=s.delay, sweep_limit=s.sweep_per_run)
+            for h, s in pol.checkable_hosts(cfg).items()}
+
+
+# Хости, що перевіряються, — з config/liveness.toml (знімок на імпорті модуля;
+# кроки циклу читають конфіг на старті). blagodeveloper.com тут немає.
+HOSTS: dict[str, HostRule] = _hosts()
+MAX_CONSECUTIVE_BLOCKS = pol.load().run.max_consecutive_blocks
 
 
 def host_key(url: str) -> str:
-    """Канонічний хост: `www.` відкидаємо, бо ліміт у сайту спільний."""
-    host = urlsplit(url).netloc.lower()
-    return host[4:] if host.startswith("www.") else host
+    """Хост політики для адреси (без www./m.; піддомени агенцій → домен сайту)."""
+    cfg = _cfg()
+    return pol.host_of_url(cfg, url) or pol._norm_netloc(url)
 
 
 def is_checkable(url: str) -> bool:
-    return host_key(url) in HOSTS
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return pol.is_checkable(_cfg(), url)
 
 
 def classify(code: int) -> bool | None:
-    """`True` — живе, `False` — знято, `None` — не зрозуміло, не чіпаємо."""
-    if code in GONE_CODES:
-        return False
-    if 200 <= code < 400:
-        return True
-    return None          # 0, 403, 429, 5xx — збій або блокування, не висновок
+    """`True` — живе, `False` — знято, `None` — не висновок (семантика HEAD за кодом).
+
+    410 → False; 2xx/3xx → True; 404 → None (один 404 — не знято, D46); 0, 401,
+    403, 429, 5xx → None. DOM.RIA у роботі класифікує сторінку, а не код.
+    """
+    return classify_code(code)
 
 
 # --- Черга --------------------------------------------------------------------
+
 
 @dataclass
 class Candidate:
@@ -119,6 +107,7 @@ class Candidate:
     url: str
     source: str
     host: str
+    key: str = ""
 
 
 @dataclass
@@ -130,252 +119,144 @@ class HostResult:
     stopped_early: bool = False
 
 
-# Скільки днів на ринку вважаємо «давно». Свіже оголошення майже напевно ще
-# живе, і перевірка його майже не дає інформації — черга має йти не рівномірно.
-OLD_LISTING_DAYS = 45
-# Наскільки недавнє зниження ціни вважаємо сигналом. Падіння ціни — сильний
-# натяк на близьке завершення: продавець поспішає.
-PRICE_DROP_WINDOW_DAYS = 21
-# Скільки днів відкриття картки тримає об'єкт у пріоритеті.
-VIEW_WINDOW_DAYS = 14
-
-
-def _order():
-    """Порядок обходу черги — навмисно нерівномірний.
-
-    Рівномірний обхід витрачає однаково на щойно опубліковану квартиру і на
-    ту, що висить півроку. Перша майже напевно жива, і перевірка її нічого не
-    каже. Тому вперед ідуть ті, у кого ймовірність зникнення вища:
-
-      1. кого не пробували жодного разу;
-      2. у кого нещодавно впала ціна — найсильніший сигнал;
-      3. хто давно на ринку;
-      4. кого давно не перевіряли.
-
-    Перед усім цим — кількість поспіль незрозумілих відповідей: безнадійні
-    посилання відходять у кінець, щоб не з'їдати бюджет кожного прогону.
-
-    Нерівномірність має ціну: вона зміщує криву виживання, якщо не знати
-    фактичного графіка перевірок. Саме тому кожна перевірка пишеться в
-    `check_events` — без цього журналу такий порядок робити не можна.
-    """
-    now = _now()
-    old_before = now - timedelta(days=OLD_LISTING_DAYS)
-    drop_after = now - timedelta(days=PRICE_DROP_WINDOW_DAYS)
-    # Оголошення, на які хтось поскаржився або які відкривали. Мертве
-    # посилання дратує найбільше саме там, куди дивляться, тож черга має це
-    # враховувати — сліпий обхід дійде туди нескоро.
-    reported = (
-        select(DataReport.listing_id)
-        .where(DataReport.created_at >= now - timedelta(days=14))
-        .scalar_subquery()
-    )
-    # Нещодавно відкриті. Поріг — саме «недавно»: об'єкт, який дивились
-    # півроку тому, нічим не цікавіший за решту.
-    viewed_after = now - timedelta(days=VIEW_WINDOW_DAYS)
-    recent_drop = (
-        select(PriceEvent.listing_id)
-        .where(PriceEvent.observed_at >= drop_after)
-        .group_by(PriceEvent.listing_id)
-        .having(func.count(PriceEvent.id) > 1)
-        .scalar_subquery()
-    )
-    return (
-        Listing.check_failures.asc(),
-        case((Listing.last_attempt.is_(None), 0), else_=1),
-        # Джерела під наглядом переліку йдуть після решти: там зникнення
-        # знаходить різниця списків, і сліпа перевірка майже не додає знань.
-        case((Listing.source.in_(SNAPSHOT_COVERED), 1), else_=0),
-        case((Listing.id.in_(reported), 0), else_=1),
-        case((and_(Listing.views > 0, Listing.viewed_at >= viewed_after), 0),
-             else_=1),
-        case((Listing.id.in_(recent_drop), 0), else_=1),
-        case((Listing.published_at < old_before, 0), else_=1),
-        Listing.last_attempt.asc(),
-    )
+def _candidate(item: lq.WorkItem, prefer: set[int] | None = None) -> Candidate:
+    pick = next((r for r in item.rows if prefer and r.id in prefer), item.rows[0])
+    return Candidate(pick.id, item.url, pick.source, item.host, item.key)
 
 
 def collect(session, limit_per_host: int | None = None,
             hosts: list[str] | None = None,
             ids: list[int] | None = None) -> dict[str, list[Candidate]]:
-    """Набирає кандидатів і розкладає їх по чергах хостів.
+    """Кандидати сліпого обходу по чергах хостів (по одному на ключ «сайт:id»).
 
-    `ids` задає точковий список — так працює підтвердження кандидатів,
-    знайдених різницею снапшотів: черга тоді складається саме з них.
+    `ids` — точковий список (як перевірка при відкритті): ключі цих рядків.
+    Без `ids` — ярус sweep плану Блоку 1: лише ключі з актуальними рядками, яким
+    настав строк, у порядку `_order()`, по `sweep_per_run` хоста (або `limit_per_host`).
     """
-    stmt = select(Listing.id, Listing.original_url, Listing.source)
+    cfg = _cfg()
     if ids is not None:
-        stmt = stmt.where(Listing.id.in_(ids))
-    else:
-        stmt = stmt.where(Listing.is_active.is_(True)).order_by(*_order())
-
-    queues: dict[str, list[Candidate]] = {}
-    wanted = set(hosts) if hosts else set(HOSTS)
-    for listing_id, url, source in session.execute(stmt):
-        host = host_key(url)
-        if host not in wanted or host not in HOSTS:
-            continue
-        cap = limit_per_host if limit_per_host is not None else HOSTS[host].sweep_limit
-        queue = queues.setdefault(host, [])
-        if ids is None and len(queue) >= cap:
-            continue
-        queue.append(Candidate(listing_id, url, source, host))
-        if ids is None and len(queues) == len(wanted) and all(
-                len(q) >= (limit_per_host if limit_per_host is not None
-                           else HOSTS[h].sweep_limit)
-                for h, q in queues.items()):
-            break
-    return queues
+        items = lq.items_for_rows(session, cfg, ids, "explicit")
+        prefer = set(ids)
+        out: dict[str, list[Candidate]] = {}
+        for item in items:
+            if hosts and item.host not in hosts:
+                continue
+            out.setdefault(item.host, []).append(_candidate(item, prefer))
+        return out
+    plan = lq.plan_run(session, cfg, hosts=hosts, limit_per_host=limit_per_host,
+                       tiers=(lq.TIER_SWEEP,))
+    return {h: [_candidate(i) for i in items] for h, items in plan.by_host.items() if items}
 
 
-def _run_host(queue: list[Candidate], fetcher: Fetcher) -> HostResult:
+def _run_host(queue: list[Candidate], fetcher) -> HostResult:
     """Обходить чергу одного сайту послідовно, з його власною паузою.
 
-    У базу нічого не пише: повертає коди, а рішення приймає головний потік.
-    Так уся робота з SQLite лишається однопотоковою, і паралельність не
-    коштує нам жодного ризику пошкодити дані.
+    Та сама смуга, що й у прогоні (liveness.engine.run_lane); у базу нічого не пише.
     """
     host = queue[0].host
-    rule = HOSTS[host]
-    result = HostResult(host=host)
-    consecutive = 0
-    for item in queue:
-        code = fetcher.probe(item.url, delay=rule.delay)
-        result.codes[item.listing_id] = code
-        result.requests += 1
-        if code in BLOCKED_CODES:
-            result.blocked += 1
-            consecutive += 1
-            if consecutive >= MAX_CONSECUTIVE_BLOCKS:
-                result.stopped_early = True
-                log.warning("%s відмовляє (%d поспіль) — зупиняємо чергу цього сайту",
-                            host, consecutive)
-                break
-        else:
-            consecutive = 0
+    cfg = _cfg()
+    with session_scope() as s:
+        items = lq.items_for_rows(s, cfg, [c.listing_id for c in queue], "sweep")
+    by_key = {i.key: i for i in items}
+    ordered = []
+    for c in queue:
+        item = by_key.get(c.key) or lq.WorkItem(key=c.key or pol.row_key(c.listing_id),
+                                                host=host, url=c.url, tier="sweep",
+                                                rows=())
+        ordered.append(lq.WorkItem(key=item.key, host=host, url=c.url, tier="sweep",
+                                   rows=item.rows, streak404=item.streak404))
+    from .liveness import existence
+
+    ctx = existence.Context(cfg=cfg, now=_now(), snapshots={})
+    outcomes, st = engine.run_lane(host, ordered, fetcher=fetcher, cfg=cfg, ctx=ctx)
+    result = HostResult(host=host, requests=st.requests, blocked=st.blocked,
+                        stopped_early=st.stopped_early)
+    for c, oc in zip(queue, outcomes):
+        if oc.verdict is not None:
+            result.codes[c.listing_id] = oc.verdict.code
     return result
 
 
 def verify_batch(limit: int | None = None, sources: list[str] | None = None,
                  http: Fetcher | None = None, browser=None,
-                 ids: list[int] | None = None, reason: str = "sweep") -> dict:
-    """Перевіряє порцію оголошень. `limit` — на кожен сайт, не на всіх разом.
+                 ids: list[int] | None = None, reason: str = "sweep",
+                 kind: str | None = None, started: float | None = None) -> dict:
+    """Один прогін перевірки. `limit` — на кожен сайт, не на всіх разом.
 
-    `browser` лишився в сигнатурі для сумісності викликів і навмисно не
-    використовується: заміряно, що HEAD дає ті самі відповіді, що й Chromium,
-    тож тримати браузер заради статусу немає причин.
+    Без `ids` — крок циклу: яруси черги (контрольні, підказані, вибірка знятих,
+    сліпий обхід) у межах порцій config/liveness.toml, запобіжник, застосування
+    пакетами (liveness.service.run). З `ids` — точкова перевірка ключів цих
+    оголошень (перевірка при відкритті, reason="opened").
+
+    `kind` — явний вид прогону (`cli.py verify`, запущений не диригентом циклу, —
+    «manual»: не закриває відкладених завдань і не переписує зведення /status);
+    `started` — time.monotonic() старту процесу кроку (стеля часу — від нього).
+
+    `browser` лишився в сигнатурі для сумісності й не використовується: HEAD дає ті
+    самі відповіді, що й Chromium (OLX 222 з 222), а DOM.RIA читається GET.
     """
-    stats = {"checked": 0, "alive": 0, "delisted": 0, "restored": 0, "unknown": 0,
-             "requests": 0, "blocked": 0, "blocked_sources": [],
-             "by_source": {}, "by_host": {}}
+    from .liveness import service
 
     hosts = None
     if sources:
-        # Назви джерел, передані ззовні, перетворюємо на хости: у LUN їх два.
+        cfg = _cfg()
         with session_scope() as s:
             urls = s.scalars(select(Listing.original_url)
-                             .where(Listing.source.in_(sources)).limit(4000)).all()
-        hosts = sorted({host_key(u) for u in urls} & set(HOSTS))
+                             .where(Listing.source.in_(sources))).all()
+        hosts = sorted({h for u in urls if (h := pol.host_of_url(cfg, u))
+                        and cfg.hosts[h].checkable})
         if not hosts:
-            return stats
-
+            return {"checked": 0, "alive": 0, "delisted": 0, "restored": 0, "unknown": 0,
+                    "requests": 0, "blocked": 0, "blocked_sources": [], "by_source": {},
+                    "by_host": {}}
+    kind = kind or ("cycle" if ids is None and limit is None and not sources else (
+        "opened" if reason == "opened" else "manual" if ids is None else "explicit"))
     own = http is None
     fetcher = http or Fetcher(delay=1.0, use_cache=False, label="verify")
     try:
-        with session_scope() as s:
-            queues = collect(s, limit_per_host=limit, hosts=hosts, ids=ids)
-        if not queues:
-            return stats
-
-        # По одному потоку на сайт. Навантаження на кожен окремий сайт при
-        # цьому не зростає — зростає лише сумарна пропускна здатність.
-        with ThreadPoolExecutor(max_workers=len(queues)) as pool:
-            results = list(pool.map(lambda q: _run_host(q, fetcher), queues.values()))
-
-        codes: dict[int, int] = {}
-        for r in results:
-            codes.update(r.codes)
-            stats["requests"] += r.requests
-            stats["blocked"] += r.blocked
-            stats["by_host"][r.host] = {"requests": r.requests, "blocked": r.blocked,
-                                        "stopped_early": r.stopped_early}
-        _apply(codes, stats, reason)
+        return service.run(kind=kind, ids=ids, reason=reason, hosts=hosts,
+                           limit_per_host=limit, fetcher=fetcher, scope=session_scope,
+                           started=started)
     finally:
         if own:
             fetcher.close()
-    return stats
 
 
 def _apply(codes: dict[int, int], stats: dict, reason: str = "sweep") -> None:
-    """Застосовує коди до бази — в одному потоці й одній транзакції."""
-    now = _now()
-    with session_scope() as s:
-        rows = s.scalars(select(Listing).where(Listing.id.in_(codes))).all()
-        for row in rows:
-            code = codes[row.id]
-            verdict = classify(code)
-            # Журнал пишемо завжди, зокрема й для невдалих спроб: аналізу
-            # виживання потрібен фактичний графік спостережень, а не уявлення
-            # про нього. Черга навмисно нерівномірна, і без цих записів
-            # нерівномірність нечутно зсувала б криву.
-            s.add(CheckEvent(listing_id=row.id, checked_at=now, code=code,
-                             alive=verdict, reason=reason))
-            bucket = stats["by_source"].setdefault(
-                row.source, {"checked": 0, "alive": 0, "delisted": 0, "unknown": 0})
-            stats["checked"] += 1
-            bucket["checked"] += 1
+    """Застосувати ГОЛІ коди (семантика HEAD) до оголошень — тим самим шляхом запису.
 
-            # Спроба фіксується завжди — саме вона рухає чергу далі.
-            row.last_attempt = now
-
-            if verdict is None:
-                row.check_failures = (row.check_failures or 0) + 1
-                stats["unknown"] += 1
-                bucket["unknown"] += 1
-                continue
-
-            row.check_failures = 0
-            # А ось «перевірено» — лише за зрозумілої відповіді: на цій даті
-            # тримається інтервал для аналізу виживання.
-            row.last_checked = now
-            if verdict is False:
-                if row.is_active:
-                    row.is_active = False
-                    row.delisted_at = now
-                    # `last_alive_at` НЕ чіпаємо: разом із `delisted_at` воно
-                    # задає інтервал, усередині якого оголошення зникло.
-                    stats["delisted"] += 1
-                    bucket["delisted"] += 1
-                    log.info("Знято з продажу (HTTP %d): %s", code, row.original_url[:90])
-            else:
-                row.last_alive_at = now
-                if not row.is_active:
-                    row.is_active = True
-                    row.delisted_at = None
-                    stats["restored"] += 1
-                stats["alive"] += 1
-                bucket["alive"] += 1
-
-
-def sweep_after_full_run(source: str, seen_ids: set[str]) -> int:
-    """Після повного обходу джерела все, чого не бачили, — зняте з продажу.
-
-    Застосовне лише тоді, коли джерело віддало ВСЮ свою видачу за один
-    прогін: якщо оголошення в ній не було, воно там більше не публікується.
+    Для ручних перевірок і тестів: код → вердикт (410 — знято, 404 — не знайдено,
+    2xx/3xx — живе, решта — не визначено) → запобіжник → пакети → події. Вердикт
+    іде всім рядкам ключа «сайт:id». DOM.RIA у роботі так НЕ класифікується (там
+    сторінка й банер) — лише через verify_batch.
     """
-    marked = 0
+    from .liveness import apply as la
+
+    cfg = _cfg()
     with session_scope() as s:
-        rows = s.scalars(
-            select(Listing).where(Listing.source == source, Listing.is_active.is_(True))
-        ).all()
-        for row in rows:
-            if str(row.external_id) in seen_ids:
-                continue
-            row.is_active = False
-            row.delisted_at = _now()
-            row.last_checked = _now()
-            row.last_attempt = _now()
-            marked += 1
-    if marked:
-        log.info("%s: після повного обходу знято з продажу %d оголошень", source, marked)
-    return marked
+        rows = {r.id: r for r in lq.load_rows(s, where=Listing.id.in_(list(codes)))}
+        items = lq.items_for_rows(s, cfg, list(codes), reason)
+    by_key = {i.key: i for i in items}
+    now = _now()
+    outcomes, seen = [], set()
+    for lid, code in codes.items():
+        row = rows.get(lid)
+        if row is None:
+            continue
+        key = lq.key_of(row)
+        item = by_key.get(key)
+        if item is None:
+            # Хост не перевіряється (Благо) — лише запис спроби, як і раніше не було.
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        outcomes.append(engine.Outcome(item, verdict_from_code(code), now))
+    rep = la.apply_outcomes(outcomes, cfg=cfg, scope=session_scope)
+    for k in ("checked", "alive", "delisted", "restored", "unknown"):
+        stats[k] = stats.get(k, 0) + getattr(rep, k)
+    for source, b in rep.by_source.items():
+        bucket = stats.setdefault("by_source", {}).setdefault(
+            source, {"checked": 0, "alive": 0, "delisted": 0, "unknown": 0})
+        for k in ("checked", "alive", "delisted", "unknown"):
+            bucket[k] = bucket.get(k, 0) + b.get(k, 0)

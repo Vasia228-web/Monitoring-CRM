@@ -446,6 +446,107 @@ td a,.row a{color:var(--accent)}
 })();
 </script>
 <!--/speed-panel-->
+{#- Панель «Зняті оголошення» (Блок 1, крок E8, D52): покриття перевірки, зняття й
+    повернення за джерелами й причинами, частка повернень як показник помилки
+    правила (повторна активація після 410 — окремо), стан запобіжника з кнопкою
+    «зняти» (лише власник; POST /api/status/liveness-fuse). Дані — GET
+    /api/status/liveness: готове зведення останнього прогону циклу, раз на
+    `status_poll.panels_s`. Позначено <!--liveness-panel--> — порівняння сторінок
+    «до/після» вирізає нову панель. -#}
+<!--liveness-panel-->
+  <section>
+    <h2>Зняті оголошення</h2>
+    <p class="hint">Знімаємо лише за явним сигналом: 410, банер «Оголошення видалено…»
+      на DIM.RIA або 404, що повторився кілька разів з інтервалом, коли оголошення немає
+      й у пошуку. Один 404, капча, збій — «не визначено». Якщо підпис «знято» спрацював
+      на надто великій частці перевірених одного джерела, для нього нічого не знімаємо,
+      доки ви не знімете запобіжник тут.</p>
+    <div id="lv-fuse"></div>
+    <div class="rows" id="lv-run" style="margin:10px 0"></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Джерело</th><th class="r">Актуальних ключів</th><th class="r">Перевірено новим підписом</th>
+          <th class="r">Ніколи</th><th class="r">Зникли з переліку</th><th class="r">Знято (7 / 30 дн.)</th>
+          <th class="r">Повернулись (30 дн.)</th><th class="r">Помилка правила</th><th class="r">Повторна активація після 410</th>
+          <th class="r">Вибірка знятих: живі</th></tr></thead>
+        <tbody id="lv-sources"><tr><td colspan="10" style="color:var(--muted)">завантаження…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="hint" id="lv-legend"></p>
+  </section>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? "—").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const pct = (v) => v === null || v === undefined ? "—" : (100 * v).toLocaleString("uk-UA", {maximumFractionDigits: 1}) + "%";
+  const n = (v) => v === null || v === undefined ? "—" : Number(v).toLocaleString("uk-UA");
+  const when = (iso) => iso ? new Date(iso).toLocaleString("uk-UA", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "—";
+  const REASON = {status_410: "410", ria_archive: "банер DIM.RIA", repeat_404: "повторний 404"};
+  const sum = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+  async function clearFuse(source, btn){
+    btn.disabled = true;
+    try{
+      const r = await fetch("/api/status/liveness-fuse", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({source, action: "clear"})});
+      if (r.ok) load();
+    }catch(e){} finally { btn.disabled = false; }
+  }
+  async function load(){
+    try{
+      const r = await fetch("/api/status/liveness", {cache: "no-store"});
+      if (!r.ok) return;
+      const d = await r.json();
+      const held = (d.fuse || []).filter(f => f.state === "held");
+      $("lv-fuse").innerHTML = held.length ? held.map(f => `<div class="alert" style="margin-bottom:8px">
+        Запобіжник: <b>${esc(f.source)}</b> — з ${when(f.tripped_at)} нічого не знімаємо й не повертаємо
+        («знято» ${n(f.removed)} із ${n(f.checked)}${f.share !== null ? ", " + pct(f.share) : ""}; ${esc(f.reason)}).
+        Сліпий обхід його ключів не робиться, доки тримається (решта ярусів перевіряє, але не застосовує).
+        ${(f.examples || []).slice(0, 3).map(u => `<span class="mono">${esc(u)}</span>`).join(" ")}
+        <button class="small" data-fuse="${esc(f.source)}">Зняти запобіжник</button></div>`).join("")
+        : `<p class="hint">Запобіжник зараз не тримає жодного джерела${d.fuse_mode ? " (тлумачення «20%»: " + esc(d.fuse_mode) + ")" : ""}.</p>`;
+      for (const b of document.querySelectorAll("[data-fuse]")) b.onclick = () => clearFuse(b.dataset.fuse, b);
+      const run = d.latest_run;
+      $("lv-run").innerHTML = run ? [
+        ["Останній прогін", when(run.started_at) + " · " + esc(run.kind) + " · " + esc(run.status)],
+        ["Запитів / перевірено", n(run.requests) + " / " + n(run.checked)],
+        ["Знято / повернулось", n(run.removed) + " / " + n(run.returned)],
+      ].map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("") : "";
+      const R = d.report;
+      if (!R){ $("lv-sources").innerHTML = `<tr><td colspan="10" style="color:var(--muted)">прогонів циклу ще не було</td></tr>`; return; }
+      const names = new Set([...Object.keys(R.coverage || {}), ...Object.keys(R.removals || {}),
+                             ...Object.keys(R.returns || {}), ...Object.keys(R.unconfirmed || {})]);
+      $("lv-sources").innerHTML = [...names].sort().map(s => {
+        const c = (R.coverage || {})[s] || {};
+        const rm = (R.removals || {})[s] || {};
+        const w = R.windows_days || [7, 30];
+        const by = (k) => rm[k + "d"] || {};
+        const rw = (R.returns || {})[s] || {};
+        const err = (R.rule_error || {})[s] || {};
+        const re = (R.reactivation_410 || {})[s] || {};
+        const smp = (R.removed_sample || {})[s];
+        const unconf = (R.unconfirmed || {})[s];
+        const reasons = Object.entries(by(w[w.length - 1])).map(([k, v]) => (REASON[k] || k) + " " + v).join(", ");
+        return `<tr><td class="src">${esc(s)}${unconf ? `<br><span class="pill mute">не перевіряється: ${n(unconf)}</span>` : ""}</td>
+          <td class="r num">${n(c.keys)}</td><td class="r num">${pct(c.share)}</td><td class="r num">${n(c.never)}</td>
+          <td class="r num">${n((R.absent_backlog || {})[s] || 0)}</td>
+          <td class="r num" title="${esc(reasons)}">${n(sum(by(w[0])))} / ${n(sum(by(w[w.length - 1])))}</td>
+          <td class="r num">${n(sum(rw))}</td>
+          <td class="r num">${err.share === null || err.share === undefined ? "—" : pct(err.share) + " (" + n(err.returned) + "/" + n(err.removed) + ")"}</td>
+          <td class="r num">${re.share === null || re.share === undefined ? "—" : pct(re.share) + " (" + n(re.returned) + "/" + n(re.removed) + ")"}</td>
+          <td class="r num">${smp ? pct(smp.alive_share) + " з " + n(smp.checked) : "—"}</td></tr>`;
+      }).join("") || `<tr><td colspan="10" style="color:var(--muted)">даних ще немає</td></tr>`;
+      const all = (R.rule_error || {})._all || {};
+      $("lv-legend").textContent = `Покриття — частка актуальних ключів, перевірених новим підписом за ${R.coverage_days} дн. ` +
+        `«Помилка правила» — частка знятих за банером DIM.RIA чи повторним 404, що повернулись за ${R.return_window_days} дн. ` +
+        `(усього ${all.share === null || all.share === undefined ? "—" : pct(all.share)}); повторна активація після 410 на OLX і rieltor — окремо, ` +
+        `бо продавці самі відновлюють оголошення. Зведення пораховано ${when(R.computed_at)}.`;
+    }catch(e){ /* панель просто не оновиться */ }
+  }
+  load();
+  setInterval(load, {{ (poll.panels_s * 1000)|int if poll else 60000 }});
+})();
+</script>
+<!--/liveness-panel-->
 
 </div>
 

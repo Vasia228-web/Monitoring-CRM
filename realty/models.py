@@ -155,6 +155,30 @@ class Listing(Base):
     # і знати не можемо — аналіз виживання вміє працювати з інтервалом, але
     # тільки якщо його межі збережені.
     last_alive_at: Mapped[datetime | None] = mapped_column(DateTime)  # без індексу — D50
+    # Блок 1, схема S3 (крок E8, D52). Коли рядок (DOM.RIA — ключ «domria:<id>»
+    # на рядках УСІХ джерел; LUN і flombu — свій external_id) уперше зник із
+    # ПОВНОГО переліку свого джерела; NULL — присутній або перелік не
+    # застосовний. Ставить лише крок «різниця списків» (realty/snapshot.py).
+    # Відсутність НІКОЛИ не знімає з продажу: вона лише ставить ключ у ярус
+    # підказаних перевірок за графіком run.absent_backoff_hours. Частковий індекс
+    # (інтеграція, конфлікт 1): позначених — сотні з ~29 тис.
+    absent_since: Mapped[datetime | None] = mapped_column(DateTime)
+    # Дата зняття, яку повідомило саме джерело (DOM.RIA deleted_at зі стану
+    # сторінки, переведено в UTC). Ставиться лише разом зі зняттям і лише якщо
+    # порожньо; при поверненні переходить у подію й обнуляється. Строк продажу
+    # рахується від неї, якщо вона раніша за нашу дату виявлення.
+    source_removed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Полагоджена адреса для перевірки (подія url_repaired): original_url лишається
+    # адресою джерела — її переписує кожен збір (інтеграція, конфлікт 21), тож
+    # ремонт живе окремо, і перевірка бере його першим.
+    probe_url: Mapped[str | None] = mapped_column(String(1024))
+    # Сирі докази для Блоків 3 (тип продавця) і 4 (район/ЖК) — схема S3
+    # інтеграційного плану. Пишуться ЛИШЕ туди, де порожньо (нові ключі — так,
+    # наявні — ніколи; pipeline.FILL_ONLY_JSON); жодних імен і телефонів.
+    seller_evidence: Mapped[dict | None] = mapped_column(JSON)
+    seller_profile: Mapped[str | None] = mapped_column(String(96), index=True)
+    seller_evidence_at: Mapped[datetime | None] = mapped_column(DateTime)
+    place_raw: Mapped[dict | None] = mapped_column(JSON)
 
     # --- Робочий процес -------------------------------------------------------
     # «Взято в обробку» — позначка користувача про те, що об'єктом займаються.
@@ -225,6 +249,11 @@ Index("ix_listings_visible", effective_active(), Listing.quality_status,
       Listing.condition, Listing.market_type, Listing.price_usd, Listing.price_per_sqm,
       Listing.published_at)
 Index("ix_listings_keeper", Listing.property_id, Listing.quality_status, effective_active())
+# Ярус «зникли з переліку» (Блок 1, E8, D52): частковий індекс — лише позначені
+# рядки (інтеграція, конфлікт 1: окремих індексів із малою кількістю значень не
+# додаємо; запити списку й кроків циклу цього індексу не бачать — умова інша).
+Index("ix_listings_absent_since", Listing.absent_since,
+      sqlite_where=Listing.absent_since.isnot(None))
 
 
 # --- Слухачі ORM: ключ site_key і телефони (крок E6, D51) --------------------------------------
@@ -565,7 +594,44 @@ class CheckEvent(Base):
     alive: Mapped[bool | None] = mapped_column(Boolean)
     # Чим викликана перевірка: плановий обхід чи підтвердження кандидата з
     # різниці списків. Без цього не відрізнити «дійшла черга» від «запідозрили».
+    # Блок 1 (E8): ярус черги — sweep, canary, absent, reseen, repeat404, opened,
+    # held, rm_sample, existence; старі candidate/opened лишаються.
     reason: Mapped[str] = mapped_column(String(16), default="sweep")
+    # Вердикт класифікатора Блоку 1 (E8, D52): alive, status_410, ria_archive,
+    # repeat_404, not_found, blocked, net_error, server_error, unrecognized,
+    # conflict, id_mismatch, too_large. NULL — перевірка старим кодом (лише
+    # код HEAD): так правило повторного 404 й покриття «новим підписом»
+    # відрізняють нові перевірки від старих.
+    signature: Mapped[str | None] = mapped_column(String(24))
+
+
+class ListingEvent(Base):
+    """Зміна актуальності оголошення: знято, повернулось, полагоджено посилання.
+
+    Блок 1 (E8, D52), рішення власника 1–2 (D46): історію не стираємо — повернення
+    очищає delisted_at, але попереднє значення лежить тут, у `evidence`. Доказ —
+    код, кінцева адреса (без query, піддомени агенцій зведено до домену), ланцюжок
+    переадресацій, підпис, стан сторінки DOM.RIA; тіл сторінок, імен і телефонів
+    немає. Подія `removed` посилається на свою перевірку (check_event_id).
+    """
+
+    __tablename__ = "listing_events"
+    __table_args__ = (Index("ix_listing_event_listing", "listing_id", "at"),
+                      Index("ix_listing_event_kind_at", "kind", "at"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"))
+    at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # removed | returned | url_repaired
+    kind: Mapped[str] = mapped_column(String(16))
+    # removed: status_410 | ria_archive | repeat_404; returned: ярус черги
+    # (rm_sample, reseen, sweep, opened, …); url_repaired: стратегія існування.
+    reason: Mapped[str | None] = mapped_column(String(24))
+    source: Mapped[str | None] = mapped_column(String(32))
+    site_key: Mapped[str | None] = mapped_column(String(64))
+    check_event_id: Mapped[int | None] = mapped_column(ForeignKey("check_events.id"),
+                                                       nullable=True)
+    evidence: Mapped[dict | None] = mapped_column(JSON)
 
 
 class PriceEvent(Base):

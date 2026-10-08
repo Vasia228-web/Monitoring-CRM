@@ -77,6 +77,8 @@ ALLOWED = {
         ({"*copy*"}, "перебудова таблиці: дані переносяться як є"),
     ("realty/schema_repair.py", "con.execute(f'INSERT INTO \"{temp}\" ({cols}) SELECT {cols} FROM"):
         ({"*copy*"}, "ремонт ключів: дані переносяться як є"),
+    ("realty/snapshot.py", "s.execute(update(Listing).where(Listing.id.in_(chunk))"):
+        ({"absent_since"}, "позначки «зник із переліку» (Блок 1, E8, D52): лише absent_since"),
     ("realty/links_index.py", 'text("UPDATE listings SET site_key = :k WHERE id = :id AND site_key IS :old")'):
         ({"site_key"}, "разове заповнення ключа (links.site_key): NULL або --fix-mismatched"),
     ("realty/privacy_pass.py", 'conn.execute(text(f"UPDATE listings SET {sets} WHERE id = :id"), params)'):

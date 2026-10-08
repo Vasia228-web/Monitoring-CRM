@@ -249,7 +249,7 @@ def build_items(session, property_ids, *, now: datetime) -> list[Item]:
     # склеєних оголошень — інакше переклеєне оголошення виглядало б новим.
     listings_stmt = (select(Listing.property_id, Listing.published_at, Listing.source,
                             Listing.delisted_at, Listing.price_usd, Listing.last_alive_at,
-                            Listing.first_seen)
+                            Listing.first_seen, Listing.source_removed_at)
                      .where(Listing.property_id.isnot(None)).order_by(Listing.id))
     if ids is not None:
         props_stmt = props_stmt.where(Property.id.in_(ids))
@@ -263,12 +263,25 @@ def build_items(session, property_ids, *, now: datetime) -> list[Item]:
     sources: dict[int, set[str]] = {}
     prices: dict[int, list[float]] = {}
     alive: set[int] = set()
-    for prop_id, pub, source, gone, price, seen_alive, first_seen in listings:
+    for prop_id, pub, source, gone, price, seen_alive, first_seen, src_gone in listings:
         if price:
             prices.setdefault(prop_id, []).append(price)
         # Нижня межа проміжку: остання перевірка «живе», а якщо її не було —
         # момент, коли ми оголошення вперше побачили.
         bound = seen_alive or first_seen
+        # Дата зняття на самому джерелі (DOM.RIA deleted_at, Блок 1, E8, D52): зняте
+        # раніше, ніж ми це виявили, жило до неї, а не до нашої перевірки. Якщо
+        # джерело зняло раніше за наше «бачили живим», та стара перевірка (HEAD,
+        # сліпий до банера) була хибною — інтервал стискається до точки. Повернене
+        # оголошення (delisted_at = NULL) — цензуроване спостереження, не подія.
+        # Лише в межах НАШОГО спостереження рядка: дата джерела раніша за першу
+        # зустріч (копію LUN підхопили, коли DOM.RIA вже зняв) дала б зникнення
+        # раніше за вхід у спостереження — подію, що ніколи не була під ризиком
+        # (у Каплана—Меєра S ≤ 0; рецензія E8, D52). Тоді — наші дати, як були.
+        if gone is not None and src_gone is not None and (
+                first_seen is None or src_gone >= first_seen):
+            gone = min(gone, src_gone)
+            bound = min(bound, src_gone) if bound else src_gone
         if bound and (prop_id not in last_alive or bound > last_alive[prop_id]):
             last_alive[prop_id] = bound
         if first_seen and (prop_id not in first_seen_at

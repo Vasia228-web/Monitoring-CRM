@@ -208,7 +208,7 @@ poll();}catch(e){}})();</script><!--/live-check-->
     {% for l in sources.listings %}
       <li>
         <a href="{{ l.url }}" target="_blank" rel="noopener noreferrer">{{ l.source }} →</a>
-        <span class="p num">${{ l.price | round | int | money }}</span>
+        <span class="p num">${{ l.price | round | int | money }}</span>{% set um = liveness_marker(l.url) %}{% if um %}<!--unconfirmed--><span style="color:var(--muted,#8a9099);font-style:italic;font-size:13px;margin-left:8px" title="{{ um.hint }}">{{ um.label }}</span><!--/unconfirmed-->{% endif %}
       </li>
     {% endfor %}
   </ul>

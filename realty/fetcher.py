@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -109,6 +110,26 @@ class DeadlineExceeded(FetchError):
     """
 
 
+@dataclass(frozen=True)
+class ProbeResult:
+    """Відповідь одного запиту перевірки актуальності — без винятків (Блок 1, E8).
+
+    `code` 0 — відповіді немає (`error`: тип збою, `timeout`, `too_large`).
+    `chain` — переадресації ((код, адреса), …) у порядку проходження, `final_url`
+    — адреса, на якій зупинились. `body` — лише для GET і лише до `max_bytes`;
+    класифікатор (realty/liveness/signatures.py) вирішує за всім разом.
+    """
+
+    code: int
+    method: str
+    url: str
+    final_url: str
+    chain: tuple[tuple[int, str], ...] = ()
+    body: str | None = None
+    error: str | None = None
+    elapsed_s: float = 0.0
+
+
 def _retryable(exc: BaseException) -> bool:
     """Повторюємо збої мережі й 429/5xx, але НЕ таймаути.
 
@@ -136,6 +157,9 @@ class Fetcher:
             proxy=PROXY_URL,
         )
         self.request_timeout = REQUEST_TIMEOUT
+        # Спостерігач кодів відповідей (0 — відповіді немає): нічна смуга рахує
+        # 401/403/429 дозбору identity у свої блокування (рецензія E9, D53).
+        self.on_status = None
 
     def close(self) -> None:
         self.client.close()
@@ -182,9 +206,13 @@ class Fetcher:
             r, text = self._fetch("GET", url, params=params, headers=headers)
         except Exception:
             ops.record_request(self.label, ok=False)
+            if self.on_status is not None:
+                self.on_status(0)
             raise
         ops.record_request(self.label, ok=r.status_code < 400,
                            blocked=r.status_code in BLOCKING_CODES)
+        if self.on_status is not None:
+            self.on_status(r.status_code)
         # 4xx (крім 429) повторювати марно — це відповідь сайту, а не збій.
         if r.status_code == 429 or r.status_code >= 500:
             r.raise_for_status()
@@ -228,6 +256,60 @@ class Fetcher:
             log.debug("%s не приймає HEAD — пробуємо GET", urlsplit(url).netloc)
             code = self._probe_once("GET", url, delay)
         return code
+
+    def check(self, url: str, method: str = "HEAD", delay: float | None = None,
+              max_bytes: int = 0) -> ProbeResult:
+        """Запит перевірки актуальності: код, переадресації, тіло (GET) — без винятків.
+
+        Той самий клієнт, обмеження темпу й облік запитів, що й `probe`; повторів
+        немає (як і в `probe`: повтор — наступний прогін за графіком). HEAD, якого
+        сайт не приймає (405/501), повторюється GET без тіла. Тіло GET читається
+        не більше `max_bytes` — більше означає «не визначено» (`too_large`), а не
+        вердикт; стеля часу на весь запит — `request_timeout`.
+        """
+        result = self._check_once(method, url, delay, max_bytes)
+        if method == "HEAD" and result.code in (405, 501):
+            log.debug("%s не приймає HEAD — пробуємо GET", urlsplit(url).netloc)
+            result = self._check_once("GET", url, delay, 0)
+        return result
+
+    def _check_once(self, method: str, url: str, delay: float | None,
+                    max_bytes: int) -> ProbeResult:
+        self.limiter.wait(url, delay)
+        started = time.monotonic()
+        deadline = started + self.request_timeout
+        code, final, chain, body, error = 0, url, (), None, None
+        try:
+            with self.client.stream(method, url) as r:
+                code = r.status_code
+                final = str(r.url)
+                chain = tuple((h.status_code, str(h.url)) for h in r.history)
+                if method == "GET" and max_bytes > 0:
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in r.iter_bytes():
+                        chunks.append(chunk)
+                        size += len(chunk)
+                        if size > max_bytes:
+                            error = "too_large"
+                            break
+                        if time.monotonic() > deadline:
+                            error = "timeout"
+                            break
+                    if error is None:
+                        body = b"".join(chunks).decode(r.encoding or "utf-8", errors="replace")
+        except httpx.TimeoutException:
+            error = "timeout"
+        except Exception as e:                       # noqa: BLE001 — відповідь, а не виняток
+            error = type(e).__name__
+        if code == 0:
+            ops.record_request(self.label, ok=False)
+        else:
+            ops.record_request(self.label, ok=code < 400 and error is None,
+                               blocked=code in BLOCKING_CODES)
+        return ProbeResult(code=code, method=method, url=url, final_url=final, chain=chain,
+                           body=body, error=error,
+                           elapsed_s=round(time.monotonic() - started, 3))
 
     def _probe_once(self, method: str, url: str, delay: float | None) -> int:
         self.limiter.wait(url, delay)

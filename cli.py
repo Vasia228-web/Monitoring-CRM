@@ -11,7 +11,13 @@
   python cli.py schedule install       # фоновий розклад (launchd)
   python cli.py dedup                  # звести дублі між сайтами
   python cli.py verify                 # перевірити, які оголошення ще живі
-  python cli.py snapshot               # знайти зниклі різницею списків
+  python cli.py snapshot               # позначити зниклі з переліку (absent_since)
+  python cli.py liveness plan          # яруси перевірки актуальності (без мережі)
+  python cli.py liveness fuse status   # запобіжник; fuse clear --source domria — зняти
+  python cli.py liveness report        # підсумки останньої ночі (по хостах, до/після)
+  python cli.py liveness report --status --liquidity  # зведення /status і строк продажу
+  python cli.py night --dry-run        # план ночі: ключі × темп = тривалість по хостах
+  python cli.py night --budget-min 100 # нічний диригент (таймер realty-night, 01:10 і 04:10)
   python cli.py quality diagnose       # що не так із даними
   python cli.py quality audit          # аудит дедуплікації
   python cli.py serve --port 8000      # веб-інтерфейс
@@ -34,6 +40,11 @@ import argparse
 import logging
 import os
 import sys
+import time
+
+# Старт процесу: стеля часу кроку «перевірка актуальності» рахується від нього, а
+# не від кінця плану черги (рецензія E8, D52).
+_STARTED = time.monotonic()
 
 # Заборона зовнішньої мережі для дочірніх процесів тестів (D45): conftest
 # ставить REALTY_NETGUARD=1, і `cli.py`, запущений тестом окремим процесом,
@@ -61,11 +72,20 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             SOURCES[name] = SourceConfig(
                 name, cfg.enabled, args.pages, cfg.delay, cfg.needs_browser, cfg.extra
             )
+    if args.min_delay:
+        # Нічний дозбір identity у смузі хоста (E9, D53): стрічка джерела — не швидше
+        # за нічний темп хоста (policy.pace night), і в повному, і у звичайному режимі.
+        import dataclasses
+
+        for name, cfg in SOURCES.items():
+            SOURCES[name] = dataclasses.replace(
+                cfg, delay=max(cfg.delay, args.min_delay),
+                full_delay=max(cfg.full_delay or cfg.delay, args.min_delay))
     from realty.pipeline import Pipeline
 
     names = [s.strip() for s in args.sources.split(",")] if args.sources else None
     report = Pipeline(sources=names, use_llm=not args.no_llm, mode=args.mode,
-                      trigger=args.trigger).run()
+                      trigger=args.trigger, fetch_details=not args.no_detail).run()
     print(report.render())
     return 0
 
@@ -118,7 +138,20 @@ def cmd_backup(args: argparse.Namespace) -> int:
     if args.if_due and not backup.is_due():
         print(f"бекап не потрібен: останній успішний {backup.last_success_at():%Y-%m-%d %H:%M} UTC")
         return 0
-    res = backup.run(upload=not args.no_upload)
+    if args.if_due and backup.busy():
+        # Інший бекап (напр., нічний на старті вікна 04:10) ще йде: другий архів поспіль
+        # лише навантажив би диск (рецензія E9, D53).
+        print("бекап не потрібен: інший бекап ще йде")
+        return 0
+    import signal
+
+    # SIGTERM (стеля кроку циклу чи ночі, systemctl stop) — як SystemExit: запис
+    # ops.backups закривається, тимчасова тека з копіями баз прибирається (рецензія E9).
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    res = backup.run(upload=not args.no_upload, wait_s=(args.wait_minutes or 0) * 60)
+    if res.status == "busy":
+        print("\nБЕКАП: інший бекап ще йде — не дочекались")
+        return 1
     print(f"\nБЕКАП: {res.status.upper()}")
     print(f"  файл:         {res.file} ({res.size / 1e6:.1f} МБ)")
     print(f"  рядків:       {res.rows}")
@@ -286,13 +319,7 @@ def cmd_quality(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    from realty.db import init_db
-    from realty.verify import verify_batch
-
-    init_db()
-    names = [s.strip() for s in args.sources.split(",")] if args.sources else None
-    st = verify_batch(limit=args.limit, sources=names)
+def _print_verify(st: dict) -> None:
     print("\n" + "=" * 64)
     print("ПЕРЕВІРКА АКТУАЛЬНОСТІ")
     print("=" * 64)
@@ -301,22 +328,210 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print(f"  живі:              {st['alive']}")
     print(f"  знято з продажу:   {st['delisted']}")
     print(f"  повернулись:       {st['restored']}")
-    print(f"  без висновку:      {st['unknown']}")
+    print(f"  без висновку:      {st['unknown']}"
+          + (f" (з них один 404 — {st['not_found']})" if st.get("not_found") else ""))
+    if st.get("repaired"):
+        print(f"  полагоджено посилань: {st['repaired']}")
+    if st.get("tiers"):
+        print(f"\n  {'сайт':<20}" + "".join(f"{t:>11}" for t in (
+            "canary", "opened", "repeat404", "absent", "reseen", "held", "rm_sample", "sweep")))
+        for host, tiers in sorted(st["tiers"].items()):
+            print(f"  {host:<20}" + "".join(f"{tiers.get(t, 0):>11}" for t in (
+                "canary", "opened", "repeat404", "absent", "reseen", "held", "rm_sample",
+                "sweep")))
     if st["by_host"]:
         print(f"\n  {'сайт':<16}{'запитів':>9}{'відмов':>9}{'':>4}")
         for host, h in sorted(st["by_host"].items()):
             note = "  чергу зупинено" if h["stopped_early"] else ""
+            if h.get("skipped"):
+                note += f"  не дійшла черга: {h['skipped']}"
             share = 100 * h["blocked"] / h["requests"] if h["requests"] else 0
             print(f"  {host:<16}{h['requests']:>9}{h['blocked']:>9}"
                   f" ({share:.1f}%){note}")
+            if h.get("signatures"):
+                print("                    " + ", ".join(
+                    f"{k} {v}" for k, v in sorted(h["signatures"].items())))
     if st["by_source"]:
-        print(f"\n  {'джерело':<10}{'перевірено':>11}{'живі':>7}{'знято':>7}{'без висн.':>11}")
+        print(f"\n  {'джерело':<10}{'перевірено':>11}{'живі':>7}{'знято':>7}{'поверн.':>9}"
+              f"{'без висн.':>11}")
         for name, b in sorted(st["by_source"].items()):
             print(f"  {name:<10}{b['checked']:>11}{b['alive']:>7}{b['delisted']:>7}"
-                  f"{b['unknown']:>11}")
+                  f"{b.get('restored', 0):>9}{b['unknown']:>11}")
+    for t in st.get("trips") or []:
+        print(f"\n  ЗАПОБІЖНИК: {t['source']} — «знято» {t['removed']} із {t['checked']} "
+              f"({t['reason']}); нічого не знято й не повернуто, чекає рішення на /status")
+    if st.get("held_sources"):
+        print(f"  під запобіжником: {', '.join(st['held_sources'])}")
     print("=" * 64)
     print("  (blago не перевіряється: сайт не відрізняє видалене планування)")
+
+
+def _cycle_refusal() -> str | None:
+    """Чому ручну перевірку зараз запускати не можна (None — можна)."""
+    from realty import runner
+
+    if runner.DISABLED_FLAG.exists():
+        return ("збір на цій машині вимкнено (data/COLLECTOR_OFF) — перевірку не запускаю; "
+                "--force — свідомо")
+    holder = runner.lock_busy(runner.LOCK_PATH)
+    if holder:
+        return (f"іде цикл (PID {holder.get('pid') or holder.get('lock_pid') or '?'}): друга "
+                f"перевірка подвоїла б темп запитів до кожного сайту (rieltor 3,0 с → ~1,5 с, "
+                f"403 після п'яти запитів, Етап 0) — спробуйте після циклу; --force — свідомо")
+    return None
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Перевірка актуальності. Диригент циклу запускає її кроком (runner.STEP_ENV) —
+    тоді це прогін циклу. Запущена вручну — «manual»: не під час циклу й не з
+    вимкненим збором (інакше дві смуги до одного сайту; D50, рецензія E8, D52),
+    не закриває відкладених завдань і не переписує зведення /status."""
+    import signal
+
+    from realty import runner
+    from realty.db import init_db
+    from realty.verify import verify_batch
+
+    in_cycle = bool(os.environ.get(runner.STEP_ENV))
+    if not in_cycle and not getattr(args, "force", False):
+        why = _cycle_refusal()
+        if why:
+            print(f"ВІДМОВА: {why}")
+            return 2
+    # SIGTERM диригента (стеля кроку) — як SystemExit: прогін закривається «failed»
+    # (service.run), а не лишається «running» назавжди (як у cmd_lookup).
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    init_db()
+    names = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    st = verify_batch(limit=args.limit, sources=names, kind=None if in_cycle else "manual",
+                      started=_STARTED)
+    _print_verify(st)
     return 0
+
+
+def cmd_liveness(args: argparse.Namespace) -> int:
+    """Блок 1 (E8, D52): прогін, запобіжник, зведення, план без мережі."""
+    import json
+
+    from realty.db import SessionLocal, init_db
+
+    init_db()
+    if args.action == "run":
+        return cmd_verify(args)
+    if args.action == "fuse":
+        from realty.liveness import fuse
+
+        if args.fuse_action == "clear":
+            if not args.source:
+                print("потрібно --source")
+                return 2
+            ok = fuse.clear(args.source, by="cli")
+            print(f"{args.source}: {'запобіжник знято' if ok else 'запобіжник не тримався'}")
+            return 0
+        rows = fuse.state()
+        if not rows:
+            print("запобіжник не спрацьовував")
+        for r in rows:
+            print(f"  {r['source']:<10} {r['state']:<6} {r['reason'] or '':<13} "
+                  f"«знято» {r['removed']} із {r['checked']}  з {r['tripped_at']}"
+                  + (f"  знято {r['cleared_at']} ({r['cleared_by']})" if r["cleared_at"] else ""))
+        log_rows = fuse.history(10)
+        if log_rows:
+            print("  історія (новіші першими):")
+        for r in log_rows:
+            what = (f"спрацював: «знято» {r['removed']} із {r['checked']} ({r['reason']})"
+                    if r["action"] == "trip" else f"знято: {r['by']}")
+            print(f"    {r['at']}  {r['source']:<10} {what}")
+        return 0
+    if args.action == "report" and not args.status:
+        # Підсумки нічних вікон (E9, D53): по хостах, актуальні до/після, строк продажу.
+        from realty.night import report as night_report
+
+        rows = night_report.runs(limit=args.last, run_id=args.night)
+        if not rows:
+            print("нічних вікон ще не було (cli.py night); зведення /status — --status")
+            return 0
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=1, default=str))
+            return 0
+        for d in reversed(rows):
+            print(night_report.render_run(d))
+        return 0
+    from realty.liveness import policy, queue, report
+
+    cfg = policy.load()
+    with SessionLocal() as s:
+        if args.action == "plan":
+            plan = queue.plan_run(s, cfg, held_sources=set())
+            for host, tiers in sorted(plan.tiers.items()):
+                print(f"  {host:<20} {sum(tiers.values()):>5}  " + ", ".join(
+                    f"{k} {v}" for k, v in sorted(tiers.items())))
+            print(f"  завдань при відкритті (відкладених): {len(plan.jobs)}")
+            return 0
+        rep = report.status_block(s, cfg, now=queue._now())
+        print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+        if args.liquidity:
+            print("\nСТРОК ПРОДАЖУ (Каплан—Меєр):")
+            for name, row in report.liquidity(s).items():
+                print(f"  {name:<8} медіана {row.get('median_days')} дн., подій "
+                      f"{row.get('events')}, цензурованих {row.get('censored')}, "
+                      f"S(30) {row.get('S30')}, S(90) {row.get('S90')}")
+    return 0
+
+
+def cmd_night(args: argparse.Namespace) -> int:
+    """Нічний диригент (E9, D53): одне вікно ночі під замком циклу; смуги хостів —
+    окремі процеси (`night lane`); `--dry-run` — план без мережі й запису."""
+    import json
+    from pathlib import Path
+
+    if args.action == "lane":
+        from realty.night import lane
+
+        if not args.plan or not args.out:
+            print("потрібно --plan і --out")
+            return 2
+        return lane.main(Path(args.plan), Path(args.out))
+    from realty.night import conductor, report as night_report
+
+    if args.action == "unhold":
+        if not args.host:
+            print("потрібно --host")
+            return 2
+        ok = conductor.unhold(args.host, by="cli")
+        print(f"{args.host}: {'смугу знову дозволено' if ok else 'хост не чекав рішення'}")
+        return 0
+    import signal
+
+    from realty.db import init_db
+
+    if args.dry_run:
+        init_db()
+        d = conductor.dry_run()
+        print(json.dumps(d, ensure_ascii=False, indent=1, default=str) if args.json
+              else night_report.render_plan(d))
+        return 0
+    # SIGTERM (systemctl stop, TimeoutStartSec) — як SystemExit: запис ночі закривається
+    # «failed», смуги зупиняються, замок звільняється (а не «running» назавжди).
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    try:
+        init_db()
+        night = conductor.Conductor(budget_min=args.budget_min)
+    except Exception as e:
+        # Збій до власного запису диригента (конфіг, база): запис «failed» однаково —
+        # інакше systemd «failed», а сторож мовчить (рецензія E9, D53).
+        conductor.record_failure(f"диригент не стартував: {type(e).__name__}: {e}")
+        raise
+    res = night.run()
+    rows = night_report.runs(limit=1, run_id=res.get("night_run_id"))
+    if rows:
+        print(night_report.render_run(rows[0]))
+    else:
+        print(f"ніч: {res['status']} — {res.get('message') or ''}")
+    # Ненульовий код — лише там, де systemd має показати збій служби: бекап не вдався
+    # (нічого не писали) і запуск поза вікном (не таймером). Пропущене через цикл
+    # вікно — стан, а не збій (його видно в ops.night_runs і `liveness report`).
+    return {"backup_failed": 1, "outside_window": 2}.get(res["status"], 0)
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
@@ -325,30 +540,34 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 
     init_db()
     names = [s.strip() for s in args.sources.split(",")] if args.sources else None
-    rep = run(names, confirm=not args.no_confirm, force=args.force)
-    print("\n" + "=" * 74)
+    rep = run(names, force=args.force)
+    print("\n" + "=" * 78)
     print("РІЗНИЦЯ СПИСКІВ")
-    print("=" * 74)
-    head = f"  {'джерело':<9}{'було':>7}{'стало':>7}{'запитів':>9}{'кандидатів':>12}"
-    print(head + f"{'знято':>8}{'живі':>7}{'?':>4}")
+    print("=" * 78)
+    head = f"  {'джерело':<9}{'було':>7}{'стало':>7}{'запитів':>9}{'нових зниклих':>15}"
+    print(head + f"{'повернулись':>13}{'зниклих актуальних':>20}")
     for name, e in rep["sources"].items():
         if "error" in e:
             print(f"  {name:<9} помилка: {e['error'][:52]}")
             continue
+        absent = e["absent_active"] if e["absent_active"] is not None else "—"
         print(f"  {name:<9}{e['previous']:>7}{e['current']:>7}{e['requests']:>9}"
-              f"{e['candidates']:>12}{e['confirmed']:>8}{e['still_alive']:>7}"
-              f"{e['unclear']:>4}")
-        if not e["used"]:
-            print(f"             ↳ порівняння пропущено: {e['reason']}")
+              f"{e['newly_absent']:>15}{e['back_in_list']:>13}{absent:>20}")
+        if not e["used"] or not e["complete"]:
+            print(f"             ↳ позначки не змінено: {e['reason']}")
     for name, reason in rep.get("skipped", {}).items():
         print(f"  {name:<9} перелік не застосовний: {reason}")
-    print("-" * 74)
+    print("-" * 78)
     print(f"  запитів на перелік:     {rep['requests_enumerate']}")
-    print(f"  запитів на підтвердження: {rep['requests_confirm']}")
-    print(f"  підтверджено знятих:    {rep['delisted']}")
-    print("=" * 74)
-    print("  Випадіння зі списку — лише кандидат. Статус «знято» ставиться")
-    print("  тільки за явним 404/410 від поодинокого запиту.")
+    print("=" * 78)
+    print("  Зникнення з переліку нікого не знімає: воно лише ставить оголошення в")
+    print("  чергу перевірки (ярус absent). «Знято» — тільки за явним сигналом.")
+    # Неповний чи невдалий перелік — крок «різниця списків» не «ok» (видно на /status
+    # у кроках циклу; рецензія E8, D52). Позначки й так не змінено.
+    bad = sorted(n for n, e in rep["sources"].items() if "error" in e or not e.get("complete"))
+    if bad:
+        print(f"  НЕПОВНИЙ ПЕРЕЛІК: {', '.join(bad)} — снапшот не збережено")
+        return 1
     return 0
 
 
@@ -676,6 +895,10 @@ def main() -> int:
     sc.add_argument("--sources", help="через кому: domria,lun,olx,flombu,blago")
     sc.add_argument("--pages", type=int, help="сторінок на джерело")
     sc.add_argument("--no-llm", action="store_true", help="вимкнути LLM-фолбек")
+    sc.add_argument("--no-detail", action="store_true",
+                    help="лише стрічка: без сторінок деталей (нічний дозбір identity)")
+    sc.add_argument("--min-delay", type=float,
+                    help="пауза між запитами до сайту джерела — не менша за цю, с")
     sc.add_argument("--trigger", default="cli",
                     choices=("cli", "manual", "schedule"),
                     help="звідки запущено — для телеметрії дашборда")
@@ -699,6 +922,8 @@ def main() -> int:
     bk.add_argument("--if-due", action="store_true",
                     help="лише якщо останній успішний бекап старший за BACKUP_EVERY_HOURS")
     bk.add_argument("--no-upload", action="store_true", help="не вивантажувати поза машину")
+    bk.add_argument("--wait-minutes", type=float,
+                    help="інший бекап ще йде — чекати стільки хвилин і віддати його результат")
     bk.set_defaults(func=cmd_backup)
 
     wd = sub.add_parser("watchdog", help="сигнал тиші й інші тривоги в Telegram")
@@ -742,13 +967,51 @@ def main() -> int:
                     help="скільки перевірити за раз НА КОЖЕН САЙТ; "
                          "без цього — власна порція кожного сайту")
     vf.add_argument("--sources", help="через кому; типово — усі, що вміємо перевіряти")
+    vf.add_argument("--force", action="store_true",
+                    help="запустити вручну навіть під час циклу чи з COLLECTOR_OFF")
     vf.set_defaults(func=cmd_verify)
+
+    lv = sub.add_parser("liveness", help="перевірка актуальності (Блок 1): прогін, "
+                                         "запобіжник, зведення, план")
+    lv.add_argument("action", choices=("run", "fuse", "report", "plan"),
+                    help="run — як verify; fuse — стан чи зняття запобіжника; report — "
+                         "підсумки ночі (--status — зведення /status); plan — яруси черги "
+                         "без мережі")
+    lv.add_argument("fuse_action", nargs="?", default="status", choices=("status", "clear"))
+    lv.add_argument("--source", help="fuse clear: джерело (domria, olx, lun, …)")
+    lv.add_argument("--limit", type=int, default=None, help="run: стеля на кожен сайт")
+    lv.add_argument("--sources", help="run: джерела через кому")
+    lv.add_argument("--force", action="store_true",
+                    help="run: навіть під час циклу чи з COLLECTOR_OFF")
+    lv.add_argument("--liquidity", action="store_true",
+                    help="report --status: ще й строк продажу (медіана, події, цензуровані)")
+    lv.add_argument("--status", action="store_true",
+                    help="report: зведення /status (JSON) замість підсумків ночі")
+    lv.add_argument("--night", type=int, help="report: номер нічного вікна (ops.night_runs)")
+    lv.add_argument("--last", type=int, default=1, help="report: скільки останніх вікон")
+    lv.add_argument("--json", action="store_true", help="report: сирі числа")
+    lv.set_defaults(func=cmd_liveness)
+
+    nt = sub.add_parser("night", help="нічний диригент: перевірка актуальності, M2/M3, дозбір "
+                                      "(таймер realty-night, 01:10 і 04:10)")
+    nt.add_argument("action", nargs="?", default="run", choices=("run", "lane", "unhold"),
+                    help="run — одне вікно ночі; lane — смуга хоста (запускає сам диригент); "
+                         "unhold — знову дозволити смугу хоста після блокувань")
+    nt.add_argument("--budget-min", type=float, default=None,
+                    help="стеля видачі запитів від старту, хв (і так не пізніше stop_requests)")
+    nt.add_argument("--dry-run", action="store_true",
+                    help="лише план: ключі × темп = тривалість по хостах, без мережі й запису")
+    nt.add_argument("--json", action="store_true", help="--dry-run: сирі числа")
+    nt.add_argument("--plan", help="lane: файл плану смуги")
+    nt.add_argument("--out", help="lane: файл результатів смуги")
+    nt.add_argument("--host", help="unhold: хост (rieltor.ua, olx.ua, …)")
+    nt.set_defaults(func=cmd_night)
 
     sn = sub.add_parser("snapshot",
                         help="знайти зниклі оголошення різницею списків")
     sn.add_argument("--sources", help="через кому; типово всі")
     sn.add_argument("--no-confirm", action="store_true",
-                    help="лише знайти кандидатів, без поодинокої перевірки")
+                    help="(застаріле, нічого не змінює: зниклих перевіряє крок verify)")
     sn.add_argument("--force", action="store_true",
                     help="перелічити зараз, не чекаючи інтервалу")
     sn.set_defaults(func=cmd_snapshot)

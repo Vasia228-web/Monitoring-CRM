@@ -192,17 +192,33 @@ class DomRiaSource(BaseSource):
         """
         page = 0
         seen: set[str] = set()
-        while page < 200:                      # запобіжник від нескінченної пагінації
+        last_len = 0
+        while True:
+            if page >= 200:                    # запобіжник від нескінченної пагінації
+                # Неповний перелік нікого не позначає (рецензія E8, D52).
+                self.stats["enum_incomplete"] = True
+                log.warning("DIM.RIA: перелік обірвано на запобіжнику %d сторінок", page)
+                return
             try:
                 ids = self._search_page(page, limit=self.ID_PAGE_SIZE)
             except FetchError as e:
                 log.warning("DIM.RIA: перелік, сторінка %d не завантажилась: %s", page, e)
+                # Неповний перелік нікого не має позначати зниклим (Блок 1, E8, D52):
+                # снапшот із цією позначкою не зберігається й не порівнюється.
+                self.stats["enum_incomplete"] = True
                 return
             if not ids:
                 return
             fresh = [str(i) for i in ids if str(i) not in seen]
             if not fresh:                      # сайт зациклив пагінацію
+                # Після неповної сторінки — так сайт міг позначити кінець; після
+                # повної — кінця ми не бачили (рецензія E8, D52).
+                if last_len >= self.ID_PAGE_SIZE:
+                    self.stats["enum_incomplete"] = True
+                    log.warning("DIM.RIA: перелік — сторінка %d повторює вже бачене "
+                                "після повної", page)
                 return
+            last_len = len(ids)
             seen.update(fresh)
             self.stats["pages"] += 1
             yield from fresh

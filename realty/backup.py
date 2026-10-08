@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ import sqlite3
 import subprocess
 import tarfile
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -54,8 +56,19 @@ RCLONE_REMOTE = os.getenv("BACKUP_RCLONE_REMOTE", "").strip()
 # Щоденний ритм: `--if-due` робить бекап, лише якщо останній успішний старший.
 DUE_AFTER_HOURS = float(os.getenv("BACKUP_EVERY_HOURS", "20"))
 PREFIX = "realty-backup-"
+# Один бекап на машину (рецензія E9, D53): нічний бекап на старті вікна 04:10 і таймер
+# 04:30 (`--if-due`) інакше могли б іти разом — два архіви xz на HDD, і нічний за
+# стелею 15 хв «не вдався б», хоча інший удався. flock знімається сам, коли процес
+# помирає.
+LOCK_NAME = "backup.lock"
+# Залишки бекапу, убитого посеред роботи (тимчасова тека з копіями баз, .part):
+# прибираються, коли старші за стелю кроку «бекап» (runner.TASK_TIMEOUTS, 15 хв).
+LEFTOVER_AGE_S = 15 * 60
 # Таблиці, за кількістю рядків у яких звіряється відновлення.
-KEY_TABLES = ("listings", "price_events", "properties", "check_events", "data_reports")
+# listing_events — журнал зняттів і повернень Блоку 1 (E8, D52): відновлення з архіву
+# звіряє й його. Таблиці, якої в архіві немає (старі архіви), row_counts пропускає.
+KEY_TABLES = ("listings", "price_events", "properties", "check_events", "data_reports",
+              "listing_events")
 
 
 class BackupRecord(ops.OpsBase):
@@ -229,19 +242,89 @@ def prune(folder: Path = None, keep: int = KEEP) -> list[str]:
     for old in files[keep:]:
         old.unlink()
         removed.append(old.name)
+    # Залишки бекапу, який убили (SIGKILL, вимкнення): тимчасова тека з повною копією
+    # баз (~120 МБ) і недописаний архів. Лише старші за стелю бекапу — свіжі можуть
+    # належати бекапу, що йде (рецензія E9, D53).
+    cutoff = time.time() - LEFTOVER_AGE_S
+    for p in [*folder.glob(f"{PREFIX}*"), *folder.glob("*.part")]:
+        try:
+            if p.name.endswith((".tar.xz", ".sha256")) or p.stat().st_mtime > cutoff:
+                continue
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink()
+            removed.append(p.name)
+        except OSError:
+            continue
     return removed
+
+
+def _acquire(dest: Path, wait_s: float):
+    """(файл замка або None, чи довелося чекати чужий бекап)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    fh = open(dest / LOCK_NAME, "a+")
+    deadline = time.monotonic() + max(0.0, wait_s)
+    waited = False
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh, waited
+        except BlockingIOError:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                fh.close()
+                return None, waited
+            waited = True
+            time.sleep(min(5.0, left))
+
+
+def busy(dest: Path | None = None) -> bool:
+    """Чи йде зараз інший бекап (замок не береться надовго — лише спроба)."""
+    fh, _ = _acquire(dest or BACKUP_DIR, 0)
+    if fh is None:
+        return True
+    fcntl.flock(fh, fcntl.LOCK_UN)
+    fh.close()
+    return False
+
+
+def _result_of(rec: "BackupRecord") -> BackupResult:
+    return BackupResult(rec.status, file=rec.file, size=rec.size or 0, sha256=rec.sha256,
+                        rows=json.loads(rec.rows or "{}"), restored_ok=bool(rec.restored_ok),
+                        offsite=[x for x in (rec.offsite or "").split(", ") if x],
+                        problems=[rec.message] if rec.message else [])
 
 
 # --- Прогін --------------------------------------------------------------------------
 
 
 def run(db_url: str | None = None, dest: Path | None = None,
-        upload: bool = True) -> BackupResult:
+        upload: bool = True, wait_s: float = 0.0) -> BackupResult:
+    """Бекап. Інший бекап уже йде — чекаємо його до `wait_s` і віддаємо ЙОГО результат
+    (другий архів поспіль лише навантажив би диск); не дочекались — статус «busy»."""
+    dest = dest or BACKUP_DIR
+    ops.init_ops()
+    fh, waited = _acquire(dest, wait_s)
+    if fh is None:
+        return BackupResult("busy", problems=["інший бекап ще йде (backup.lock)"])
+    try:
+        if waited:
+            last = last_attempt()
+            if last is not None and last.status != "running":
+                log.info("бекап: дочекались іншого бекапу (№%s, %s) — його результат", last.id,
+                         last.status)
+                return _result_of(last)
+        return _run(db_url, dest, upload)
+    finally:
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        fh.close()
+
+
+def _run(db_url: str | None, dest: Path, upload: bool) -> BackupResult:
     from .config import DB_URL
 
-    ops.init_ops()
     rec_id = _start_record()
-    dest = dest or BACKUP_DIR
     dest.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     archive = dest / f"{PREFIX}{stamp}.tar.xz"
@@ -348,6 +431,20 @@ def last_attempt() -> BackupRecord | None:
     with ops.ops_session() as s:
         return s.scalars(select(BackupRecord).order_by(BackupRecord.id.desc())
                          .limit(1)).first()
+
+
+def attempt(rec_id: int) -> BackupRecord | None:
+    ops.init_ops()
+    with ops.ops_session() as s:
+        return s.get(BackupRecord, rec_id)
+
+
+def first_attempt_after(rec_id: int) -> BackupRecord | None:
+    """Найперша спроба, почата після спроби `rec_id` (0 — будь-яка)."""
+    ops.init_ops()
+    with ops.ops_session() as s:
+        return s.scalars(select(BackupRecord).where(BackupRecord.id > rec_id)
+                         .order_by(BackupRecord.id).limit(1)).first()
 
 
 def is_due(hours: float = DUE_AFTER_HOURS) -> bool:

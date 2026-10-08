@@ -91,6 +91,17 @@ class BaseSource(abc.ABC):
         log.warning("%s: %s — джерело кинуто: %s", self.name, what, error)
         self._stop = True
 
+    def enum_incomplete(self, why: str) -> None:
+        """Повний перелік обірвався не на своєму кінці — стеля сторінок, коли
+        сторінки ще мали оголошення, порожня сторінка посередині, нерозібраний
+        запис. Снапшот із цією позначкою не зберігається й нікого не позначає
+        зниклим, а перевірка існування його не бере (Блок 1, рецензія E8, D52).
+        Звичайного (не повного) обходу не стосується: там стеля — норма."""
+        if self.mode != "full":
+            return
+        self.stats["enum_incomplete"] = True
+        log.warning("%s: перелік неповний — %s", self.name, why)
+
     def begin_page(self, page: int | None = None) -> None:
         self._page_new = 0
         self.stats["pages"] += 1

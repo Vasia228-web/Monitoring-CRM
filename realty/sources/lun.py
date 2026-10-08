@@ -143,6 +143,7 @@ class LunSource(BaseSource):
             payload = extract_payload(html)
             if not payload:
                 log.warning("LUN: порожній payload на %s — розмітка могла змінитись", url)
+                self.enum_incomplete(f"порожній payload на сторінці {page}")
                 break
             rows = resolve_text_rows(payload)
             found = 0
@@ -156,6 +157,10 @@ class LunSource(BaseSource):
             self.end_page()
             if not found:
                 break
+        else:
+            # Дійшли до стелі сторінок, а остання ще мала об'єкти: далі не дивились.
+            self.enum_incomplete(f"стеля {self.cfg.max_pages} сторінок, а сторінки ще не "
+                                 f"скінчились")
 
     def _parse(self, d: dict, rows: dict[str, str] | None = None) -> dict:
         rows = rows or {}

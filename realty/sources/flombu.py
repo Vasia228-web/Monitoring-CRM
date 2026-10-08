@@ -84,6 +84,8 @@ class FlombuSource(BaseSource):
         }
 
     def iter_listings(self) -> Iterator[dict]:
+        total = None                      # meta.pages — скільки сторінок каже сам сайт
+        page = None
         for page in range(max(1, self.start_page), self.cfg.max_pages + 1):
             if self.stop_requested:
                 break
@@ -100,18 +102,30 @@ class FlombuSource(BaseSource):
                 for inc in (data.get("included") or [])
                 if inc.get("type") == "estateRecordLocation"
             }
+            pages = (data.get("meta") or {}).get("pages")
+            if isinstance(pages, int):
+                total = pages
             log.info("flombu: сторінка %d — %d записів (усього стор.: %s)",
-                     page, len(items), (data.get("meta") or {}).get("pages"))
+                     page, len(items), pages)
             if not items:
+                if total is not None and page <= total:
+                    self.enum_incomplete(f"порожня сторінка {page} з {total}")
                 break
             for item in items:
                 try:
                     rec = self._parse(item, geo)
-                    if rec:
-                        yield rec
                 except Exception as e:
                     log.debug("flombu: запис %s не розібрався: %s", item.get("id"), e)
+                    self.enum_incomplete(f"запис {item.get('id')} не розібрався")
+                    continue
+                if rec:
+                    yield rec
             self.end_page()
+        else:
+            # Стеля сторінок: повний, лише якщо сайт сам сказав, що сторінок не більше.
+            if page is not None and (total is None or page < total):
+                self.enum_incomplete(f"стеля {self.cfg.max_pages} сторінок, а сайт каже "
+                                     f"{total if total is not None else 'невідомо скільки'}")
 
     def _parse(self, item: dict, geo: dict) -> dict:
         a = item.get("attributes") or {}

@@ -361,3 +361,19 @@ def test_reclassify_only_fills_gaps_never_overwrites(tmp_path, monkeypatch):
         filled = s.get(Listing, ids[1])
         assert kept.market_type is MarketType.SECONDARY, "рішення джерела скасовано"
         assert filled.market_type is MarketType.PRIMARY, "порожнє поле не заповнене"
+
+
+def test_daily_routine_does_not_run_a_second_sweep(monkeypatch):
+    """Перевірка актуальності — один крок циклу (Блок 1, E8, D52). До E8 щоденна рутина
+    якості запускала другий прогін verify_batch — подвійне навантаження, якого
+    порції конфігу не бачили."""
+    from realty import verify
+    from realty.quality import housekeeping
+
+    def boom(*a, **k):
+        raise AssertionError("daily() не має перевіряти актуальність")
+
+    monkeypatch.setattr(verify, "verify_batch", boom)
+    monkeypatch.setattr(housekeeping, "revalidate", lambda **k: {"checked": 0})
+    out = housekeeping.daily()
+    assert out["routine"] == "daily" and out["revalidated"] == {"checked": 0}

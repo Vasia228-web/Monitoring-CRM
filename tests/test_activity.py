@@ -17,8 +17,12 @@ def client() -> TestClient:
 
 
 def test_only_explicit_gone_codes_delist():
-    """Блокування чи збій мережі не мають вимикати живі оголошення."""
-    assert classify(404) is False and classify(410) is False
+    """Блокування чи збій мережі не мають вимикати живі оголошення.
+
+    Змінено в E8 (D52): один 404 — «не знайдено», не «знято» (рішення власника 1, D46).
+    """
+    assert classify(410) is False
+    assert classify(404) is None
     for code in (200, 301, 302):
         assert classify(code) is True
     for code in (0, 403, 429, 500, 502):
@@ -96,28 +100,68 @@ def test_bad_status_value_rejected(client):
     assert client.post("/api/listings/999999999/status", json={"active": True}).status_code == 404
 
 
-def test_sweep_marks_unseen_listings(monkeypatch, tmp_path):
-    """Після повного обходу все, чого не було у видачі, — знято з продажу."""
+def test_full_run_never_delists_by_absence(monkeypatch, tmp_path):
+    """Повний обхід, що не побачив оголошення, нікого не знімає (заміна в E8, D52).
+
+    Досі тут стояв test_sweep_marks_unseen_listings: `sweep_after_full_run` знімав
+    за відсутністю у видачі — це суперечить правилу явного сигналу (рішення власника
+    1, D46). Функцію прибрано; повний прогін зі штучним джерелом, яке не віддало 2
+    з 3 актуальних оголошень, лишає всі три актуальними.
+    """
     import realty.db as db
+    import realty.pipeline as pl
+    import realty.verify as vf
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import sessionmaker
 
     from realty.models import Base, Listing
-    import realty.verify as vf
+    from realty.sources.base import BaseSource
 
+    assert not hasattr(vf, "sweep_after_full_run")
     engine = create_engine(f"sqlite:///{tmp_path/'t.db'}", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     monkeypatch.setattr(db, "engine", engine)
     monkeypatch.setattr(db, "SessionLocal", Session)
 
-    with db.session_scope() as s:
-        for i in (1, 2, 3):
-            s.add(Listing(source="domria", external_id=str(i), original_url=f"u{i}",
-                          currency="USD", is_active=True))
+    from contextlib import contextmanager
 
-    assert vf.sweep_after_full_run("domria", {"1", "3"}) == 1
+    @contextmanager
+    def scope():
+        s = Session()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    monkeypatch.setattr(pl, "session_scope", scope)
+    monkeypatch.setattr(pl, "init_db", lambda: None)
+    with scope() as s:
+        for i in (1, 2, 3):
+            s.add(Listing(source="fake", external_id=str(i),
+                          original_url=f"https://flombu.com/uk/estate_deal_sales/{i}",
+                          currency="USD", is_active=True, quality_status="ok"))
+
+    class Fake(BaseSource):
+        name = "fake"
+
+        def iter_listings(self):
+            yield {"source": "fake", "external_id": "1", "price": 50000, "currency": "USD",
+                   "original_url": "https://flombu.com/uk/estate_deal_sales/1",
+                   "rooms": 1, "area_total": 40.0}
+
+    monkeypatch.setitem(pl.REGISTRY, "fake", Fake)
+    from realty.quality.staging import QualityGate
+
+    class Pass(QualityGate):
+        def screen(self, session, batch):
+            return batch
+
+    report = pl.Pipeline(sources=["fake"], use_llm=False, mode="full", gate=Pass()).run()
+    assert report.delisted == 0
     with Session() as s:
-        gone = s.scalars(select(Listing).where(Listing.is_active.is_(False))).all()
-        assert [r.external_id for r in gone] == ["2"]
-        assert gone[0].delisted_at is not None
+        rows = s.scalars(select(Listing)).all()
+        assert len(rows) == 3
+        assert all(r.is_active for r in rows), "відсутність у видачі не знімає"
+        assert all(r.delisted_at is None for r in rows)

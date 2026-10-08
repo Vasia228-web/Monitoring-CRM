@@ -54,6 +54,9 @@ TASK_TIMEOUTS = {
     "backup": 15 * 60,
 }
 KILL_GRACE = 15          # секунд між SIGTERM і SIGKILL
+# Змінна оточення кожного кроку циклу (назва кроку): так `cli.py verify` знає, що
+# його запустив диригент, а не людина під час циклу (рецензія E8, D52).
+STEP_ENV = "REALTY_CYCLE_STEP"
 
 
 @dataclass
@@ -174,7 +177,7 @@ def run_step(step: Step, budget: float,
     log.info("▶ %s (ліміт %.0f хв)", step.name, limit / 60)
     try:
         proc = subprocess.Popen(step.argv, cwd=ROOT, start_new_session=True,
-                                env={**os.environ, **env} if env else None)
+                                env={**os.environ, STEP_ENV: step.name, **(env or {})})
     except OSError as e:
         return StepResult(step.name, "failed", 0.0, None, f"не запустився: {e}"), None
     try:

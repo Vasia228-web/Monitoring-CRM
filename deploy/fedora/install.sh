@@ -83,13 +83,18 @@ echo "== схема бази (план, без змін)"
 # запуск із тими самими налаштуваннями; відмова — юніти не встановлюю.
 echo "== пріоритети служб: пробний запуск без root"
 probe() { systemd-run --user --quiet --wait --collect "$@" /bin/true; }
-# Три набори: сайт, цикл, процес перевірки realty-lookup@ (там ще й ліміти пам'яті).
+# Чотири набори: сайт, цикл, процес перевірки realty-lookup@ (там ще й ліміти пам'яті)
+# і нічний диригент realty-night (E9, D53: ще й IOWeight — без делегування io systemd
+# його мовчки не застосовує, але відмову EPERM ловимо тут, а не о 01:10).
 if probe -p CPUWeight=1000 -p IOSchedulingClass=best-effort -p IOSchedulingPriority=0 \
    && probe -p Nice=15 -p CPUWeight=20 -p IOSchedulingClass=best-effort \
             -p IOSchedulingPriority=7 -p OOMScoreAdjust=500 \
    && probe -p Nice=10 -p CPUWeight=20 -p IOSchedulingClass=best-effort \
             -p IOSchedulingPriority=7 -p OOMScoreAdjust=500 \
-            -p MemoryHigh=700M -p MemoryMax=1000M; then
+            -p MemoryHigh=700M -p MemoryMax=1000M \
+   && probe -p Nice=15 -p CPUWeight=20 -p IOWeight=20 -p IOSchedulingClass=best-effort \
+            -p IOSchedulingPriority=7 -p OOMScoreAdjust=500 \
+            -p MemoryHigh=1800M -p MemoryMax=2600M; then
   echo "   ok"
 else
   echo "   ПОМИЛКА: systemd не прийняв налаштувань пріоритету — юніти НЕ оновлено." >&2
@@ -99,8 +104,30 @@ fi
 
 echo "== юніти systemd (користувацькі)"
 mkdir -p "$UNITS"
+# realty-identity.timer замінено на realty-night.timer (E9, D53): дозбір identity —
+# одна з робіт нічного диригента. Рішення «вмикати нічний таймер» — зі стану, який
+# переживає обірваний запуск (рецензія E9, D53): нічний потрібен, якщо увімкнений
+# старий identity, сам нічний (повторний запуск) або цикл (служби вже працюють).
+# Порядок: спершу новий юніт і його таймер, лише потім вимкнути й прибрати старий —
+# обрив посередині (Ctrl-C, обрив ssh) не лишає машину без нічного таймера.
+want_night=0
+for unit in realty-identity.timer realty-night.timer realty-cycle.timer; do
+  if systemctl --user is-enabled --quiet "$unit" 2>/dev/null; then
+    want_night=1
+  fi
+done
 # Разом із шаблоном realty-lookup@.service (перевірка при відкритті квартири).
 cp deploy/fedora/systemd/*.service deploy/fedora/systemd/*.timer "$UNITS/"
+systemctl --user daemon-reload
+if [ "$want_night" = 1 ]; then
+  systemctl --user enable --now realty-night.timer
+  echo "   нічний диригент: realty-night.timer (01:10 і 04:10)"
+fi
+# Старий таймер і служба: --now на таймері не зупиняє служби, що вже йде (розгортання
+# о 01:10–03:00), — її зупиняємо окремо, щоб вона не тримала замок без юніта.
+systemctl --user disable --now realty-identity.timer 2>/dev/null || true
+systemctl --user stop realty-identity.service 2>/dev/null || true
+rm -f "$UNITS/realty-identity.service" "$UNITS/realty-identity.timer"
 systemctl --user daemon-reload
 
 if [ "${1:-}" = "--enable" ]; then
@@ -109,7 +136,7 @@ if [ "${1:-}" = "--enable" ]; then
     exit 1
   fi
   systemctl --user enable --now realty-web.service realty-tunnel.service \
-    realty-cycle.timer realty-backup.timer realty-watchdog.timer realty-identity.timer realty-dedup-sample.timer
+    realty-cycle.timer realty-backup.timer realty-watchdog.timer realty-night.timer realty-dedup-sample.timer
   systemctl --user list-timers 'realty-*' --no-pager
 fi
 echo "Готово."

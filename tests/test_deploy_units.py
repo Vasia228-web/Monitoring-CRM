@@ -49,11 +49,17 @@ def test_web_is_favoured_over_the_cycle():
 
 
 def test_only_directives_that_work_without_root():
-    """IOWeight (контролер io не делеговано), MemoryLow (memory.low у батьківських
-    групах) і від'ємні Nice/OOMScoreAdjust без root не діють — їх у юнітах немає."""
+    """MemoryLow (memory.low у батьківських групах) і від'ємні Nice/OOMScoreAdjust без
+    root не діють — їх у юнітах немає. IOWeight (контролер io не делеговано) — лише
+    ЗНИЖЕННЯ для нічного диригента: його вимагає інтеграційний план (конфлікт 13,
+    E9, D53); без делегування systemd його мовчки не застосовує, а пробний запуск
+    install.sh ловить відмову (тест нижче). Підвищеного IOWeight (сайт) немає ніде."""
     for unit in UNITS.glob("*.service"):
         svc = _service(unit.name)
-        assert "IOWeight" not in svc and "MemoryLow" not in svc, unit.name
+        assert "MemoryLow" not in svc, unit.name
+        if "IOWeight" in svc:
+            assert unit.name == "realty-night.service", unit.name
+            assert int(svc["IOWeight"]) < 100, unit.name
         assert int(svc.get("Nice", "0")) >= 0, unit.name
         assert int(svc.get("OOMScoreAdjust", "0")) >= 0, unit.name
         assert svc.get("IOSchedulingClass", "best-effort") in ("best-effort", "idle"), unit.name
@@ -61,7 +67,7 @@ def test_only_directives_that_work_without_root():
 
 def test_background_jobs_yield_to_the_web():
     web = int(_service("realty-web.service")["CPUWeight"])
-    for name in ("realty-identity.service", "realty-backup.service",
+    for name in ("realty-night.service", "realty-backup.service",
                  "realty-dedup-sample.service", "realty-lookup@.service"):
         svc = _service(name)
         assert int(svc["CPUWeight"]) < web and int(svc["IOSchedulingPriority"]) == 7, name
@@ -101,7 +107,8 @@ def test_install_probes_every_priority_set_before_installing_units():
     probes = _probes()
     for name, keys in (("realty-web.service", PRIORITY[:5]),
                        ("realty-cycle.service", PRIORITY[:5]),
-                       ("realty-lookup@.service", PRIORITY)):
+                       ("realty-lookup@.service", PRIORITY),
+                       ("realty-night.service", PRIORITY + ("IOWeight",))):
         svc = _service(name)
         want = {k: svc[k] for k in keys if k in svc}
         assert any(all(p.get(k) == v for k, v in want.items()) for p in probes), (name, want)

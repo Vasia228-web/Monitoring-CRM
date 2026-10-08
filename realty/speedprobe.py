@@ -349,7 +349,7 @@ def render_summary(data: dict) -> str:
 # --- Пріоритети служб (cli.py speed priorities) — лише читання ----------------------------
 
 
-UNITS = ("realty-web.service", "realty-cycle.service", "realty-identity.service")
+UNITS = ("realty-web.service", "realty-cycle.service", "realty-night.service")
 
 
 def _read(path: Path) -> str | None:

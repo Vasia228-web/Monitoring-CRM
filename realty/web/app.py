@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from .. import configfiles
 from ..dedup import resolve_property_id
 from ..db import SessionLocal, init_db, tune_for_web
+from ..liveness import ui as liveness_ui
 from ..ops import init_ops
 from ..models import (
     Condition, Listing, MarketType, PriceEvent, Property, effective_active, is_clean,
@@ -75,6 +76,9 @@ from ..quality.rules import SEGMENT_MIN_SAMPLE, load_thresholds  # noqa: E402
 # Доступні в кожному шаблоні: навігація має нести стан, а не скидати його.
 templates.env.globals["carry"] = carry
 templates.env.globals["reset_url"] = reset_url
+# Позначка «актуальність не підтверджена» біля оголошень із хостів, які не
+# перевіряються (Благо; Блок 1, E8, D52) — для картки квартири.
+templates.env.globals["liveness_marker"] = liveness_ui.marker_for_url
 
 templates.env.filters["relative_date"] = _relative_date
 templates.env.filters["money"] = _money
@@ -385,10 +389,14 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         rows = _page_rows(s, ids[pager.offset:pager.offset + pager.size])
         stats = _cached_stats(s)
         in_work = _in_work(s)
+        # Благо не перевіряється (рішення власника 3, D46): позначка біля рядка
+        # квартири, жодне актуальне оголошення якої не можна перевірити (E8, D52).
+        unconfirmed = liveness_ui.list_rows(s, rows, collapse=collapse)
     peers = {row.id: _peer_comparison(row, thresholds) for row in rows}
     return templates.TemplateResponse(request, template, {
         "rows": rows, "stats": stats, "sources": sorted(stats["by_source"]),
-        "peers": peers,
+        "peers": peers, "unconfirmed": unconfirmed,
+        "unconfirmed_marker": liveness_ui.marker() if unconfirmed else None,
         "matched": matched, "warning": warning, "pager": pager,
         "page_sizes": PAGE_SIZES, "collapse": collapse,
         "in_work": in_work,

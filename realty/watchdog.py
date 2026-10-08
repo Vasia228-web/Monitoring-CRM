@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import notify, ops
 from .config import DATA_DIR, enabled_sources
@@ -54,6 +54,17 @@ BACKUP_MAX_AGE_HOURS = 30
 DEDUP_RISE = 1.3
 DEDUP_RISE_MIN = 20
 DEDUP_HISTORY = 8
+# Нічне вікно триває ≤ 1 год 50 хв (TimeoutStartSec realty-night.service); запис, що
+# «триває» довше, — диригента вбито ззовні (E9, D53).
+NIGHT_STUCK_HOURS = 2.5
+# Ніч не відбулась зовсім (рецензія E9, D53): за стільки годин жодного запису ночі,
+# хоча цикли йдуть (таймер realty-night не ввімкнено — напр., install.sh обірвався між
+# вимиканням старого таймера й увімкненням нового, — чи диригент падає до свого
+# запису). 26 год = доба + запас на зсув вікон. Тривога — лише коли нічний диригент
+# розгорнуто: його запис уже був або юніт таймера встановлено.
+NIGHT_MISSING_HOURS = 26
+NIGHT_TIMER_UNIT = Path.home() / ".config" / "systemd" / "user" / "realty-night.timer"
+COLLECTOR_OFF = DATA_DIR / "COLLECTOR_OFF"            # те саме, що runner.DISABLED_FLAG
 STATE_PATH = DATA_DIR / "alerts.json"
 PUBLIC_URL_PATH = DATA_DIR / "public_url"
 
@@ -261,6 +272,187 @@ def check_dedup(now: datetime) -> list[Alert]:
     return alerts
 
 
+def check_liveness(now: datetime) -> list[Alert]:
+    """Перевірка актуальності (Блок 1, E8, D52): запобіжник і здоров'я перевірки.
+
+    Тривога шлеться тим самим шляхом, що й решта (повтор раз на REPEAT_HOURS,
+    «відновилось» — коли зникне):
+      * liveness-fuse:<джерело> — запобіжник тримає джерело: нічого не знімаємо, доки
+        власник не зніме його на /status;
+      * liveness-coverage:<хост> — понад alerts.coverage_overdue_share актуальних
+        ключів не перевірені новим підписом довше за 2 × recheck_days (не раніше,
+        ніж минуло 2 × recheck_days від першого прогону нового коду);
+      * liveness-ria-unrecognized — сторінки DOM.RIA не розпізнано (змінилась розмітка);
+      * liveness-repeat404 — правило повторного 404 помиляється (частка повернень);
+      * liveness-snapshot-stale:<джерело> — повний перелік давно не оновлювався або
+        повного (complete) немає зовсім від розгортання.
+    Числа — з останнього прогону циклу (ops.liveness_runs), без важких запитів.
+    """
+    from . import configfiles, snapshot
+    from .liveness import fuse
+
+    alerts: list[Alert] = []
+    for f in fuse.state():
+        if f["state"] != "held":
+            continue
+        share = f"{100 * f['share']:.0f}%" if f.get("share") is not None else "—"
+        ex = "\n".join(f"  • {u}" for u in (f.get("examples") or [])[:5])
+        alerts.append(Alert(f"liveness-fuse:{f['source']}", (
+            f"🧯 Запобіжник перевірки актуальності: {f['source']} — підпис «знято» "
+            f"спрацював на {f['removed']} із {f['checked']} перевірених ({share}; "
+            f"{f.get('reason')}, тлумачення «{f.get('mode')}»). Для джерела нічого не "
+            f"знімаємо й не повертаємо, доки ви не знімете запобіжник на /status "
+            f"(розділ «Зняті оголошення»)." + (f"\nПриклади:\n{ex}" if ex else ""))))
+    cfg = configfiles.load("liveness")
+    ops.init_ops()
+    with ops.ops_session() as s:
+        last = s.scalars(select(ops.LivenessRun)
+                         .where(ops.LivenessRun.kind == "cycle", ops.LivenessRun.status == "ok",
+                                ops.LivenessRun.report.isnot(None))
+                         .order_by(ops.LivenessRun.id.desc()).limit(1)).first()
+        first = s.scalar(select(ops.LivenessRun.started_at)
+                         .order_by(ops.LivenessRun.id).limit(1))
+        report = json.loads(last.report) if last is not None else None
+        per_host = json.loads(last.per_host or "{}") if last is not None else {}
+    if report:
+        for host, d in (report.get("coverage_by_host") or {}).items():
+            spec = cfg.hosts.get(host)
+            if spec is None or not d.get("keys") or d.get("overdue_share") is None:
+                continue
+            settled = first is not None and now - first >= timedelta(days=2 * spec.recheck_days)
+            if settled and d["overdue_share"] > cfg.alerts.coverage_overdue_share:
+                alerts.append(Alert(f"liveness-coverage:{host}", (
+                    f"🔎 {host}: {100 * d['overdue_share']:.0f}% актуальних ключів не "
+                    f"перевірені довше за {2 * spec.recheck_days:g} дн. ({d['overdue']} із "
+                    f"{d['keys']}). Черга перевірки не встигає або сайт блокує.")))
+        rr = report.get("repeat404_returns") or {}
+        if (rr.get("removed") or 0) >= cfg.alerts.repeat404_min_removed and \
+                (rr.get("share") or 0) > cfg.alerts.repeat404_return_share:
+            alerts.append(Alert("liveness-repeat404", (
+                f"↩️ Правило «повторний 404» помиляється: повернулись {rr['returned']} із "
+                f"{rr['removed']} знятих за ним ({100 * rr['share']:.0f}%, поріг "
+                f"{100 * cfg.alerts.repeat404_return_share:.0f}%). Показати дані власнику.")))
+    for host, d in per_host.items():
+        spec = cfg.hosts.get(host)
+        if spec is None or spec.signature != "ria_page":
+            continue
+        sigs = d.get("signatures") or {}
+        total = sum(sigs.values())
+        bad = sigs.get("unrecognized", 0) + sigs.get("conflict", 0)
+        if total >= cfg.alerts.unrecognized_min_checked and \
+                bad / total > cfg.alerts.unrecognized_share:
+            alerts.append(Alert("liveness-ria-unrecognized", (
+                f"🧩 {host}: {bad} із {total} сторінок останнього прогону не розпізнано "
+                f"(стан чи банер). Схоже, змінилась розмітка — перевірка тихо сліпне.")))
+    for source, hours in cfg.alerts.snapshot_stale_hours.items():
+        snap = snapshot.load(source)
+        if snap is not None and snap.complete:
+            if now - snap.taken_at > timedelta(hours=hours):
+                alerts.append(Alert(f"liveness-snapshot-stale:{source}", (
+                    f"🗂 {source}: повний перелік {_ago(snap.taken_at, now)} (поріг {hours:g} "
+                    f"год) — зниклі з пошуку не потрапляють у перевірку.")))
+            continue
+        # Повного переліку немає зовсім (файл до E8 без `complete`, нові переліки
+        # обриваються): вік — від розгортання нового коду (перший прогін перевірки)
+        # або від старого файла, що пізніше (рецензія E8, D52). До розгортання — мовчимо.
+        if first is None:
+            continue
+        since = max(first, snap.taken_at) if snap is not None else first
+        if now - since > timedelta(hours=hours):
+            alerts.append(Alert(f"liveness-snapshot-stale:{source}", (
+                f"🗂 {source}: немає повного переліку з {since:%d.%m %H:%M} UTC "
+                f"({_ago(since, now)}; поріг {hours:g} год) — перелік обривається чи не "
+                f"збирається: зниклі з пошуку не потрапляють у перевірку, перевірка існування "
+                f"не відповідає. Причина — у журналі кроку «різниця списків».")))
+    return alerts
+
+
+def check_night(now: datetime) -> list[Alert]:
+    """Нічний диригент (`cli.py night`, E9, D53): тривоги за останню добу.
+
+      * night-backup — бекап на старті ночі не вдався: цієї ночі нічого не писали
+        (сам бекап ще й показує check_backup);
+      * night-blocked:<хост> — смугу зупинили блокування (401/403/429 поспіль чи
+        частка): до кінця ночі хост стоїть;
+      * night-hold:<хост> — блокування дві ночі поспіль: хост чекає рішення
+        (`cli.py night unhold --host …`), поки не знято — щоночі без смуги;
+      * night-late — замок звільнено пізніше за release_lock (ризик пропущеного циклу);
+      * night-failed — диригент упав;
+      * night-missing — за NIGHT_MISSING_HOURS жодного вікна, хоча цикли йдуть;
+      * night-skipped — два останні вікна поспіль пропущено (цикл не звільнив замок).
+    Запобіжник ночі — та сама тривога liveness-fuse:<джерело> (check_liveness).
+    Часи — місцеві (як вікна в config/night.toml), у дужках — UTC.
+    """
+    from .night.report import hm
+    ops.init_ops()
+    alerts: list[Alert] = []
+    since = now - timedelta(hours=24)
+    with ops.ops_session() as s:
+        runs = s.scalars(select(ops.NightRun).where(ops.NightRun.started_at >= since)
+                         .order_by(ops.NightRun.id)).all()
+        holds = s.scalars(select(ops.NightHold).where(ops.NightHold.state == "held")).all()
+        rows = [(r.id, r.status, r.window, r.night_date, r.message, r.lanes,
+                 r.lock_released_at, r.release_lock_at, r.started_at) for r in runs]
+        hold_rows = [(h.host, h.since, h.reason) for h in holds]
+        missing_since = now - timedelta(hours=NIGHT_MISSING_HOURS)
+        cycles = s.scalar(select(func.count()).select_from(ops.CycleRecord)
+                          .where(ops.CycleRecord.started_at >= missing_since))
+        recent = s.scalar(select(func.count()).select_from(ops.NightRun)
+                          .where(ops.NightRun.started_at >= missing_since))
+        ever = s.scalar(select(func.count()).select_from(ops.NightRun))
+        last_two = s.scalars(select(ops.NightRun.status).where(ops.NightRun.window.isnot(None))
+                             .order_by(ops.NightRun.id.desc()).limit(2)).all()
+    if (cycles and not recent and (ever or NIGHT_TIMER_UNIT.exists())
+            and not COLLECTOR_OFF.exists()):
+        alerts.append(Alert("night-missing", (
+            f"🌙❓ за {NIGHT_MISSING_HOURS} год не було жодного нічного вікна, хоча цикли "
+            f"йдуть: таймер realty-night вимкнено чи диригент падає до свого запису — "
+            f"перевірка актуальності й дозбір identity стоять. Перевірити: systemctl --user "
+            f"list-timers 'realty-*'; journalctl --user -u realty-night -n 80")))
+    if len(last_two) == 2 and all(st == "lock_timeout" for st in last_two):
+        alerts.append(Alert("night-skipped", (
+            "🌙⏳ два нічні вікна поспіль пропущено: цикл не звільнив замок до "
+            "stop_requests − lock.min_work_minutes. Чому цикл такий довгий — journalctl "
+            "--user -u realty-cycle -n 80.")))
+    for rid, status, window, night_date, message, lanes, released, release_by, started in rows:
+        when = f"ніч {night_date or '—'}, вікно {window or '—'}"
+        if status == "backup_failed":
+            alerts.append(Alert("night-backup", (
+                f"🌙💾 {when}: бекап на старті вікна не вдався — у цьому вікні нічого не "
+                f"писали (перевірки актуальності, M2/M3, дозбір не запускались; наступне "
+                f"вікно спробує бекап знову). "
+                f"{(message or '')[:300]}")))
+        if status == "failed":
+            alerts.append(Alert("night-failed", (
+                f"🌙⚠️ {when}: нічний диригент упав: {(message or '')[:300]}. "
+                f"Журнал: journalctl --user -u realty-night")))
+        if status == "running" and now - started > timedelta(hours=NIGHT_STUCK_HOURS):
+            # Процес убито ззовні (TimeoutStartSec, OOM) — свій запис він уже не закриє.
+            alerts.append(Alert("night-failed", (
+                f"🌙⚠️ {when}: нічний запис досі «триває» через {_ago(started, now)} — "
+                f"диригент, схоже, убито (systemd TimeoutStartSec чи брак пам'яті). "
+                f"Журнал: journalctl --user -u realty-night")))
+        if released is not None and release_by is not None and released > release_by:
+            alerts.append(Alert("night-late", (
+                f"🌙⏱ {when}: замок циклу звільнено о {hm(released)}, пізніше за межу "
+                f"{hm(release_by)} — наступний цикл міг пропуститись.")))
+        try:
+            lane_info = json.loads(lanes or "{}")
+        except ValueError:
+            lane_info = {}
+        for host, d in lane_info.items():
+            if d.get("stopped") in ("blocks", "block_share"):
+                alerts.append(Alert(f"night-blocked:{host}", (
+                    f"🌙🚧 {when}: смугу {host} зупинили блокування ({d.get('blocked')} із "
+                    f"{d.get('requests')} запитів — 401/403/429) — до кінця ночі цей сайт "
+                    f"не перевіряємо. Повториться наступної ночі — хост чекатиме рішення.")))
+    for host, held_since, reason in hold_rows:
+        alerts.append(Alert(f"night-hold:{host}", (
+            f"🌙✋ {host}: нічна смуга чекає рішення з {held_since:%d.%m %H:%M} UTC — "
+            f"{reason or 'блокування'}. Дозволити знову: cli.py night unhold --host {host}")))
+    return alerts
+
+
 # --- Стан і розсилка -----------------------------------------------------------------
 
 
@@ -298,7 +490,7 @@ def collect(now: datetime, state: dict) -> list[Alert]:
         except Exception as e:           # сторож не має падати через одну перевірку
             log.exception("перевірка впала")
             alerts.append(Alert("watchdog", f"⚠️ Сторож не зміг виконати перевірку: {e}"))
-    for check in (check_sources, check_verify_blocks, check_dedup):
+    for check in (check_sources, check_verify_blocks, check_dedup, check_liveness, check_night):
         try:
             alerts += check(now)
         except Exception as e:

@@ -229,3 +229,139 @@ def test_cloud_upload_failure_is_not_a_success(env, monkeypatch):
     assert res.status == "failed"
     assert any("rclone" in p for p in res.problems)
     assert backup.last_success_at() is None
+
+
+def test_manifest_and_restore_check_include_listing_events(env):
+    """Журнал зняттів і повернень (Блок 1, E8, D52) звіряється при відновленні: подія
+    не може загубитись без сигналу. На коді до E8 KEY_TABLES його не мав."""
+    con = _make_db(env / "live.db", listings=3)
+    con.execute("CREATE TABLE listing_events (id INTEGER PRIMARY KEY, listing_id INT)")
+    con.executemany("INSERT INTO listing_events(listing_id) VALUES (?)", [(1,), (2,)])
+    con.commit()
+    try:
+        res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk")
+    finally:
+        con.close()
+    assert res.status == "ok", res.problems
+    assert res.rows["listing_events"] == 2
+    check = backup.verify_archive(env / "bk" / res.file)
+    assert check["match"] and check["rows"]["listing_events"] == 2
+
+
+# --- Один бекап на машину (рецензія E9, D53) ---------------------------------------------------
+
+
+def _hold_lock(folder: Path):
+    import fcntl
+
+    folder.mkdir(parents=True, exist_ok=True)
+    fh = open(folder / "backup.lock", "a+")                  # backup.LOCK_NAME
+    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fh
+
+
+def test_second_backup_does_not_run_while_one_is_running(env):
+    """Нічний бекап на старті вікна 04:10 і таймер 04:30 не йдуть разом: другий не чекає —
+    «busy», жодного запису й архіву (два xz на HDD одночасно — лише навантаження)."""
+    con = _make_db(env / "live.db")
+    con.close()
+    fh = _hold_lock(env / "bk")
+    try:
+        res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk")
+        assert res.status == "busy" and not list((env / "bk").glob("*.tar.xz"))
+        assert backup.busy(env / "bk")
+    finally:
+        fh.close()
+    with ops.ops_session() as s:
+        assert s.query(backup.BackupRecord).count() == 0
+    assert not backup.busy(env / "bk")
+
+
+def test_waiting_backup_returns_the_result_of_the_one_it_waited_for(env):
+    """`backup run --wait-minutes`: інший бекап уже йде — дочекатися й віддати ЙОГО
+    результат, а не робити другий архів поспіль."""
+    con = _make_db(env / "live.db")
+    con.close()
+    fh = _hold_lock(env / "bk")
+
+    def other_backup_finishes():
+        import time as _t
+
+        _t.sleep(0.3)
+        with ops.ops_session() as s:
+            s.add(backup.BackupRecord(status="ok", file="realty-backup-other.tar.xz",
+                                      restored_ok=1, offsite="telegram:7", rows="{}"))
+        fh.close()
+
+    t = threading.Thread(target=other_backup_finishes)
+    t.start()
+    res = backup.run(db_url=f"sqlite:///{env / 'live.db'}", dest=env / "bk", wait_s=10)
+    t.join()
+    assert res.status == "ok" and res.file == "realty-backup-other.tar.xz"
+    assert res.offsite == ["telegram:7"]
+    with ops.ops_session() as s:
+        assert s.query(backup.BackupRecord).count() == 1     # свого запису не було
+
+
+def test_prune_removes_leftovers_of_a_killed_backup(env):
+    """Бекап, убитий посеред роботи, лишав теку з повною копією баз і .part — назавжди."""
+    import os
+    import time as _t
+
+    folder = env / "bk"
+    folder.mkdir()
+    old = _t.time() - 16 * 60                       # старші за стелю бекапу (15 хв)
+    stale_dir = folder / "realty-backup-abc123"
+    stale_dir.mkdir()
+    (stale_dir / "realty.db").write_bytes(b"x" * 10)
+    stale_part = folder / "realty-backup-20261008-010000.tar.part"
+    stale_part.write_bytes(b"x")
+    fresh_dir = folder / "realty-backup-fresh1"
+    fresh_dir.mkdir()
+    keep = folder / "realty-backup-20261008-020000.tar.xz"
+    keep.write_bytes(b"x")
+    for p in (stale_dir, stale_part, keep):
+        os.utime(p, (old, old))
+    removed = backup.prune(folder, keep=7)
+    assert set(removed) == {stale_dir.name, stale_part.name}
+    assert fresh_dir.exists() and keep.exists() and not stale_dir.exists()
+
+
+def test_night_backup_reads_its_own_record_not_the_newest(env, monkeypatch):
+    """Нічний диригент бере ПЕРШУ спробу після тієї, що була останньою до старту, а не
+    найновішу: інакше чужа «running» (таймер 04:30) робила б його успішний бекап невдалим."""
+    from realty.night import conductor
+    from realty.runner import StepResult
+
+    with ops.ops_session() as s:
+        s.add(backup.BackupRecord(status="ok", file="old.tar.xz", restored_ok=1, rows="{}"))
+
+    def run_step(step, budget):
+        assert "--wait-minutes" in step.argv
+        with ops.ops_session() as s:
+            s.add(backup.BackupRecord(status="ok", file="night.tar.xz", restored_ok=1,
+                                      offsite="telegram:1", rows="{}"))
+        with ops.ops_session() as s:
+            s.add(backup.BackupRecord(status="running"))      # таймер 04:30 почав свій
+        return StepResult(step.name, "ok", 1.0, 0), None
+
+    monkeypatch.setattr(conductor, "run_step", run_step)
+    got = conductor.default_backup(900)
+    assert got["status"] == "ok" and got["file"] == "night.tar.xz"
+
+
+def test_if_due_backup_skips_while_another_backup_runs(env, tmp_path):
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    fh = _hold_lock(tmp_path / "bk")
+    try:
+        r = subprocess.run([sys.executable, "cli.py", "backup", "--if-due"], cwd=root,
+                           capture_output=True, text=True, timeout=120,
+                           env={**os.environ, "BACKUP_DIR": str(tmp_path / "bk"),
+                                "OPS_DB_URL": f"sqlite:///{tmp_path / 'ops.db'}"})
+    finally:
+        fh.close()
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert "інший бекап ще йде" in r.stdout

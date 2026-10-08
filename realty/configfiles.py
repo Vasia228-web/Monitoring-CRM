@@ -241,18 +241,291 @@ class SpeedConfig:
 @dataclass(frozen=True)
 class LivenessRun:
     opened_recheck_minutes: float = field(**_limits(min=0))
+    budget_minutes: float = field(**_limits(min=1))
+    apply_batch_rows: int = field(**_limits(min=1, max=200))
+    max_consecutive_blocks: int = field(**_limits(min=1))
+    unknown_backoff_hours: tuple[float, ...] = field(**_limits(min=0, min_len=1))
+    absent_backoff_hours: tuple[float, ...] = field(**_limits(min=0, min_len=1))
+    reseen_grace_hours: float = field(**_limits(min=0))
+    reseen_ignore_before: str
+    opened_priority_hours: float = field(**_limits(min=0))
+    canary_fresh_hours: float = field(**_limits(min=1))
+
+    def problems(self) -> list[str]:
+        from datetime import datetime
+
+        try:
+            datetime.fromisoformat(self.reseen_ignore_before)
+        except ValueError:
+            return [f"reseen_ignore_before: {self.reseen_ignore_before!r} — не дата ISO (UTC)"]
+        return []
+
+
+@dataclass(frozen=True)
+class LivenessRepeat404:
+    # Один 404 ніколи не знімає (рішення власника 1, D46): серія — від двох.
+    count: int = field(**_limits(min=2))
+    min_interval_hours: float = field(**_limits(min=1))
+    feed_presence_hours: float = field(**_limits(min=1))
+    # Серія вже набрала `count`, а оголошення існує чи перевірка не відповіла:
+    # наступні 404-перевірки — через стільки годин (останнє значення — далі завжди).
+    after_count_hours: tuple[float, ...] = field(**_limits(min=1, min_len=1))
+
+
+@dataclass(frozen=True)
+class LivenessRemovedSample:
+    window_days: float = field(**_limits(min=1))
+    min_gap_days: float = field(**_limits(min=0))
+
+
+@dataclass(frozen=True)
+class LivenessFuse:
+    mode: str = field(**_limits(choices=("literal", "tiered")))
+    share: float = field(**_limits(min=0, max=1))
+    min_checked: int = field(**_limits(min=1))
+    hinted_share: float = field(**_limits(min=0, max=1))
+    hinted_min_checked: int = field(**_limits(min=1))
+    canary_trip_min: int = field(**_limits(min=1))
+    window_hours: float = field(**_limits(min=0))
+
+
+@dataclass(frozen=True)
+class LivenessAlerts:
+    coverage_overdue_share: float = field(**_limits(min=0, max=1))
+    unrecognized_share: float = field(**_limits(min=0, max=1))
+    unrecognized_min_checked: int = field(**_limits(min=1))
+    repeat404_return_share: float = field(**_limits(min=0, max=1))
+    repeat404_min_removed: int = field(**_limits(min=1))
+    snapshot_stale_hours: dict[str, float]
+
+
+@dataclass(frozen=True)
+class LivenessSnapshot:
+    shrink_guard: float = field(**_limits(min=0, max=1))
+    min_size: int = field(**_limits(min=1))
+    max_candidates_per_run: int = field(**_limits(min=1))
+    interval_hours: dict[str, float]
+
+
+@dataclass(frozen=True)
+class LivenessReport:
+    coverage_days: float = field(**_limits(min=1))
+    windows_days: tuple[int, ...] = field(**_limits(min=1, min_len=1))
+    return_window_days: float = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class LivenessUi:
+    unconfirmed_label: str
+    unconfirmed_hint: str
+
+
+@dataclass(frozen=True)
+class LivenessRiaPage:
+    state_marker: str
+    state_path: tuple[str, ...] = field(**_limits(min_len=1))
+    id_field: str
+    status_field: str
+    active_field: str
+    archive_field: str
+    archive_status: str
+    active_status: str
+    banner_class: str
+    banner_text: str
+    removed_requires_no_redirect: bool
+    deleted_at_ts_field: str
+    deleted_at_field: str
+    source_tz: str
+    api_card_url: str = field(**_limits(prefix="https://"))
+    api_deleted_keys: tuple[str, ...] = field(**_limits(min_len=1))
+    api_repair_url: str = field(**_limits(prefix="https://"))
+
+    def problems(self) -> list[str]:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        out: list[str] = []
+        for name in ("state_marker", "banner_class", "banner_text", "id_field",
+                     "status_field", "archive_status", "active_status"):
+            if not getattr(self, name).strip():
+                out.append(f"{name}: порожньо")
+        try:
+            ZoneInfo(self.source_tz)
+        except (ZoneInfoNotFoundError, ValueError):
+            out.append(f"source_tz: невідомий часовий пояс {self.source_tz!r}")
+        if "{id}" not in self.api_card_url:
+            out.append("api_card_url: шаблон без {id}")
+        if "{beautiful_url}" not in self.api_repair_url:
+            out.append("api_repair_url: шаблон без {beautiful_url}")
+        return out
+
+
+@dataclass(frozen=True)
+class LivenessCapture:
+    enabled: bool
+    ria_place: dict[str, str]
+    ria_seller: dict[str, str]
+    ria_profile: str
+    ria_profile_prefix: str
+
+    def problems(self) -> list[str]:
+        import re
+
+        out: list[str] = []
+        rx = re.compile(r"^(?:realty|data)(?:\.[\w]+)+\??$")
+        for table in ("ria_place", "ria_seller"):
+            for name, path in getattr(self, table).items():
+                if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+                    out.append(f"{table}.{name}: ім'я ключа — малі латинські й _")
+                if not rx.match(path):
+                    out.append(f"{table}.{name}: шлях {path!r} — realty.… чи data.…")
+        if self.ria_profile and not rx.match(self.ria_profile):
+            out.append(f"ria_profile: шлях {self.ria_profile!r} — realty.… чи data.…")
+        return out
+
+
+@dataclass(frozen=True)
+class LivenessOlx:
+    id_url: str = field(**_limits(prefix="https://"))
+    id_url_enabled: bool
+
+    def problems(self) -> list[str]:
+        return [] if "{id}" in self.id_url else ["id_url: шаблон без {id}"]
+
+
+# Перевірки існування для правила повторного 404 (realty/liveness/existence.py).
+EXISTENCE_STRATEGIES = ("feed", "ria_api", "olx_id_url")
+SNAPSHOT_STRATEGY_PREFIX = "snapshot:"
+
+
+@dataclass(frozen=True)
+class LivenessHost:
+    family: str
+    checkable: bool
+    reason: str
+    method: str = field(**_limits(choices=("HEAD", "GET", "")))
+    delay: float = field(**_limits(min=0))
+    pace_source: str
+    probe: str = field(**_limits(choices=("canonical", "fetch", "")))
+    signature: str = field(**_limits(choices=("code", "ria_page", "")))
+    max_bytes: int = field(**_limits(min=0))
+    removed_statuses: tuple[int, ...] = field(**_limits(min=100, max=599))
+    not_found_statuses: tuple[int, ...] = field(**_limits(min=100, max=599))
+    existence: tuple[str, ...]
+    recheck_days: float = field(**_limits(min=0))
+    sweep_per_run: int = field(**_limits(min=0))
+    hinted_cap_per_run: int = field(**_limits(min=0))
+    removed_sample_per_run: int = field(**_limits(min=0))
+    canaries_per_run: int = field(**_limits(min=0))
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        if not self.family.strip():
+            out.append("family: порожньо")
+        # НЕДОТОРКАНЕ ПРАВИЛО (рішення власника 1, D46): один 404 — «не знайдено».
+        if 404 in self.removed_statuses:
+            out.append("removed_statuses: 404 не може бути явним сигналом «знято» — лише "
+                       "повторний 404 з перевіркою існування (repeat_404)")
+        both = set(self.removed_statuses) & set(self.not_found_statuses)
+        if both:
+            out.append(f"код(и) {sorted(both)} і в removed_statuses, і в not_found_statuses")
+        bad = {c for c in (*self.removed_statuses, *self.not_found_statuses)
+               if 200 <= c < 400 or c in (401, 403, 429) or c >= 500}
+        if bad:
+            out.append(f"коди {sorted(bad)} не можуть бути вироком (живе, блокування чи збій)")
+        for name in self.existence:
+            if name not in EXISTENCE_STRATEGIES and not (
+                    name.startswith(SNAPSHOT_STRATEGY_PREFIX)
+                    and name[len(SNAPSHOT_STRATEGY_PREFIX):].strip()):
+                out.append(f"existence: невідома стратегія {name!r} (відомі: "
+                           f"{', '.join(EXISTENCE_STRATEGIES)}, snapshot:<джерело>)")
+        if self.checkable:
+            for name in ("method", "probe", "signature"):
+                if not getattr(self, name):
+                    out.append(f"{name}: порожньо для хоста, що перевіряється")
+            if self.signature == "ria_page" and (self.method != "GET" or self.max_bytes <= 0):
+                out.append("signature = ria_page потребує method = GET і max_bytes > 0")
+            if self.delay <= 0:
+                out.append("delay: має бути > 0 для хоста, що перевіряється")
+            if self.recheck_days <= 0:
+                out.append("recheck_days: має бути > 0 для хоста, що перевіряється")
+        elif not self.reason.strip():
+            out.append("reason: поясніть, чому хост не перевіряється")
+        return out
 
 
 @dataclass(frozen=True)
 class LivenessConfig:
-    """`config/liveness.toml` — Блок 1 (перевірка актуальності).
+    """`config/liveness.toml` — Блок 1 (перевірка актуальності), крок E8 (D52).
 
-    Поки тут один спільний ключ (інтеграція, конфлікт «перевірка під час
-    відкриття»): як часто можна повторно перевіряти оголошення, яке відкрили.
-    Решту схеми Блок 1 додасть разом зі своїм кодом.
+    Хости, паузи, підписи «знято», правило повторного 404 і перевірка існування,
+    графіки повторів, порції ярусів на прогін, вибірка знятих, запобіжник
+    (обидва тлумачення — `fuse.mode`), тривоги сторожа, позначка Благо на сайті.
+    `run.opened_recheck_minutes` — спільний із перевіркою при відкритті (Блок 2, D50).
     """
 
     run: LivenessRun
+    repeat_404: LivenessRepeat404
+    removed_sample: LivenessRemovedSample
+    fuse: LivenessFuse
+    alerts: LivenessAlerts
+    snapshot: LivenessSnapshot
+    report: LivenessReport
+    ui: LivenessUi
+    ria_page: LivenessRiaPage
+    capture: LivenessCapture
+    olx: LivenessOlx
+    hosts: dict[str, LivenessHost]
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        families: dict[str, str] = {}
+        for host, spec in self.hosts.items():
+            if host != host.strip().lower() or host.startswith(("www.", "m.")):
+                out.append(f"hosts.{host}: хост — малими літерами, без www./m.")
+            if spec.family in families:
+                out.append(f"hosts.{host}: сімейство «{spec.family}» уже має хост "
+                           f"{families[spec.family]}")
+            families[spec.family] = host
+        if not any(h.checkable for h in self.hosts.values()):
+            out.append("hosts: жоден хост не перевіряється")
+        if not self.ui.unconfirmed_label.strip():
+            out.append("ui.unconfirmed_label: порожньо")
+        for name in ("alerts.snapshot_stale_hours", "snapshot.interval_hours"):
+            table = self.alerts.snapshot_stale_hours if name.startswith("alerts") \
+                else self.snapshot.interval_hours
+            for source, hours in table.items():
+                if hours <= 0:
+                    out.append(f"{name}.{source}: має бути > 0")
+        out += self._budget_problems()
+        return out
+
+    def _budget_problems(self) -> list[str]:
+        """Порції хостів умістяться в стелю прогону, стеля — у ліміт кроку циклу.
+
+        Кожен ключ — щонайменше одна пауза хоста (`delay` — нижня межа: відповідь
+        і перевірки існування — понад неї), тож (контрольні + підказані + вибірка
+        знятих + сліпий обхід) × delay ≤ 80% стелі; стеля мережевої фази — на 5 хв
+        менша за ліміт кроку «перевірка актуальності» (runner.TASK_TIMEOUTS):
+        застосування, зведення й запас на запити, що вже в дорозі (рецензія E8, D52).
+        """
+        from .runner import TASK_TIMEOUTS
+
+        out: list[str] = []
+        budget_s = self.run.budget_minutes * 60
+        step_min = TASK_TIMEOUTS["verify"] / 60
+        if self.run.budget_minutes > step_min - 5:
+            out.append(f"run.budget_minutes: {self.run.budget_minutes:g} — понад ліміт кроку "
+                       f"циклу мінус 5 хв ({step_min:g} − 5)")
+        for host, spec in self.hosts.items():
+            if not spec.checkable:
+                continue
+            keys = (spec.canaries_per_run + spec.hinted_cap_per_run
+                    + spec.removed_sample_per_run + spec.sweep_per_run)
+            need = keys * spec.delay
+            if need > 0.8 * budget_s:
+                out.append(f"hosts.{host}: {keys} ключів × {spec.delay:g} с = {need:.0f} с — "
+                           f"понад 80% стелі прогону ({0.8 * budget_s:.0f} с)")
+        return out
 
 
 def _regex_problems(where: str, pattern: str, *, groups: tuple[str, ...] = ()) -> list[str]:
@@ -466,6 +739,171 @@ class PrivacyApply:
     backup_max_age_h: float = field(**_limits(min=0.1))
 
 
+# --- Нічний диригент (`cli.py night`, E9, D53) -------------------------------------------
+
+# Роботи реєстру — у порядку пріоритету всередині смуги хоста (config/night.toml,
+# jobs.order). Перші вісім — яруси перевірки актуальності (realty/liveness/queue.py),
+# identity — колишній realty-identity.timer (дозбір ознак квартири).
+NIGHT_JOBS = ("canary", "held", "legacy_404", "onetime_reseen", "onetime_hinted",
+              "onetime_blind", "rm_sample", "overdue", "identity")
+IDENTITY_SOURCES = ("domria", "lun", "flombu")
+
+
+def hhmm_minutes(text: str) -> int | None:
+    """«ГГ:ХХ» (місцевий час машини) → хвилини від півночі; не той формат — None."""
+    import re
+
+    m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", text or "")
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+
+@dataclass(frozen=True)
+class NightWindow:
+    start: str
+    stop_requests: str
+    release_lock: str
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        mins = {}
+        for name in ("start", "stop_requests", "release_lock"):
+            mins[name] = hhmm_minutes(getattr(self, name))
+            if mins[name] is None:
+                out.append(f"{name}: {getattr(self, name)!r} — час «ГГ:ХХ»")
+        if not out and not mins["start"] < mins["stop_requests"] < mins["release_lock"]:
+            out.append("має бути start < stop_requests < release_lock у межах однієї доби")
+        return out
+
+    def minutes(self) -> tuple[int, int, int]:
+        return (hhmm_minutes(self.start), hhmm_minutes(self.stop_requests),
+                hhmm_minutes(self.release_lock))
+
+
+@dataclass(frozen=True)
+class NightLock:
+    poll_seconds: float = field(**_limits(min=1))
+    min_work_minutes: float = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class NightBackup:
+    max_age_hours: float = field(**_limits(min=1))
+    # Вікно з одноразовими роботами (M2/M3: тисячі повернень і знять) — бекап, якщо
+    # останній успішний старший за стільки годин (рецензія E9, D53).
+    onetime_max_age_hours: float = field(**_limits(min=0.5))
+    timeout_minutes: float = field(**_limits(min=1))
+
+    def problems(self) -> list[str]:
+        if self.onetime_max_age_hours > self.max_age_hours:
+            return ["onetime_max_age_hours: не більше за max_age_hours"]
+        return []
+
+
+@dataclass(frozen=True)
+class NightLanes:
+    batch_minutes: float = field(**_limits(min=0.1))
+    poll_seconds: float = field(**_limits(min=0.1))
+    kill_grace_seconds: float = field(**_limits(min=1))
+    block_share: float = field(**_limits(min=0, max=1))
+    block_min_requests: int = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class NightJobs:
+    order: tuple[str, ...] = field(**_limits(min_len=1, choices=NIGHT_JOBS))
+    onetime_seed: int
+    rm_sample_per_host: dict[str, int]
+    identity_sources: dict[str, str]
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        if len(set(self.order)) != len(self.order):
+            out.append("order: роботи повторюються")
+        if "canary" in self.order and self.order[0] != "canary":
+            # Запобіжник за контрольними (≥2 «знято» серед відомо живих) має побачити
+            # зламаний підпис у ПЕРШОМУ пакеті ночі, а не після тисяч запитів.
+            out.append("order: canary — першою (контрольні — у першому пакеті ночі)")
+        if "identity" in self.order and self.order[-1] != "identity":
+            out.append("order: identity — останньою (пріоритет Блоку 1 над дозбором; "
+                       "інтеграція, конфлікт 3)")
+        for host, n in self.rm_sample_per_host.items():
+            if n < 0:
+                out.append(f"rm_sample_per_host.{host}: має бути ≥ 0")
+        for host, source in self.identity_sources.items():
+            if source not in IDENTITY_SOURCES:
+                out.append(f"identity_sources.{host}: {source!r} — не з {list(IDENTITY_SOURCES)}")
+        if len(set(self.identity_sources.values())) != len(self.identity_sources):
+            out.append("identity_sources: одне джерело — в одній смузі")
+        return out
+
+
+@dataclass(frozen=True)
+class NightReport:
+    liquidity: bool
+    # Типовий час одного запиту смуги, с (`night --dry-run`, доки немає заміру ночі):
+    # темп — старт-до-старту, тож справжній крок = max(темп, затримка відповіді).
+    typical_request_seconds: dict[str, float]
+
+    def problems(self) -> list[str]:
+        return [f"typical_request_seconds.{h}: має бути > 0"
+                for h, v in self.typical_request_seconds.items() if not v > 0]
+
+
+@dataclass(frozen=True)
+class NightConfig:
+    """`config/night.toml` — нічний диригент (`cli.py night`, E9, D53).
+
+    Вікна (місцевий час машини), замок циклу, бекап на старті ночі, смуги хостів і
+    пакети застосування, порядок робіт реєстру. Темп кожного хоста — НЕ тут, а в
+    config/liveness.toml (`policy.pace(mode="night")` = max(delay, SOURCES.full_delay);
+    інтеграція, конфлікт 4); запобіжник — fuse.* там само.
+    """
+
+    windows: tuple[NightWindow, ...] = field(**_limits(min_len=1))
+    lock: NightLock
+    backup: NightBackup
+    lanes: NightLanes
+    jobs: NightJobs
+    report: NightReport
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        spans = sorted((w.minutes(), i) for i, w in enumerate(self.windows))
+        for (a, i), (b, j) in zip(spans, spans[1:]):
+            if a[2] > b[0]:
+                out.append(f"windows[{i}] і windows[{j}] перекриваються (замок до "
+                           f"{self.windows[i].release_lock} пізніше за старт "
+                           f"{self.windows[j].start})")
+        for (start, stop, release), i in spans:
+            # Після стелі запитів: смуги дочекаються запитів у дорозі (kill_grace), далі
+            # останній пакет і звільнення замка — до release_lock (≥2 хв запасу).
+            if (release - stop) * 60 < self.lanes.kill_grace_seconds + 120:
+                out.append(f"windows[{i}]: між stop_requests і release_lock менше за "
+                           f"kill_grace_seconds + 2 хв")
+            if (stop - start) <= self.lock.min_work_minutes:
+                out.append(f"windows[{i}]: вікно коротше за lock.min_work_minutes")
+        out += self._liveness_problems()
+        return out
+
+    def _liveness_problems(self) -> list[str]:
+        """Хости смуг — ті самі, що в config/liveness.toml (і перевіряються)."""
+        try:
+            hosts = load("liveness").hosts
+        except ConfigError:
+            return []                              # помилку liveness.toml покаже його перевірка
+        out: list[str] = []
+        for table, keys in (("jobs.rm_sample_per_host", self.jobs.rm_sample_per_host),
+                            ("jobs.identity_sources", self.jobs.identity_sources),
+                            ("report.typical_request_seconds",
+                             self.report.typical_request_seconds)):
+            for host in keys:
+                spec = hosts.get(host)
+                if spec is None or not spec.checkable:
+                    out.append(f"{table}.{host}: такого хоста, що перевіряється, немає "
+                               f"в config/liveness.toml")
+        return out
+
+
 @dataclass(frozen=True)
 class PrivacyConfig:
     """`config/privacy.toml` — телефони в описах і назвах (рішення власника 5, D46; E6, D51)."""
@@ -481,6 +919,7 @@ SCHEMAS: dict[str, type] = {
     "liveness": LivenessConfig,
     "links": LinksConfig,
     "privacy": PrivacyConfig,
+    "night": NightConfig,
 }
 
 
