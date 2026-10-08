@@ -39,6 +39,50 @@ systemctl --user restart realty-web                # нові кеші, стис
 .venv/bin/python cli.py speed priorities           # чи діють пріоритети (cgroup, nice, ionice)
 ```
 
+Райони й ЖК (Блок 4, крок E10, D57) — після `db migrate` (схема S4: 14 колонок, індекс
+`ix_listings_place`; ops.db — `places_runs`, `dedup_audits.suspicious_core`: їх додає
+init_ops() першого ж процесу, `db migrate --dry-run` їх показує), між циклами. Без
+`db migrate` команди `places` відмовляють («спершу `cli.py db migrate`», код 2) і схеми
+не чіпають:
+
+```bash
+.venv/bin/python cli.py places check               # довідник config/places/ без колізій
+.venv/bin/python cli.py places assign --dry-run    # охоплення до/після, нерозпізнані назви, would_change = 0
+.venv/bin/python cli.py places sample --out ~/places_sample.csv   # вибірка + докази будинку
+```
+
+**СТОП: власник переглядає вибірку** (≥50 на джерело й ступінь і шар «громада»; ціль —
+район ≥90%, ЖК ≥98%; колонки ria_district_same_addr / lun_label_same_addr /
+zhk_same_addr — що кажуть інші квартири за тією самою адресою). До його «так» крок у
+циклі вимкнено (`config/cycle.toml` `[places] enabled = false` — диригент його не ставить),
+а сайт показує сирий район, як до E10 (без фільтрів місця). Після «так»:
+
+```bash
+.venv/bin/python cli.py backup run                 # бекап перед першим записом ключів
+.venv/bin/python cli.py places assign              # під замком циклу; лише порожні ключі
+.venv/bin/python cli.py dedup                      # квартири й row_* (або дочекатися кроку «дублі»)
+# config/cycle.toml: [places] enabled = true       — далі крок у кожному циклі перед «дублі»
+systemctl --user restart realty-web                # фільтри «Район»/«ЖК», вкладка «Райони й ЖК»
+```
+
+Виправити ВЖЕ визначені ключі (would_change на /status, рішення власника):
+`cli.py places reassign` (пробний: що змінилось би), потім `cli.py backup run` і одразу
+`cli.py places reassign --apply [--ids-out ФАЙЛ]` (відмова без бекапу, свіжішого за
+`rules.reassign.backup_max_age_min`; id змінених — у ops.places_runs).
+
+**Швидкість — умова приймання.** Після перезапуску realty-web: `cli.py speed probe` (або
+дочекатися зондів) і через добу `cli.py speed report` — p95 «/» за 24 год проти D54. Якщо
+p95 «/» виріс більш ніж на 50 мс або «Райони й ЖК» (/places) p95 > 300 мс — відкат
+(`git checkout <попередній коміт>` + перезапуск realty-web; нові колонки й індекс старий
+код ігнорує) або ескалація з числами.
+
+Сирі поля (district, complex_name, location, title, last_seen) крок не змінює ніколи;
+відкат — попередній коміт (нові колонки старий код ігнорує; DROP INDEX
+ix_listings_place — за бажанням). flombu після E10 збирає ~400 квартир замість 27
+(перший цикл — ще ~380 сторінок оголошень, ≈7 хв); населений пункт поза містом і
+довідником (Тисмениця) відкидається, точність точки — за рівнем геокодування (лише з
+номером будинку — «точна»).
+
 `install.sh` вмикає `realty-night.timer`, якщо увімкнений старий `realty-identity.timer`,
 сам нічний або `realty-cycle.timer`, і лише ПІСЛЯ цього вимикає й прибирає старий
 таймер (і зупиняє його службу, якщо та саме йде): обірваний запуск можна просто

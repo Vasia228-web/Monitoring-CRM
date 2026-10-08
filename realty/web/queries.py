@@ -112,8 +112,16 @@ def _active_for(model):
 
 def _apply_filters(stmt, *, condition: str = "", market: str = "", source: str = "",
                    rooms: str = "", price_min: float | None = None,
-                   price_max: float | None = None, in_progress: bool | None = None):
-    """Фільтри списку — одні для `listing_query` і `list_ids_select`."""
+                   price_max: float | None = None, in_progress: bool | None = None,
+                   place=None):
+    """Фільтри списку — одні для `listing_query` і `list_ids_select`.
+
+    `place` — перевірена вибірка «Район / ЖК / тільки місто» (places.facets.Selection,
+    Блок 4, E10): умови на row_* — ті самі, що рахують лічильники біля варіантів.
+    """
+    if place is not None and place.active:
+        from ..places import facets
+        stmt = stmt.where(*facets.conditions(place, Listing))
     if in_progress is True:
         stmt = stmt.where(Listing.in_progress.is_(True))
     elif in_progress is False:
@@ -140,7 +148,7 @@ def listing_query(*, condition: str = "", market: str = "", source: str = "",
                   rooms: str = "", price_min: float | None = None,
                   price_max: float | None = None, sort: str = DEFAULT_SORT,
                   in_progress: bool | None = None,
-                  collapse: bool = True) -> Select:
+                  collapse: bool = True, place=None) -> Select:
     """Базова вибірка оголошень із застосованими фільтрами й сортуванням."""
     stmt = select(Listing).where(is_clean(), effective_active().is_(True))
 
@@ -152,14 +160,15 @@ def listing_query(*, condition: str = "", market: str = "", source: str = "",
 
     stmt = _apply_filters(stmt, condition=condition, market=market, source=source,
                           rooms=rooms, price_min=price_min, price_max=price_max,
-                          in_progress=in_progress)
+                          in_progress=in_progress, place=place)
     return stmt.order_by(*order_clause(sort))
 
 
 def list_ids_select(*, condition: str = "", market: str = "", source: str = "",
                     rooms: str = "", price_min: float | None = None,
                     price_max: float | None = None, sort: str = DEFAULT_SORT,
-                    in_progress: bool | None = None, collapse: bool = True) -> Select:
+                    in_progress: bool | None = None, collapse: bool = True,
+                    place=None) -> Select:
     """Фаза 1 списку: id усіх рядків фільтра в порядку показу.
 
     Ті самі умови й той самий порядок (з id останнім ключем), що й
@@ -176,7 +185,7 @@ def list_ids_select(*, condition: str = "", market: str = "", source: str = "",
                               Listing.id.in_(_keeper_ids())))
     stmt = _apply_filters(stmt, condition=condition, market=market, source=source,
                           rooms=rooms, price_min=price_min, price_max=price_max,
-                          in_progress=in_progress)
+                          in_progress=in_progress, place=place)
     return stmt.order_by(*order_clause(sort))
 
 

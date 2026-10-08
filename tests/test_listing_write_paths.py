@@ -83,6 +83,13 @@ ALLOWED = {
         ({"site_key"}, "разове заповнення ключа (links.site_key): NULL або --fix-mismatched"),
     ("realty/privacy_pass.py", 'conn.execute(text(f"UPDATE listings SET {sets} WHERE id = :id"), params)'):
         ({"description", "title"}, "разова заміна телефонів: значення — privacy.find"),
+    ("realty/dedup.py", '_ROW_UPDATE = ("UPDATE listings SET row_district = :d, row_complex = :c, row_area = :a "'):
+        ({"row_district", "row_complex", "row_area"},
+         "район і ЖК квартири на її оголошеннях (кеш; Блок 4, E10, D57)"),
+    ("realty/places/assign.py", 'res = conn.execute(text(f"UPDATE listings SET {sets} WHERE {where}"), params)'):
+        ({"district_key", "district_how", "complex_key", "complex_how", "place_area",
+          "place_at", "place_sig"},
+         "крок «райони й ЖК»: ключі лише туди, де порожньо; reassign — за рішенням власника (Блок 4, E10, D57)"),
     ("scripts/cleanup_test_artifacts.py", 'con.executemany("UPDATE listings SET views = 0, viewed_at = NULL'):
         ({"views", "viewed_at"}, "прибирання слідів тестів"),
     ("scripts/page_equality.py", 'f"UPDATE listings SET in_progress = 1, in_progress_at = ? "'):

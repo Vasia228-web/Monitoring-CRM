@@ -20,6 +20,7 @@ from ..normalize import (
     classify_condition, classify_market, in_ivano_frankivsk, parse_area, parse_date, parse_price,
     parse_rooms,
 )
+from ..places import extract as place_extract
 from .base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,40 @@ def parse_detail(html: str) -> dict:
     if condition is not Condition.UNKNOWN:
         out["condition"] = condition
     return out
+
+
+def _city_by_coords() -> bool:
+    """config/places/rules.toml sources.flombu_city_by_coords (зламаний конфіг — як до E10)."""
+    from .. import configfiles
+
+    try:
+        return configfiles.load("places/rules").sources.flombu_city_by_coords
+    except configfiles.ConfigError as e:
+        log.error("config/places/rules.toml не читається — flombu: місто за текстом: %s", e)
+        return False
+
+
+def _village(locality: str | None) -> str | None:
+    """Населений пункт, якщо це не саме місто (село громади — як мітка села LUN)."""
+    if not locality or not isinstance(locality, str):
+        return None
+    return None if in_ivano_frankivsk(locality) else locality.strip() or None
+
+
+def _locality_ok(locality: str) -> bool:
+    """Населений пункт flombu — саме місто або назва з довідника районів (район, село
+    громади, «поза громадою»). Прямокутник міста ширший за громаду: його східний край
+    — за ~1,5 км від центру Тисмениці, північна смуга — села інших громад (рецензія
+    E10), тож при явному населеному пункті координат замало."""
+    if in_ivano_frankivsk(locality):
+        return True
+    from ..places import directory
+
+    d = directory.current()
+    if d is None:
+        return False
+    kind, key = d.match_district(locality)
+    return kind == "district" or (kind == "ignore" and key == "city")
 
 
 class FlombuSource(BaseSource):
@@ -133,11 +168,37 @@ class FlombuSource(BaseSource):
         if "квартир" not in kind:  # цікавлять лише квартири
             return {}
 
-        rel = ((item.get("relationships") or {}).get("estateRecordLocation") or {}).get("data") or {}
-        g = geo.get(rel.get("id"), {}) if rel else {}
+        # Зв'язок з локацією: API віддає relationships['location'] (тип
+        # estateRecordLocation), а код до E10 шукав ключ 'estateRecordLocation' — координат
+        # і населеного пункту не було в жодному з 27 оголошень (Етап 0, живий JSON:
+        # «ключ зв'язку location»). Старий ключ лишається запасним.
+        rels = item.get("relationships") or {}
+        rel = ((rels.get("location") or rels.get("estateRecordLocation") or {})
+               .get("data") or {})
+        g = geo.get(rel.get("id"), {}) if isinstance(rel, dict) and rel else {}
         address = g.get("originalAddress") or a.get("addressToStreet") or ""
-        if not in_ivano_frankivsk(address or a.get("addressLocalityHumanVal"),
-                                  g.get("latitude"), g.get("longitude")):
+        text = address or a.get("addressLocalityHumanVal")
+        lat, lon = g.get("latitude"), g.get("longitude")
+        # Місто чи ні — за координатами (той самий BBOX, що й у LUN; внутрішнє рішення
+        # D47 п. 8, D57: збір flombu 27 → ~400 квартир). Без координат — за текстом, як і
+        # досі. config/places/rules.toml sources.flombu_city_by_coords = false — як до
+        # E10 (текст), а скільки пройшло б за координатами, — у stats.would_add_geo.
+        by_coords = getattr(self, "_by_coords", None)
+        if by_coords is None:
+            by_coords = self._by_coords = _city_by_coords()
+        if by_coords:
+            inside = in_ivano_frankivsk(text, lat, lon)
+            locality = g.get("locality") if isinstance(g.get("locality"), str) else ""
+            if inside and locality.strip() and not _locality_ok(locality.strip()):
+                # Точка в прямокутнику, але населений пункт — інший (Тисмениця, село
+                # іншої громади): не місто.
+                self.stats["skipped_locality"] = self.stats.get("skipped_locality", 0) + 1
+                return {}
+        else:
+            inside = in_ivano_frankivsk(text)
+            if not inside and lat is not None and in_ivano_frankivsk(text, lat, lon):
+                self.stats["would_add_geo"] = self.stats.get("would_add_geo", 0) + 1
+        if not inside:
             self.stats["skipped_geo"] += 1
             return {}
 
@@ -159,7 +220,11 @@ class FlombuSource(BaseSource):
             "rooms": parse_rooms(accents) or parse_rooms(title),
             "area_total": area,
             "location": a.get("addressToStreet") or g.get("route") or None,
-            "district": g.get("sublocality1") or g.get("locality") or None,
+            # Район flombu не дає (sublocality1 порожнє в 12 з 12, Етап 0); населений
+            # пункт — у place_raw, а в district — лише село (не саме місто: «Івано-
+            # Франківськ» районом не є; D57).
+            "district": g.get("sublocality1") or _village(g.get("locality")) or None,
+            "place_raw": place_extract.from_flombu_location(g) or None,
             "published_at": parse_date(a.get("publishedAtHumanVal")),
             "market_type": classify_market(title, accents),
             "condition": classify_condition(title, accents),

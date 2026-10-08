@@ -206,14 +206,18 @@ def test_list_key_covers_every_filter(monkeypatch):
     з LIST_KEYS, Блоки 3/4 додаватимуть туди фільтри).
     """
     speedcache = _mod("realty.web.speedcache")
-    state = {"condition": "", "market": "", "source": "", "rooms": "2", "price_min": None,
-             "price_max": None, "sort": "price_desc", "all_ads": ""}
+    state = {"condition": "", "market": "", "source": "", "rooms": "2", "district": "",
+             "complex": "", "area": "", "price_min": None, "price_max": None,
+             "sort": "price_desc", "all_ads": ""}
     a = speedcache.list_key(state, in_progress=None, collapse=True)
     b = speedcache.list_key({**state, "rooms": "3"}, in_progress=None, collapse=True)
     assert a != b
+    # Фільтри Блоку 4 (E10, D57) — теж у ключі.
+    for k, v in (("district", "pasichna"), ("complex", "_none"), ("area", "city")):
+        assert speedcache.list_key({**state, k: v}, in_progress=None, collapse=True) != a
     # Нумерація сторінки списку id не змінює — і в ключ не входить.
     assert "page" not in dict(a[0]) and "per_page" not in dict(a[0])
-    monkeypatch.setattr(speedcache, "LIST_KEYS", (*speedcache.LIST_KEYS, "district"))
+    monkeypatch.setattr(speedcache, "LIST_KEYS", (*speedcache.LIST_KEYS, "seller"))
     with pytest.raises(KeyError):
         speedcache.list_key(state, in_progress=None, collapse=True)
 

@@ -155,6 +155,10 @@ class DedupAudit(OpsBase):
     rules: Mapped[str | None] = mapped_column(String(200))
     properties: Mapped[int] = mapped_column(Integer, default=0)     # квартир з 2+ оголошень
     suspicious: Mapped[int] = mapped_column(Integer, default=0)
+    # Підозрілих лише за «старими» видами (config/places/rules.toml audit.core_kinds;
+    # Блок 4, E10, D57): з ним сторож порівнює сплеск, щоб нові види complex /
+    # complex_phase не дали хибної тривоги. NULL — перевірка до E10 (тоді — suspicious).
+    suspicious_core: Mapped[int | None] = mapped_column(Integer, nullable=True)
     missed: Mapped[int] = mapped_column(Integer, default=0)
     by_kind: Mapped[str | None] = mapped_column(Text)               # JSON {вид: квартир}
     queue: Mapped[str | None] = mapped_column(Text)                 # JSON [{property_id, kinds, n}]
@@ -431,6 +435,42 @@ class NightRun(OpsBase):
     message: Mapped[str | None] = mapped_column(Text)
 
 
+class PlacesRun(OpsBase):
+    """Один прогін кроку «райони й ЖК» (`cli.py places assign`; Блок 4, E10, D57).
+
+    Сайт (/status, GET /api/status/places) читає останній рядок — готове зведення, без
+    агрегацій на запит (інтеграція, конфлікт 10). Статус: ok | dry_run | failed.
+    JSON-поля: заповнено за полями, would_change (зміни непорожніх ключів, НЕ
+    застосовані) з прикладами, охоплення до/після за джерелами (оголошення й рядки
+    сайту), ступені, точність, нерозпізнані назви (поле, кількість, приклади id,
+    підказка «схоже на…»), ЖК без району. `directory_ver` — версія довідника,
+    `rules_hash` — хеш config/places/rules.toml.
+    """
+
+    __tablename__ = "places_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    kind: Mapped[str | None] = mapped_column(String(16))   # cycle | manual | reassign
+    directory_ver: Mapped[str | None] = mapped_column(String(16))
+    rules_hash: Mapped[str | None] = mapped_column(String(16))
+    rows: Mapped[int | None] = mapped_column(Integer)
+    filled: Mapped[str | None] = mapped_column(Text)              # JSON
+    would_change: Mapped[int | None] = mapped_column(Integer)
+    would_change_detail: Mapped[str | None] = mapped_column(Text)  # JSON
+    coverage: Mapped[str | None] = mapped_column(Text)            # JSON
+    tiers: Mapped[str | None] = mapped_column(Text)               # JSON
+    precision: Mapped[str | None] = mapped_column(Text)           # JSON
+    unknown: Mapped[str | None] = mapped_column(Text)             # JSON
+    unlinked: Mapped[str | None] = mapped_column(Text)            # JSON
+    properties_changed: Mapped[int | None] = mapped_column(Integer)
+    rows_synced: Mapped[int | None] = mapped_column(Integer)
+    seconds: Mapped[float | None] = mapped_column(Float)
+    message: Mapped[str | None] = mapped_column(Text)
+
+
 class NightHold(OpsBase):
     """Хост, чию нічну смугу зупиняли блокування дві ночі поспіль: чекає рішення
     власника (інтеграція, D47: «повторилось наступної ночі — чекати рішення»).
@@ -499,6 +539,24 @@ def init_ops(*, force: bool = False) -> None:
         _ready[current] = tables
 
 
+def pending_schema() -> list[str]:
+    """Чого бракує в ops.db проти моделі — таблиці й колонки (лише читання схеми).
+
+    Для `cli.py db migrate --dry-run` (рецензія E10): ці зміни застосовує не міграція, а
+    init_ops() будь-якого процесу (сайт, сторож, крок) — тож план має їх показати.
+    """
+    insp = inspect(engine)
+    out = []
+    for table in OpsBase.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            out.append(f"CREATE TABLE {table.name}")
+            continue
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        out += [f"ALTER TABLE {table.name} ADD COLUMN {c.name}" for c in table.columns
+                if c.name not in have]
+    return out
+
+
 def _add_missing_columns() -> None:
     """Доливає нові колонки в уже створені таблиці телеметрії.
 
@@ -514,7 +572,13 @@ def _add_missing_columns() -> None:
             if col.name in have:
                 continue
             ddl = col.type.compile(engine.dialect)
-            default = " DEFAULT 0" if ddl.upper().startswith(("BOOL", "INT", "FLOAT")) else ""
+            # Числове поле, яке модель дозволяє лишати порожнім (`Mapped[int | None]` без
+            # значення за замовчуванням), — NULL, а не 0: для dedup_audits.suspicious_core
+            # «0» на старих рядках означав би «нуль підозрілих», а не «не рахували» (E10,
+            # D57). Обов'язкові числові поля — як і досі, DEFAULT 0.
+            numeric = ddl.upper().startswith(("BOOL", "INT", "FLOAT"))
+            optional = col.nullable and col.default is None and col.server_default is None
+            default = " DEFAULT 0" if numeric and not optional else ""
             with engine.begin() as conn:
                 conn.execute(text(
                     f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl}{default}'

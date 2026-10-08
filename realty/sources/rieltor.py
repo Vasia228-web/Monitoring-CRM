@@ -86,4 +86,11 @@ def parse_detail(html: str) -> dict:
     if condition is not Condition.UNKNOWN:
         out["condition"] = condition
 
+    # Блок ЖК картки (Блок 4, E10, D57; Етап 0 — на 31% живих сторінок): лише назва ЖК і
+    # дата перевірки, без імен агентів.
+    from datetime import date
+
+    from ..places import extract as place_extract
+    out["place_raw"] = place_extract.from_rieltor_soup(soup, date.today().isoformat())
+
     return {k: v for k, v in out.items() if v is not None}

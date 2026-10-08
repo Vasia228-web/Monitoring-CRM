@@ -18,7 +18,9 @@ from .pagination import DEFAULT_PAGE_SIZE
 
 # Порядок ключів фіксований, щоб адреса не змінювалась від перестановки —
 # інакше однакові вибірки давали б різні посилання.
-LIST_KEYS = ("condition", "market", "source", "rooms",
+# Район, ЖК і «тільки місто» (Блок 4, E10, D57) — одразу після кімнат; порядок з
+# інтеграційного плану (конфлікт 17): rooms, district, complex, area, …, seller, sort.
+LIST_KEYS = ("condition", "market", "source", "rooms", "district", "complex", "area",
              "price_min", "price_max", "sort", "all_ads", "per_page", "page")
 ANALYTICS_KEYS = ("rooms", "condition", "market")
 
@@ -27,6 +29,8 @@ PAGE_KEYS: dict[str, tuple[str, ...]] = {
     "/": LIST_KEYS,
     "/processing": LIST_KEYS,
     "/analytics": ANALYTICS_KEYS,
+    # «Райони й ЖК»: розподіл за поточними фільтрами списку — без нумерації й сортування.
+    "/places": tuple(k for k in LIST_KEYS if k not in ("sort", "per_page", "page")),
     "/status": (),
 }
 

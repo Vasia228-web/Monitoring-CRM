@@ -11,7 +11,12 @@
   </h1>
   <p class="lede">
     {{ condition_label }} · {{ market_label }}
-    {% if item.district %} · {{ item.district }}{% endif %}
+    {#- Район і ЖК квартири з довідника (Блок 4, E10, D57); підказка — звідки. -#}
+    {% if place %}
+      {%- if place.district %} · <span title="{{ place.district_how or '' }}">{{ place.district }}</span>{% if place.tag %} ({{ place.tag }}){% endif %}{% else %} · <span style="color:var(--muted)">{{ place.unknown }}</span>{% endif %}
+      {%- if place.complex %} · <span title="{{ place.complex_how or '' }}">{{ place.complex }}</span>{% elif place.none %} · {{ place.none }}{% endif %}
+      {%- if place.district_how %} <span style="color:var(--muted);font-size:12px">(район {{ place.district_how }})</span>{% endif %}
+    {% elif item.district %} · {{ item.district }}{% endif %}
     {% if property.floor %} · {{ property.floor }}{% if property.floors_total %} з {{ property.floors_total }}{% endif %} поверх{% endif %}
     · зведено з {{ sources.count }} оголош.
   </p>

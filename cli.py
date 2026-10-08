@@ -33,6 +33,10 @@
   python cli.py links selftest         # кожна адреса знаходить свій рядок за ключем
   python cli.py privacy scan           # скільки телефонів в описах (лише читання)
   python cli.py privacy apply --yes    # разова заміна на «[телефон]» (після бекапу!)
+  python cli.py places check           # довідник районів і ЖК (config/places/) без колізій
+  python cli.py places assign --dry-run  # крок «райони й ЖК»: що заповнилось би (нічого не пише)
+  python cli.py places report          # останній прогін кроку: охоплення, нерозпізнані назви
+  python cli.py places reassign        # що змінилось би у вже визначених ключах (нічого не пише)
 """
 from __future__ import annotations
 
@@ -844,6 +848,27 @@ def cmd_privacy(args: argparse.Namespace) -> int:
                               no_backup_check=args.no_backup_check, ids_out=args.ids_out)
 
 
+def cmd_places(args: argparse.Namespace) -> int:
+    """Райони й ЖК (Блок 4, крок E10, D57): довідник, крок циклу, звіт, вибірка."""
+    from realty.places import commands
+
+    if args.action == "check":
+        return commands.check()
+    if args.action == "assign":
+        return commands.assign(dry_run=args.dry_run, wait_min=args.wait_min,
+                               measure_weak=args.measure_weak)
+    if args.action == "reassign":
+        return commands.reassign(apply=args.apply, include_lost=args.include_lost,
+                                 wait_min=args.wait_min, ids_out=args.ids_out,
+                                 no_backup_check=args.no_backup_check)
+    if args.action == "report":
+        return commands.report(as_json=args.json)
+    if not args.out:
+        print("потрібно --out ФАЙЛ.csv")
+        return 2
+    return commands.sample(out_path=args.out, per_source=args.per_source)
+
+
 def cmd_webcache(args: argparse.Namespace) -> int:
     """Покоління кешу сайту: показати або збільшити вручну."""
     from realty import webcache
@@ -1124,6 +1149,26 @@ def main() -> int:
                     help="apply: скільки чекати, поки цикл звільнить замок (типово 10)")
     pv.add_argument("--ids-out", help="apply: файл для id змінених рядків")
     pv.set_defaults(func=cmd_privacy)
+
+    pl = sub.add_parser("places", help="райони й ЖК: довідник, крок циклу, звіт, вибірка")
+    pl.add_argument("action", choices=("check", "assign", "reassign", "report", "sample"))
+    pl.add_argument("--dry-run", action="store_true", help="assign: нічого не писати")
+    pl.add_argument("--apply", action="store_true",
+                    help="reassign: справді переписати визначені ключі (рішення власника; "
+                         "свіжий бекап, замок циклу); без нього — лише що змінилось би")
+    pl.add_argument("--include-lost", action="store_true",
+                    help="reassign: і ключі, доказу яких більше немає (стануть «не визначено»)")
+    pl.add_argument("--ids-out", help="reassign --apply: файл для id змінених оголошень")
+    pl.add_argument("--no-backup-check", action="store_true",
+                    help="reassign --apply: не вимагати свіжого бекапу (лише для копій бази)")
+    pl.add_argument("--measure-weak", action="store_true",
+                    help="assign: заміряти точність координат і заголовка (без застосування)")
+    pl.add_argument("--wait-min", type=float, default=10.0,
+                    help="assign/reassign вручну: скільки чекати замок циклу")
+    pl.add_argument("--json", action="store_true")
+    pl.add_argument("--out", help="sample: файл CSV")
+    pl.add_argument("--per-source", type=int, default=50)
+    pl.set_defaults(func=cmd_places)
 
     wc = sub.add_parser("webcache", help="покоління кешу сайту (lists, analytics)")
     wc.add_argument("action", choices=("show", "bump"))

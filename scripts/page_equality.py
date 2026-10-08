@@ -103,8 +103,8 @@ HTML_RULES = [
     # D52) — панель «Зняті оголошення» на /status і позначка «актуальність не
     # підтверджена» (Благо) у списку й на картці. Решта сторінки, зокрема наявні
     # панелі й рядки опитування, порівнюється повністю.
-    (re.compile(r"<!--(rum|live-check|speed-panel|status-poll|liveness-panel|unconfirmed)-->"
-                r".*?<!--/\1-->", re.S), ""),
+    (re.compile(r"<!--(rum|live-check|speed-panel|status-poll|liveness-panel|unconfirmed|"
+                r"places-panel)-->.*?<!--/\1-->", re.S), ""),
     # Одноразові токени (зараз їх немає; з'являться — не шумітимуть).
     (re.compile(r'(\snonce=")[^"]*(")'), rf"\g<1>{PLACEHOLDER}\g<2>"),
     (re.compile(r'(name="csrf[\w-]*"\s+value=")[^"]*(")', re.I), rf"\g<1>{PLACEHOLDER}\g<2>"),
@@ -114,7 +114,7 @@ NORMALIZATION = [
     f"«{PLACEHOLDER}»; JSON переформатовано (indent=1, порядок ключів збережено)",
     'не маскуються: age_min і <div class="updated">оновлено …</div> (заморожене «зараз»)',
     "HTML: блоки <!--rum-->, <!--live-check-->, <!--speed-panel-->, <!--status-poll-->, "
-    "<!--liveness-panel--> і <!--unconfirmed--> (…<!--/назва-->) вирізано",
+    "<!--liveness-panel-->, <!--unconfirmed--> і <!--places-panel--> (…<!--/назва-->) вирізано",
     "HTML: nonce=\"…\" і приховані csrf-поля → плейсхолдер",
 ]
 
@@ -325,6 +325,17 @@ def build_urls(db: Path, *, seed: int, properties: int | None) -> list[tuple[str
             "GROUP BY property_id ORDER BY count(*) DESC, property_id LIMIT 10")]
         redirects = [r[0] for r in con.execute(
             "SELECT old_id FROM property_redirects ORDER BY old_id")]
+        # Район і ЖК (Блок 4, E10, D57): найчастіші значення row_* на копії, якщо колонки є.
+        cols = {r[1] for r in con.execute('PRAGMA table_info("listings")')}
+        top_districts, top_complexes = [], []
+        if "row_district" in cols:
+            top_districts = [r[0] for r in con.execute(
+                "SELECT row_district FROM listings WHERE row_district IS NOT NULL "
+                "GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 6")]
+            top_complexes = [tuple(r) for r in con.execute(
+                "SELECT row_district, row_complex FROM listings WHERE row_complex IS NOT NULL "
+                "AND row_complex != '_none' AND row_district IS NOT NULL "
+                "GROUP BY 1, 2 ORDER BY count(*) DESC, 1, 2 LIMIT 4")]
     finally:
         con.close()
 
@@ -370,6 +381,22 @@ def build_urls(db: Path, *, seed: int, properties: int | None) -> list[tuple[str
             add("list", "/", {**params, **({"page": page} if page else {})})
     for params in edges:
         add("list", "/", params)
+
+    # --- Район, ЖК, місцевість і «Райони й ЖК» (Блок 4, E10, D57).
+    place_params = ([{"district": d} for d in top_districts]
+                    + [{"district": d, "complex": c} for d, c in top_complexes]
+                    + [{"district": "_unknown"}, {"complex": "_none"}, {"area": "city"},
+                       {"district": "_unknown", "area": "city"},
+                       {"district": "nemaie", "complex": "nemaie"}])
+    if top_districts:
+        for params in place_params:
+            for page in (None, "2"):
+                add("list", "/", {**params, **({"page": page} if page else {})})
+        add("list", "/", {"district": top_districts[0], "rooms": "2", "all_ads": "1"})
+        add("processing", "/processing", {"district": top_districts[0]})
+        for params in ({}, {"area": "city"}, {"rooms": "2"}, {"all_ads": "1"},
+                       {"district": top_districts[0]}):
+            add("places", "/places", params or None)
 
     # --- «В обробці»: та сама збірка списку з умовою in_progress.
     for page in (None, "2", "3"):
@@ -420,6 +447,8 @@ def build_urls(db: Path, *, seed: int, properties: int | None) -> list[tuple[str
 
     # --- Стан системи.
     add("status", "/status")
+    if top_districts:
+        add("api-listings", "/api/listings", {"district": top_districts[0], "limit": "1000"})
     for path, params in (("/api/status", None), ("/api/status/reports", None),
                          ("/api/status/reports", {"limit": "500"}), ("/api/status/dedup", None),
                          ("/api/status/runs", None), ("/api/status/runs", {"limit": "100"})):

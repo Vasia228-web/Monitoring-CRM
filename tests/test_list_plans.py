@@ -68,9 +68,16 @@ def test_list_queries_plan_guard(db):
     bad = [(r["label"], r["bad"]) for r in report if r["bad"]]
     assert not bad, bad
     lists = [r for r in report if r["kind"] == "список"]
-    assert len(lists) == 8 * len(plans.LIST_FILTERS)
+    places = plans._place_filters()
+    assert len(lists) == 8 * (len(plans.LIST_FILTERS) + len(places))
+    place_labels = {label for label, _ in places}
     for r in lists:
         text_ = " | ".join(r["plan"])
+        if r["label"].split(", ", 1)[1] in place_labels:
+            # Фільтри місця (Блок 4, E10, D57) — свій покривний індекс із row_*.
+            assert "COVERING INDEX ix_listings_place" in text_, (r["label"], text_)
+            continue
+        # Без фільтрів місця план той самий, що до E10: вужчий ix_listings_visible.
         assert "COVERING INDEX ix_listings_visible" in text_ \
             or "COVERING INDEX ix_listings_in_progress" in text_, (r["label"], text_)
 
@@ -82,8 +89,10 @@ def test_the_guard_catches_a_table_scan(db):
     plans = _mod("realty.web.plans")
     engine, Session = db
     with engine.begin() as conn:
+        # ix_listings_place (Блок 4, E10, D57) покриває ті самі поля, що й
+        # ix_listings_visible, — без нього теж, інакше «без індексів міграції» неправда.
         for name in ("ix_listings_visible", "ix_listings_keeper", "ix_listings_in_progress",
-                     "ix_listings_last_checked", "ix_listings_last_seen"):
+                     "ix_listings_last_checked", "ix_listings_last_seen", "ix_listings_place"):
             conn.execute(text(f'DROP INDEX "{name}"'))
     with Session() as s:
         report = plans.report(s, NOW)

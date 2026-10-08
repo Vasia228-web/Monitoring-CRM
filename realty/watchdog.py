@@ -73,6 +73,10 @@ PUBLIC_URL_PATH = DATA_DIR / "public_url"
 class Alert:
     key: str
     text: str
+    # Не повторювати раз на REPEAT_HOURS, а надіслати один раз на стан: новий стан (інше
+    # значення `once`) — нове повідомлення; той самий — мовчки (рецензія E10: «змінилось
+    # би» без дії власника не зникає, а повтор кожні 6 год — шум).
+    once: str | None = None
 
 
 def _hours(delta: timedelta) -> float:
@@ -257,10 +261,18 @@ def check_dedup(now: datetime) -> list[Alert]:
         return []
     last, before = rows[0], rows[1:]
     alerts = []
+
+    def core(r) -> int:
+        # Підозрілих лише за «старими» видами (Блок 4, E10, D57): нові види complex і
+        # complex_phase інакше дали б хибну тривогу вже на першій перевірці з ними.
+        # Перевірки до E10 (suspicious_core NULL) — повне suspicious, як і досі.
+        return r.suspicious if r.suspicious_core is None else r.suspicious_core
+
     for field, key, what in (("suspicious", "dedup-suspicious", "підозрілих квартир"),
                              ("missed", "dedup-missed", "пропущених дублів")):
-        usual = median(getattr(r, field) for r in before)
-        now_n = getattr(last, field)
+        value = core if field == "suspicious" else (lambda r, f=field: getattr(r, f))
+        usual = median(value(r) for r in before)
+        now_n = value(last)
         if now_n > usual * DEDUP_RISE + DEDUP_RISE_MIN:
             kinds = json.loads(last.by_kind or "{}") if field == "suspicious" else {}
             top = ", ".join(f"{dedup_audit.KINDS.get(k, k)} — {n}"
@@ -269,7 +281,32 @@ def check_dedup(now: datetime) -> list[Alert]:
                 f"🧩 Зведення квартир: {what} {now_n}, звичайно ~{usual:.0f} "
                 f"(перевірка {_ago(last.at, now)}).{' Найчастіше: ' + top + '.' if top else ''}\n"
                 f"Черга на перегляд — на /status.")))
+    # Окремо — вид «різні ЖК»: порівнюється з медіаною ЦЬОГО Ж виду, коли перевірок із ним
+    # набралось config/places/rules.toml audit.complex_min_audits.
+    alerts += _complex_spike(last, before, now)
     return alerts
+
+
+def _complex_spike(last, before, now: datetime) -> list[Alert]:
+    from statistics import median
+
+    from . import configfiles
+
+    try:
+        need = configfiles.load("places/rules").audit.complex_min_audits
+    except configfiles.ConfigError:
+        return []
+    with_kind = [r for r in before if r.suspicious_core is not None]
+    if len(with_kind) < need:
+        return []
+    n_of = lambda r: json.loads(r.by_kind or "{}").get("complex", 0)  # noqa: E731
+    usual = median(n_of(r) for r in with_kind)
+    now_n = n_of(last)
+    if now_n <= usual * DEDUP_RISE + DEDUP_RISE_MIN:
+        return []
+    return [Alert("dedup-complex", (
+        f"🧩 Зведення квартир: квартир з різними ЖК {now_n}, звичайно ~{usual:.0f} "
+        f"(перевірка {_ago(last.at, now)}). Черга на перегляд — на /status."))]
 
 
 def check_liveness(now: datetime) -> list[Alert]:
@@ -453,6 +490,41 @@ def check_night(now: datetime) -> list[Alert]:
     return alerts
 
 
+def check_places(now: datetime) -> list[Alert]:
+    """Крок «райони й ЖК» (Блок 4, E10, D57): останній прогін упав, або довідник чи нові
+    докази змінили б уже визначені ключі (would_change) — їх крок НЕ змінює, рішення за
+    власником (інтеграція, конфлікт 13; виправлення — `cli.py places reassign`).
+
+    «Упав» — як звичайна тривога (повтор раз на REPEAT_HOURS). would_change — ОДНЕ
+    повідомлення на стан (версія довідника, хеш правил, число): саме собою воно не
+    зникає, тож повтор кожні 6 год був би лише шумом (рецензія E10); число — на /status.
+    Доказ, що зник (would_change_lost: агент змінив поле, мітку села відкинуто), —
+    без тривоги. Читається лише останній рядок ops.places_runs (не пробний)."""
+    from sqlalchemy import select
+
+    ops.init_ops()
+    with ops.ops_session() as s:
+        last = s.scalars(select(ops.PlacesRun).where(ops.PlacesRun.status != "dry_run")
+                         .order_by(ops.PlacesRun.id.desc()).limit(1)).first()
+    if last is None:
+        return []
+    alerts = []
+    if last.status == "failed":
+        alerts.append(Alert("places-failed", (
+            f"🗺 Крок «райони й ЖК» не вдався ({_ago(last.at, now)}): "
+            f"{(last.message or 'див. журнал циклу')[:200]}. Район і ЖК нових оголошень "
+            f"не визначаються, фільтри показують попередній стан.")))
+    if last.would_change:
+        detail = json.loads(last.would_change_detail or "{}").get("by_field") or {}
+        what = ", ".join(f"{k} {v}" for k, v in detail.items()) or str(last.would_change)
+        alerts.append(Alert("places-would-change", (
+            f"🗺 Райони й ЖК: {last.would_change} вже визначених значень змінилось би ({what}) "
+            f"— НЕ змінено, чекає рішення. Список — на /status, «Райони й ЖК»; виправити — "
+            f"`cli.py places reassign` (пробний), далі `--apply` зі свіжим бекапом."),
+            once=f"{last.directory_ver}:{last.rules_hash}:{last.would_change}"))
+    return alerts
+
+
 # --- Стан і розсилка -----------------------------------------------------------------
 
 
@@ -490,7 +562,8 @@ def collect(now: datetime, state: dict) -> list[Alert]:
         except Exception as e:           # сторож не має падати через одну перевірку
             log.exception("перевірка впала")
             alerts.append(Alert("watchdog", f"⚠️ Сторож не зміг виконати перевірку: {e}"))
-    for check in (check_sources, check_verify_blocks, check_dedup, check_liveness, check_night):
+    for check in (check_sources, check_verify_blocks, check_dedup, check_liveness, check_night,
+                  check_places):
         try:
             alerts += check(now)
         except Exception as e:
@@ -513,6 +586,8 @@ def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH) -
         st = state.setdefault(a.key, {"since": now.isoformat(), "last_sent": None, "sent": 0})
         last = st.get("last_sent")
         due = last is None or _hours(now - datetime.fromisoformat(last)) >= REPEAT_HOURS
+        if a.once is not None:
+            due = st.get("once") != a.once
         st["text"] = a.text
         if not due:
             report["held"].append(a.key)
@@ -522,6 +597,8 @@ def run(now: datetime | None = None, send=None, state_path: Path = STATE_PATH) -
             send(f"{_header()}\n{prefix}{a.text}")
             st["last_sent"] = now.isoformat()
             st["sent"] += 1
+            if a.once is not None:
+                st["once"] = a.once
             report["sent"].append(a.key)
         except Exception as e:
             # Не відмічаємо як надіслане — наступний запуск спробує ще раз.

@@ -16,6 +16,7 @@ from .. import identity
 from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import classify_condition, classify_market, parse_date
+from ..places import extract as place_extract
 from .base import BaseSource
 
 log = logging.getLogger(__name__)
@@ -293,6 +294,9 @@ class DomRiaSource(BaseSource):
             "description": desc[:2000] or None,
             "complex_name": complex_name,
             "identity": identity.from_domria(d),
+            # Докази місця (Блок 4, E10, D57): id району й ЖК DOM.RIA — ті самі ключі, що
+            # й у гачку перевірки актуальності; district і complex_name — як і були.
+            "place_raw": place_extract.from_domria_card(d) or None,
             "raw": {k: d.get(k) for k in (
                 "realty_id", "price", "currency_type", "rooms_count", "total_square_meters",
                 "realty_sale_type", "type", "latitude", "longitude", "publishing_date",

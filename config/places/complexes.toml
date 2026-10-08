@@ -1,0 +1,2295 @@
+# ЖК Івано-Франківська (Блок 4, крок E10, D57). Чернетка — scripts/places_seed.py з
+# копії бази Етапу 0 (лише читання), переглянуто очима; далі правиться тут.
+#
+# key — стабільний ключ (?complex=…, listings.complex_key); name — як показувати (без
+# «ЖК»); district — район лише за згоди ≥80% при n≥5 (голоси — у коментарі: поле району
+# DOM.RIA рядків цього id і мітки LUN у квартирах із ним), "" — не прив'язано (видно на
+# /status); kind: named | address («ЖК вул. …» DOM.RIA) | umbrella («житловий район»,
+# поступається ЖК усередині); within — парасолька; group — черги одного ЖК (вид
+# перевірки зведення complex_phase); ria_ids — id ЖК DOM.RIA (identity.complex);
+# lun_ids — geoId residential_complex LUN; aliases — інші написання.
+
+
+# id ЖК DOM.RIA з кількома різними назвами — ЖК визначається за назвою (Етап 0).
+ria_id_by_name = [6420, 7845, 8732, 9629]
+# Однакова назва — різні ЖК (різні точки): назва без уточнення ні до кого не веде: ЖК Парковий, ЖК Затишний
+
+# 716 оголошень DOM.RIA (ЖК Княгинин 707, Княгинин 8, Житловий район Княгинин 1); район: Княгинин 711/750 (95%) — DOM.RIA {'Княгинин': 655, 'Центр': 25, 'Набережна': 1}, LUN {'Княгинин': 56, 'Надрічна': 13}
+[[complex]]
+key = "kniahynyn"
+name = "Житловий район Княгинин"
+district = "kniahynyn"
+kind = "umbrella"
+within = ""
+group = ""
+ria_ids = [7504]
+lun_ids = []
+aliases = ["ЖК Княгинин"]
+
+# 588 оголошень DOM.RIA (ЖК SHEPIT 587, ЖК Стожари 1); район: Каскад 629/630 (100%) — DOM.RIA {'Каскад': 585}, LUN {'Каскад': 44, 'Майзлі': 1}
+[[complex]]
+key = "shepit"
+name = "SHEPIT"
+district = "kaskad"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6420]
+lun_ids = []
+aliases = ["Шепіт"]
+
+# 526 оголошень DOM.RIA (ЖК Manhattan 520, Manhattan 6); район: Набережна 427/519 (82%) — DOM.RIA {'Набережна': 409, 'Центр': 63, 'Кант': 21}, LUN {'Набережна': 18, 'Кант': 1, 'Опришівці': 1}
+[[complex]]
+key = "manhattan"
+name = "Manhattan"
+district = "naberezhna"
+kind = "named"
+within = "manhattan-district"
+group = "manhattan"
+ria_ids = [5556]
+lun_ids = []
+aliases = ["Manhatten", "Манхетен", "Манхетин", "Манхеттен", "Манхэттен"]
+
+# 492 оголошень DOM.RIA (ЖК Manhattan Up 490, ЖК Manhattan 1, Manhattan Up 1); район: Набережна 413/467 (88%) — DOM.RIA {'Набережна': 393, 'Центр': 39, 'Кант': 7}, LUN {'Набережна': 20, 'Центр': 3}
+[[complex]]
+key = "manhattan-up"
+name = "Manhattan Up"
+district = "naberezhna"
+kind = "named"
+within = "manhattan-district"
+group = "manhattan"
+ria_ids = [7845]
+lun_ids = []
+aliases = ["Manhattan AP", "Манхеттен Ап"]
+
+# 385 оголошень DOM.RIA (ЖК SKYGARDEN 328, ЖК SkyGarden 37, SKYGARDEN 20); район: Майзлі 359/396 (91%) — DOM.RIA {'Майзлі': 315, 'Центр': 35, 'Вокзал': 1}, LUN {'Майзлі': 44}
+[[complex]]
+key = "skygarden"
+name = "SKYGARDEN"
+district = "maizli"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11061]
+lun_ids = []
+aliases = ["Skaygarden", "Sky Garden", "Скай Гарден", "Скайгарден"]
+
+# 369 оголошень DOM.RIA (ЖК Містечко Центральне 360, Містечко Центральне 9); район: Центр 279/285 (98%) — DOM.RIA {'Центр': 256, 'Майзлі': 5, 'Гірка': 1}, LUN {'Центр': 23}
+[[complex]]
+key = "mistechko-tsentralne"
+name = "Містечко Центральне"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7017]
+lun_ids = []
+aliases = ["Местечко Центральное"]
+
+# 366 оголошень DOM.RIA (ЖК U One 366); район: Софіївка 81/196 (41%) — DOM.RIA {'Софіївка': 79, 'Каскад': 70, 'Позитрон': 36}, LUN {'Каскад': 4, 'Надрічна': 3, 'Софіївка': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "u-one"
+name = "U One"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9316]
+lun_ids = []
+aliases = ["UOne", "Ю Ван", "Юван"]
+
+# 269 оголошень DOM.RIA (ЖК Family Plaza 263, Family Plaza 6); район: Княгинин 216/302 (72%) — DOM.RIA {'Княгинин': 185, 'Центр': 71, 'Пасічна': 1}, LUN {'Княгинин': 31, 'Центр': 12, 'Надрічна': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "family-plaza"
+name = "Family Plaza"
+district = ""
+kind = "named"
+within = ""
+group = "family-plaza"
+ria_ids = [7723]
+lun_ids = []
+aliases = ["Familly Plaza", "Фемелі Плаза", "Фемілі Плаза"]
+
+# 207 оголошень DOM.RIA (ЖК Скандинавія 206, Скандинавія 1); район: Центр 133/137 (97%) — DOM.RIA {'Центр': 132, 'Арсенал': 3, 'Княгинин': 1}, LUN {'Центр': 1}
+[[complex]]
+key = "skandynaviia"
+name = "Скандинавія"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12120]
+lun_ids = []
+aliases = ["Скандинавия"]
+
+# 201 оголошень DOM.RIA (ЖК Senat 200); район: Брати 206/210 (98%) — DOM.RIA {'Брати': 193, 'Майзлі': 3, 'Центр': 1}, LUN {'Брати': 13}
+[[complex]]
+key = "senat"
+name = "Senat"
+district = "braty"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11356]
+lun_ids = []
+aliases = ["Сенат"]
+
+# 167 оголошень DOM.RIA (ЖК А5 160, А5 7); район: Центр 124/125 (99%) — DOM.RIA {'Центр': 122, 'Пасічна': 1}, LUN {'Центр': 2}
+[[complex]]
+key = "a5"
+name = "А5"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [8569]
+lun_ids = []
+aliases = []
+
+# 160 оголошень DOM.RIA (ЖК Містечко Південне 160); район: Опришівці 74/132 (56%) — DOM.RIA {'Опришівці': 70, 'Коновальця Чорновола': 29, 'Центр': 26}, LUN {'Опришівці': 4, 'Коновальця Чорновола': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "mistechko-pivdenne"
+name = "Містечко Південне"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11607]
+lun_ids = []
+aliases = ["Городок Южный"]
+
+# 159 оголошень DOM.RIA (ЖК Опришівська Слобода 159); район: Центр 120/161 (75%) — DOM.RIA {'Центр': 120, 'Опришівці': 37}, LUN {'Опришівці': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "opryshivska-sloboda"
+name = "Опришівська Слобода"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6829]
+lun_ids = []
+aliases = []
+
+# 156 оголошень DOM.RIA (ЖК Comfort Park 156); район: Пасічна 159/160 (99%) — DOM.RIA {'Пасічна': 143, 'Каскад': 1}, LUN {'Пасічна': 16}
+[[complex]]
+key = "comfort-park"
+name = "Comfort Park"
+district = "pasichna"
+kind = "named"
+within = ""
+group = "comfort-park"
+ria_ids = [5902]
+lun_ids = []
+aliases = ["Комфорт Парк"]
+
+# 155 оголошень DOM.RIA (ЖК PORTO FRANKO 155); район: Софіївка 147/158 (93%) — DOM.RIA {'Софіївка': 113, 'Каскад': 10, 'Центр': 1}, LUN {'Софіївка': 34}
+[[complex]]
+key = "porto-franko"
+name = "PORTO FRANKO"
+district = "sofiivka"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12419]
+lun_ids = []
+aliases = []
+
+# 152 оголошень DOM.RIA (ЖК West Hill 151, West Hill 1); район: Пасічна 147/147 (100%) — DOM.RIA {'Пасічна': 145}, LUN {'Пасічна': 2}
+[[complex]]
+key = "west-hill"
+name = "West Hill"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11699]
+lun_ids = []
+aliases = []
+
+# 150 оголошень DOM.RIA (ЖК Millennium River Club 150); район: Бам 2/3 (67%) — DOM.RIA {'Бам': 1}, LUN {'Бам': 1, 'Пасічна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "millennium-river-club"
+name = "Millennium River Club"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [13086]
+lun_ids = []
+aliases = []
+
+# 132 оголошень DOM.RIA (ЖК Lake Park 131, Lake Park 1); район: Центр 129/131 (98%) — DOM.RIA {'Центр': 129, 'Бам': 1}, LUN {'Пасічна': 1}
+[[complex]]
+key = "lake-park"
+name = "Lake Park"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9160, 12652]
+lun_ids = []
+aliases = []
+
+# 130 оголошень DOM.RIA (ЖК Central Park 129, Central Park 1); район: Арсенал 68/128 (53%) — DOM.RIA {'Арсенал': 64, 'Центр': 55, 'Коновальця Чорновола': 2}, LUN {'Арсенал': 4, 'Чорновола': 2, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "central-park"
+name = "Central Park"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [8339]
+lun_ids = []
+aliases = ["Сентрал Парк"]
+
+# 123 оголошень DOM.RIA (ЖК Park Avenue premium 123); район: Центр 123/126 (98%) — DOM.RIA {'Центр': 122, 'Бам': 1}, LUN {'Бам': 2, 'Центр': 1}
+[[complex]]
+key = "park-avenue-premium"
+name = "Park Avenue premium"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12063]
+lun_ids = []
+aliases = ["Park Avenue", "Парк Авеню"]
+
+# 111 оголошень DOM.RIA (ЖК Паркова Алея 111); район: Рінь 49/84 (58%) — DOM.RIA {'Рінь': 48, 'Майзлі': 23, 'Пасічна': 2}, LUN {'Тисменицька': 5, 'Майзлі': 4, 'Пасічна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "parkova-aleia"
+name = "Паркова Алея"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3676]
+lun_ids = []
+aliases = []
+
+# 107 оголошень DOM.RIA (ЖК Silver 107); район: Пасічна 120/120 (100%) — DOM.RIA {'Пасічна': 107}, LUN {'Пасічна': 13}
+[[complex]]
+key = "silver"
+name = "Silver"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11830]
+lun_ids = []
+aliases = []
+
+# 104 оголошень DOM.RIA (ЖК Паркове містечко (7 черга) 104); район: Коновальця Чорновола 76/105 (72%) — DOM.RIA {'Коновальця Чорновола': 76, 'Арсенал': 26, 'Центр': 2}, LUN {'Арсенал': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "parkove-mistechko-7-cherha"
+name = "Паркове містечко (7 черга)"
+district = ""
+kind = "named"
+within = ""
+group = "parkove-mistechko"
+ria_ids = [11666]
+lun_ids = []
+aliases = []
+
+# 103 оголошень DOM.RIA (ЖК Атмосфера 101, Атмосфера 2); район: Кант 51/87 (59%) — DOM.RIA {'Кант': 49, 'Центр': 28, 'Набережна': 7}, LUN {'Кант': 2, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "atmosfera"
+name = "Атмосфера"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7993]
+lun_ids = []
+aliases = []
+
+# 88 оголошень DOM.RIA (ЖК Липки 2 88); район: Бам 45/58 (78%) — DOM.RIA {'Бам': 41, 'Центр': 9, 'Набережна': 3}, LUN {'Бам': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "lypky-2"
+name = "Липки 2"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11105]
+lun_ids = []
+aliases = []
+
+# 82 оголошень DOM.RIA (ЖК City 81, City 1); район: Коновальця Чорновола 35/84 (42%) — DOM.RIA {'Коновальця Чорновола': 35, 'Арсенал': 28, 'Центр': 13}, LUN {'Арсенал': 4, 'Чорновола': 3} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "city"
+name = "City"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12115]
+lun_ids = []
+aliases = ["City by blago", "Сіті", "Сіті by blago", "Сіті Благо"]
+
+# 74 оголошень DOM.RIA (ЖК Kniahynyn-Center 73); район: Княгинин 76/80 (95%) — DOM.RIA {'Княгинин': 65, 'Центр': 3}, LUN {'Княгинин': 11, 'Надрічна': 1}
+[[complex]]
+key = "kniahynyn-center"
+name = "Kniahynyn-Center"
+district = "kniahynyn"
+kind = "named"
+within = "kniahynyn"
+group = ""
+ria_ids = [8216]
+lun_ids = []
+aliases = ["Княгинин Центр"]
+
+# 74 оголошень DOM.RIA (ЖК Імперія 74); район: Княгинин 45/66 (68%) — DOM.RIA {'Княгинин': 39, 'Центр': 12, 'Вокзал': 5}, LUN {'Княгинин': 6, 'Залізничний': 3, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "imperiia"
+name = "Імперія"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6590]
+lun_ids = []
+aliases = []
+
+# 70 оголошень DOM.RIA (ЖК Акварелі 70); район: Пасічна 71/71 (100%) — DOM.RIA {'Пасічна': 70}, LUN {'Пасічна': 1}
+[[complex]]
+key = "akvareli"
+name = "Акварелі"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12609]
+lun_ids = []
+aliases = []
+
+# 69 оголошень DOM.RIA (ЖК Паркове містечко 69); район: Арсенал 48/69 (70%) — DOM.RIA {'Арсенал': 47, 'Центр': 18}, LUN {'Чорновола': 3, 'Арсенал': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "parkove-mistechko"
+name = "Паркове містечко"
+district = ""
+kind = "named"
+within = ""
+group = "parkove-mistechko"
+ria_ids = [3641]
+lun_ids = []
+aliases = ["Містечко Паркове"]
+
+# 69 оголошень DOM.RIA (ЖК Гармонія 69); район: Пасічна 68/69 (99%) — DOM.RIA {'Пасічна': 59, 'Центр': 1}, LUN {'Пасічна': 9}
+[[complex]]
+key = "harmoniia"
+name = "Гармонія"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12495]
+lun_ids = []
+aliases = []
+
+# 68 оголошень DOM.RIA (ЖК Family Plaza 2 68); район: Центр 53/89 (60%) — DOM.RIA {'Центр': 42, 'Княгинин': 26}, LUN {'Центр': 11, 'Княгинин': 9, 'Надрічна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "family-plaza-2"
+name = "Family Plaza 2"
+district = ""
+kind = "named"
+within = ""
+group = "family-plaza"
+ria_ids = [12704]
+lun_ids = []
+aliases = ["Familly Plaza 2", "Фемілі Плаза 2"]
+
+# 65 оголошень DOM.RIA (ЖК Козацький 65); район: Бам 40/47 (85%) — DOM.RIA {'Бам': 29, 'Городок': 7}, LUN {'Бам': 11}
+[[complex]]
+key = "kozatskyi"
+name = "Козацький"
+district = "bam"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7199]
+lun_ids = []
+aliases = []
+
+# 64 оголошень DOM.RIA (ЖК Урожайний 63, Урожайний 1); район: Гірка 16/37 (43%) — DOM.RIA {'Гірка': 16, 'Вокзал': 8, 'Центр': 5}, LUN {'Вокзал': 2, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "urozhainyi"
+name = "Урожайний"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9157, 9678]
+lun_ids = []
+aliases = []
+
+# 61 оголошень DOM.RIA (ЖК Квартал №5 61); район: Кант 51/59 (86%) — DOM.RIA {'Кант': 50, 'Центр': 6}, LUN {'Центр': 2, 'Кант': 1}
+[[complex]]
+key = "kvartal-5"
+name = "Квартал №5"
+district = "kant"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [8958]
+lun_ids = []
+aliases = []
+
+# 61 оголошень DOM.RIA (ЖК Діброва Парк 61); район: Арсенал 44/67 (66%) — DOM.RIA {'Арсенал': 38, 'Центр': 15, 'Бам': 2}, LUN {'Арсенал': 6, 'Чорновола': 3, 'Центр': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "dibrova-park"
+name = "Діброва Парк"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [10508]
+lun_ids = []
+aliases = []
+
+# 58 оголошень DOM.RIA (ЖК Парковий маєток 58); район: Городок 16/38 (42%) — DOM.RIA {'Городок': 16, 'Центр': 5, 'Коновальця Чорновола': 4}, LUN {'Опришівці': 5, 'Центр': 1, 'Коновальця Чорновола': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "parkovyi-maietok"
+name = "Парковий маєток"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7215]
+lun_ids = []
+aliases = []
+
+# 57 оголошень DOM.RIA (ЖК Comfort House 57); район: Пасічна 69/71 (97%) — DOM.RIA {'Пасічна': 55, 'Княгинин': 1}, LUN {'Пасічна': 14, 'Княгинин': 1}
+[[complex]]
+key = "comfort-house"
+name = "Comfort House"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3967]
+lun_ids = []
+aliases = []
+
+# 56 оголошень DOM.RIA (ЖК Миру 56); район: Каскад 22/33 (67%) — DOM.RIA {'Каскад': 20, 'Софіївка': 9, 'Гірка': 1}, LUN {'Каскад': 2, 'Софіївка': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "myru"
+name = "Миру"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11448]
+lun_ids = []
+aliases = []
+
+# 55 оголошень DOM.RIA (ЖК IQ House 54, IQ House 1); район: Набережна 42/49 (86%) — DOM.RIA {'Набережна': 40, 'Княгинин': 5, 'Центр': 2}, LUN {'Набережна': 2}
+[[complex]]
+key = "iq-house"
+name = "IQ House"
+district = "naberezhna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9529]
+lun_ids = []
+aliases = []
+
+# 52 оголошень DOM.RIA (ЖК Provance Home 52); район: Майзлі 50/53 (94%) — DOM.RIA {'Майзлі': 44, 'Центр': 2}, LUN {'Майзлі': 6, 'Центр': 1}
+[[complex]]
+key = "provance-home"
+name = "Provance Home"
+district = "maizli"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7278]
+lun_ids = []
+aliases = ["Прованс"]
+
+# 49 оголошень DOM.RIA (ЖК Light home 48, Light home 1); район: Княгинин 34/45 (76%) — DOM.RIA {'Княгинин': 33, 'Центр': 11}, LUN {'Княгинин': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "light-home"
+name = "Light home"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11457]
+lun_ids = []
+aliases = ["Лайт Хоум"]
+
+# 39 оголошень DOM.RIA (ЖК Містечко Липки 39); район: Центр 18/29 (62%) — DOM.RIA {'Центр': 17, 'Бам': 10, 'Набережна': 1}, LUN {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "mistechko-lypky"
+name = "Містечко Липки"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6237]
+lun_ids = []
+aliases = []
+
+# 39 оголошень DOM.RIA (ЖК Dreamland 39); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "dreamland"
+name = "Dreamland"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [13035]
+lun_ids = []
+aliases = []
+
+# 38 оголошень DOM.RIA (ЖК Millennium 36, Millennium 2); район: Бам 12/25 (48%) — DOM.RIA {'Набережна': 10, 'Бам': 9, 'Центр': 2}, LUN {'Бам': 3} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "millennium"
+name = "Millennium"
+district = ""
+kind = "named"
+within = ""
+group = "millennium"
+ria_ids = [5889]
+lun_ids = []
+aliases = []
+
+# 37 оголошень DOM.RIA (ЖК Grand Hall 37); район: Пасічна 41/44 (93%) — DOM.RIA {'Пасічна': 35, 'Кант': 1}, LUN {'Пасічна': 6, 'Кант': 2}
+[[complex]]
+key = "grand-hall"
+name = "Grand Hall"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [8274]
+lun_ids = []
+aliases = ["Gr Hall", "Гранд Хол"]
+
+# 34 оголошень DOM.RIA (ЖК Lystopad 34); район: Майзлі 36/40 (90%) — DOM.RIA {'Майзлі': 30, 'Центр': 3}, LUN {'Майзлі': 6, 'Центр': 1}
+[[complex]]
+key = "lystopad"
+name = "Lystopad"
+district = "maizli"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3863]
+lun_ids = []
+aliases = []
+
+# 32 оголошень DOM.RIA (ЖК Ярко Центр 32); район: Центр 20/22 (91%) — DOM.RIA {'Центр': 20, 'Набережна': 2}
+[[complex]]
+key = "iarko-tsentr"
+name = "Ярко Центр"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11093]
+lun_ids = []
+aliases = []
+
+# 29 оголошень DOM.RIA (ЖК Клубне містечко 12 29); район: Княгинин 29/35 (83%) — DOM.RIA {'Княгинин': 21, 'Центр': 6}, LUN {'Княгинин': 8}
+[[complex]]
+key = "klubne-mistechko-12"
+name = "Клубне містечко 12"
+district = "kniahynyn"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7021]
+lun_ids = []
+aliases = ["Клубне 12"]
+
+# 29 оголошень DOM.RIA (ЖК Union 29); район: Центр 20/20 (100%) — DOM.RIA {'Центр': 17}, LUN {'Центр': 3}
+[[complex]]
+key = "union"
+name = "Union"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [8500]
+lun_ids = []
+aliases = ["Юніон"]
+
+# 29 оголошень DOM.RIA (ЖК Комфорт Сіті 17, ЖК вул. Гетьмана Дорошенка, 28а 9, Комфорт Сіті 3); район: Бам 34/34 (100%) — DOM.RIA {'Бам': 29}, LUN {'Бам': 5}
+[[complex]]
+key = "komfort-siti"
+name = "Комфорт Сіті"
+district = "bam"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11599]
+lun_ids = []
+aliases = ["Comfort City", "Comft City", "вул. Гетьмана Дорошенка, 28а"]
+
+# 29 оголошень DOM.RIA (ЖК Main House 27, Main House 2); район: Центр 32/32 (100%) — DOM.RIA {'Центр': 29}, LUN {'Центр': 3}
+[[complex]]
+key = "main-house"
+name = "Main House"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7131]
+lun_ids = []
+aliases = []
+
+# 28 оголошень DOM.RIA (ЖК Comfort Park 2 28); район: Пасічна 37/37 (100%) — DOM.RIA {'Пасічна': 28}, LUN {'Пасічна': 9}
+[[complex]]
+key = "comfort-park-2"
+name = "Comfort Park 2"
+district = "pasichna"
+kind = "named"
+within = ""
+group = "comfort-park"
+ria_ids = [12833]
+lun_ids = []
+aliases = []
+
+# 27 оголошень DOM.RIA (ЖК Квартал Віденський 27); район: Центр 14/23 (61%) — DOM.RIA {'Центр': 13, 'Бам': 8}, LUN {'Бам': 1, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "kvartal-videnskyi"
+name = "Квартал Віденський"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5786]
+lun_ids = []
+aliases = ["Віденський"]
+
+# 27 оголошень DOM.RIA (ЖК URBN 27); район: Бам 14/15 (93%) — DOM.RIA {'Бам': 12, 'Центр': 1}, LUN {'Бам': 2}
+[[complex]]
+key = "urbn"
+name = "URBN"
+district = "bam"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11583]
+lun_ids = []
+aliases = []
+
+# 26 оголошень DOM.RIA (ЖК Хмельницький 26); район: Позитрон 8/18 (44%) — DOM.RIA {'Позитрон': 8, 'Софіївка': 3, 'Каскад': 2}, LUN {'Софіївка': 3, 'Надрічна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "khmelnytskyi"
+name = "Хмельницький"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6360]
+lun_ids = []
+aliases = []
+
+# 25 оголошень DOM.RIA (ЖК Містечко Козацьке 25); район: Бам 17/22 (77%) — DOM.RIA {'Бам': 14, 'Центр': 2, 'Городок': 1}, LUN {'Бам': 3, 'Городок': 1, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "mistechko-kozatske"
+name = "Містечко Козацьке"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5327]
+lun_ids = []
+aliases = []
+
+# 25 оголошень DOM.RIA (ЖК Millennium (5 черга) 25); район: Набережна 6/9 (67%) — DOM.RIA {'Набережна': 6, 'Бам': 2, 'Каскад': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "millennium-5-cherha"
+name = "Millennium (5 черга)"
+district = ""
+kind = "named"
+within = ""
+group = "millennium"
+ria_ids = [11608]
+lun_ids = []
+aliases = []
+
+# 24 оголошень DOM.RIA (ЖК Prostir 24); район: Опришівці 11/23 (48%) — DOM.RIA {'Опришівці': 5, 'Бам': 4, 'Городок': 4}, LUN {'Опришівці': 6} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "prostir"
+name = "Prostir"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12035]
+lun_ids = []
+aliases = []
+
+# 24 оголошень DOM.RIA (ЖК вул. Незалежності, 146а 24); район: Майзлі 27/28 (96%) — DOM.RIA {'Майзлі': 23, 'Центр': 1}, LUN {'Майзлі': 4}
+[[complex]]
+key = "vul-nezalezhnosti-146a"
+name = "вул. Незалежності, 146а"
+district = "maizli"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [5679]
+lun_ids = []
+aliases = []
+
+# 24 оголошень DOM.RIA (ЖК Comfort Lite 21, ЖК  Comfort Lite 3); район: Пасічна 28/28 (100%) — DOM.RIA {'Пасічна': 22}, LUN {'Пасічна': 6}
+[[complex]]
+key = "comfort-lite"
+name = "Comfort Lite"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11669]
+lun_ids = []
+aliases = []
+
+# 23 оголошень DOM.RIA (ЖК Brooklyn 23); район: Опришівці 23/23 (100%) — DOM.RIA {'Опришівці': 23}
+[[complex]]
+key = "brooklyn"
+name = "Brooklyn"
+district = "opryshivtsi"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12844]
+lun_ids = []
+aliases = []
+
+# 22 оголошень DOM.RIA (ЖК Афини 21, ЖК River Stone 1); район: Набережна 10/12 (83%) — DOM.RIA {'Набережна': 10, 'Бам': 2}
+[[complex]]
+key = "afyny"
+name = "Афини"
+district = "naberezhna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [8732]
+lun_ids = []
+aliases = []
+
+# 22 оголошень DOM.RIA (ЖК Каскад-Ярко 22); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "kaskad-iarko"
+name = "Каскад-Ярко"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [10764]
+lun_ids = []
+aliases = []
+
+# 20 оголошень DOM.RIA (ЖК Trivium 20); район: Центр 11/14 (79%) — DOM.RIA {'Центр': 11, 'Бам': 2}, LUN {'Бам': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "trivium"
+name = "Trivium"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9386]
+lun_ids = []
+aliases = []
+
+# 20 оголошень DOM.RIA (ЖК Magnolia Park 20); район: Майзлі 22/22 (100%) — DOM.RIA {'Майзлі': 19}, LUN {'Майзлі': 3}
+[[complex]]
+key = "magnolia-park"
+name = "Magnolia Park"
+district = "maizli"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11878]
+lun_ids = []
+aliases = ["Магнолія", "Магнолія Парк"]
+
+# 19 оголошень DOM.RIA (ЖК Містечко Мануфактура 19); район: Опришівці 18/21 (86%) — DOM.RIA {'Опришівці': 14, 'Коновальця Чорновола': 2, 'Центр': 1}, LUN {'Опришівці': 4}
+[[complex]]
+key = "mistechko-manufaktura"
+name = "Містечко Мануфактура"
+district = "opryshivtsi"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6315]
+lun_ids = []
+aliases = ["Мануфактура"]
+
+# 19 оголошень DOM.RIA (ЖК River Park 2 19); район: Пасічна 16/20 (80%) — DOM.RIA {'Пасічна': 14, 'Арсенал': 2, 'Центр': 1}, LUN {'Пасічна': 2, 'Центр': 1}
+[[complex]]
+key = "river-park-2"
+name = "River Park 2"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7404]
+lun_ids = []
+aliases = []
+
+# 19 оголошень DOM.RIA (ЖК Liberty Gardens 18, Liberty Gardens 1); район: Будівельників 21/21 (100%) — DOM.RIA {'Будівельників': 19}, LUN {'Будівельників': 2}
+[[complex]]
+key = "liberty-gardens"
+name = "Liberty Gardens"
+district = "budivelnykiv"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12315]
+lun_ids = []
+aliases = []
+
+# 18 оголошень DOM.RIA (ЖК Red House II 18); район: Брати 13/17 (76%) — DOM.RIA {'Брати': 12, 'Майзлі': 4}, LUN {'Брати': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "red-house-ii"
+name = "Red House II"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9579]
+lun_ids = []
+aliases = []
+
+# 18 оголошень DOM.RIA (ЖК Соборне 18); район: Пасічна 24/24 (100%) — DOM.RIA {'Пасічна': 18}, LUN {'Пасічна': 6}
+[[complex]]
+key = "soborne"
+name = "Соборне"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [4756]
+lun_ids = []
+aliases = ["Містечко Соборне"]
+
+# 6 оголошень DOM.RIA (ЖК Парковий 6); район: Пасічна 7/7 (100%) — DOM.RIA {'Пасічна': 6}, LUN {'Пасічна': 1}
+[[complex]]
+key = "parkovyi-romana-virastiuka"
+name = "Парковий (Романа Вірастюка)"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7194]
+lun_ids = []
+aliases = []
+
+# 10 оголошень DOM.RIA (ЖК Парковий 10); район: Арсенал 6/9 (67%) — DOM.RIA {'Арсенал': 6, 'Центр': 3} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "parkovyi-natsionalnoi-hvardii"
+name = "Парковий (Національної Гвардії)"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9681]
+lun_ids = []
+aliases = []
+
+# 16 оголошень DOM.RIA (ЖК Sonata 16); район: Набережна 16/16 (100%) — DOM.RIA {'Набережна': 16}
+[[complex]]
+key = "sonata"
+name = "Sonata"
+district = "naberezhna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6698]
+lun_ids = []
+aliases = ["Соната"]
+
+# 15 оголошень DOM.RIA (ЖК Молодіжний 15); район: Будівельників 15/17 (88%) — DOM.RIA {'Будівельників': 13, 'Каскад': 1, 'Майзлі': 1}, LUN {'Будівельників': 2}
+[[complex]]
+key = "molodizhnyi"
+name = "Молодіжний"
+district = "budivelnykiv"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9221]
+lun_ids = []
+aliases = []
+
+# 14 оголошень DOM.RIA (ЖК вул. Галицька 14); район: Пасічна 16/16 (100%) — DOM.RIA {'Пасічна': 13}, LUN {'Пасічна': 3}
+[[complex]]
+key = "vul-halytska"
+name = "вул. Галицька"
+district = "pasichna"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9694]
+lun_ids = []
+aliases = []
+
+# 14 оголошень DOM.RIA (ЖК Привокзальний 14); район: Вокзал 4/10 (40%) — DOM.RIA {'Вокзал': 4, 'Центр': 3, 'Софіївка': 2}, LUN {'Залізничний': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "pryvokzalnyi"
+name = "Привокзальний"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11540]
+lun_ids = []
+aliases = []
+
+# 13 оголошень DOM.RIA (ЖК Parus 12, Parus 1); район: Центр 12/12 (100%) — DOM.RIA {'Центр': 12}
+[[complex]]
+key = "parus"
+name = "Parus"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3679]
+lun_ids = []
+aliases = []
+
+# 13 оголошень DOM.RIA (ЖК Липські вежі 13); район: Бам 10/13 (77%) — DOM.RIA {'Бам': 9, 'Набережна': 2, 'Кант': 1}, LUN {'Бам': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "lypski-vezhi"
+name = "Липські вежі"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12369]
+lun_ids = []
+aliases = []
+
+# 13 оголошень DOM.RIA (ЖК вул. Урожайна, 5 11, ЖК вул. Урожайна, 3 2); район: Вокзал 4/10 (40%) — DOM.RIA {'Вокзал': 4, 'Центр': 3, 'Гірка': 2}, LUN {'Гірка': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-urozhaina-5"
+name = "вул. Урожайна, 5"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9629]
+lun_ids = []
+aliases = []
+
+# 13 оголошень DOM.RIA (ЖК Центральний 13); район: Центр 14/14 (100%) — DOM.RIA {'Центр': 13}, LUN {'Центр': 1}
+[[complex]]
+key = "tsentralnyi"
+name = "Центральний"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9683]
+lun_ids = []
+aliases = []
+
+# 12 оголошень DOM.RIA (ЖК Гетьманський 12); район: Гірка 5/12 (42%) — DOM.RIA {'Гірка': 5, 'Вокзал': 2, 'Каскад': 1}, LUN {'Вокзал': 1, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "hetmanskyi"
+name = "Гетьманський"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6919]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Затишний 4); район: Пасічна 5/5 (100%) — DOM.RIA {'Пасічна': 4}, LUN {'Пасічна': 1}
+[[complex]]
+key = "zatyshnyi-horbachevskoho"
+name = "Затишний (Горбачевського)"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7198]
+lun_ids = []
+aliases = []
+
+# 8 оголошень DOM.RIA (ЖК Затишний 8); район: Брати 12/12 (100%) — DOM.RIA {'Брати': 8}, LUN {'Брати': 4}
+[[complex]]
+key = "zatyshnyi-kysilevskoi-olhy"
+name = "Затишний (Кисілевської Ольги)"
+district = "braty"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9152]
+lun_ids = []
+aliases = []
+
+# 12 оголошень DOM.RIA (ЖК Лемківський 12); район: Пасічна 15/15 (100%) — DOM.RIA {'Пасічна': 12}, LUN {'Пасічна': 3}
+[[complex]]
+key = "lemkivskyi"
+name = "Лемківський"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3216]
+lun_ids = []
+aliases = []
+
+# 12 оголошень DOM.RIA (ЖК Авіатор 12); район: Бам 5/9 (56%) — DOM.RIA {'Бам': 5, 'Городок': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "aviator"
+name = "Авіатор"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3723]
+lun_ids = []
+aliases = []
+
+# 11 оголошень DOM.RIA (ЖК Millennium Elite 11); район: Набережна 3/5 (60%) — DOM.RIA {'Набережна': 3, 'Бам': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "millennium-elite"
+name = "Millennium Elite"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [10938]
+lun_ids = []
+aliases = []
+
+# 11 оголошень DOM.RIA (ЖК Shelest 11); район: Центр 4/6 (67%) — DOM.RIA {'Центр': 4, 'Арсенал': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "shelest"
+name = "Shelest"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [11451]
+lun_ids = []
+aliases = []
+
+# 10 оголошень DOM.RIA (ЖК Альпійський 10); район: Пасічна 13/13 (100%) — DOM.RIA {'Пасічна': 9}, LUN {'Пасічна': 4}
+[[complex]]
+key = "alpiiskyi"
+name = "Альпійський"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12590]
+lun_ids = []
+aliases = []
+
+# 10 оголошень DOM.RIA (ЖК Бельведер 10); район: Центр 7/7 (100%) — DOM.RIA {'Центр': 7}
+[[complex]]
+key = "belveder"
+name = "Бельведер"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9597]
+lun_ids = []
+aliases = []
+
+# 9 оголошень DOM.RIA (ЖК Бульвар Європейський 9); район: Бам 1/4 (25%) — DOM.RIA {'Бам': 1, 'Кант': 1, 'Набережна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "bulvar-ievropeiskyi"
+name = "Бульвар Європейський"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5783]
+lun_ids = []
+aliases = []
+
+# 8 оголошень DOM.RIA (ЖК вул. Хіміків / вул. Тролейбусна 8); район: Пасічна 11/11 (100%) — DOM.RIA {'Пасічна': 8}, LUN {'Пасічна': 3}
+[[complex]]
+key = "vul-khimikiv-vul-troleibusna"
+name = "вул. Хіміків / вул. Тролейбусна"
+district = "pasichna"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [8576]
+lun_ids = []
+aliases = []
+
+# 8 оголошень DOM.RIA (ЖК Світанок 8); район: Пасічна 10/10 (100%) — DOM.RIA {'Пасічна': 7}, LUN {'Пасічна': 3}
+[[complex]]
+key = "svitanok"
+name = "Світанок"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9838]
+lun_ids = []
+aliases = []
+
+# 8 оголошень DOM.RIA (ЖК HydroPark DeLuxe 8); район: Центр 8/9 (89%) — DOM.RIA {'Центр': 6, 'Бам': 1}, LUN {'Центр': 2}
+[[complex]]
+key = "hydropark-deluxe"
+name = "HydroPark DeLuxe"
+district = "tsentr"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [4811]
+lun_ids = []
+aliases = ["Гідропарк"]
+
+# 8 оголошень DOM.RIA (ЖК Квартал Галицький 8); район: Пасічна 14/14 (100%) — DOM.RIA {'Пасічна': 8}, LUN {'Пасічна': 6}
+[[complex]]
+key = "kvartal-halytskyi"
+name = "Квартал Галицький"
+district = "pasichna"
+kind = "named"
+within = ""
+group = "kvartal-halytskyi"
+ria_ids = [6435]
+lun_ids = []
+aliases = ["Галицький"]
+
+# 8 оголошень DOM.RIA (ЖК Зелений Двір 8); район: Рінь 3/4 (75%) — DOM.RIA {'Рінь': 2, 'Пасічна': 1}, LUN {'Рінь': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "zelenyi-dvir"
+name = "Зелений Двір"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5643]
+lun_ids = []
+aliases = []
+
+# 8 оголошень DOM.RIA (ЖК Арсеніївський двір 8); район: Каскад 7/7 (100%) — DOM.RIA {'Каскад': 5}, LUN {'Каскад': 2}
+[[complex]]
+key = "arseniivskyi-dvir"
+name = "Арсеніївський двір"
+district = "kaskad"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9636]
+lun_ids = []
+aliases = []
+
+# 7 оголошень DOM.RIA (ЖК вул. Чорноти 7); район: Центр 8/11 (73%) — DOM.RIA {'Центр': 4, 'Арсенал': 3}, LUN {'Центр': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-chornoty"
+name = "вул. Чорноти"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9596]
+lun_ids = []
+aliases = []
+
+# 7 оголошень DOM.RIA (ЖК Park Residence 5, Park Residence 2); район: Арсенал 1/2 (50%) — DOM.RIA {'Арсенал': 1, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "park-residence"
+name = "Park Residence"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6541]
+lun_ids = []
+aliases = []
+
+# 7 оголошень DOM.RIA (ЖК Еталон 7); район: Позитрон 8/9 (89%) — DOM.RIA {'Позитрон': 6, 'Каскад': 1}, LUN {'Позитрон': 2}
+[[complex]]
+key = "etalon"
+name = "Еталон"
+district = "pozytron"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5481]
+lun_ids = []
+aliases = []
+
+# 7 оголошень DOM.RIA (ЖК Едельвейс 7); район: Опришівці 6/8 (75%) — DOM.RIA {'Опришівці': 5, 'Центр': 1, 'Коновальця Чорновола': 1}, LUN {'Опришівці': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "edelveis"
+name = "Едельвейс"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3343]
+lun_ids = []
+aliases = []
+
+# 7 оголошень DOM.RIA (ЖК Central House 7); район: Княгинин 5/8 (62%) — DOM.RIA {'Княгинин': 4, 'Центр': 2, 'Пасічна': 1}, LUN {'Княгинин': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "central-house"
+name = "Central House"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6804]
+lun_ids = []
+aliases = []
+
+# 6 оголошень DOM.RIA (ЖК вул. Горбачевського, 40Б 5, ЖК вул. Горбачевського, 40б 1); район: Пасічна 6/6 (100%) — DOM.RIA {'Пасічна': 6}
+[[complex]]
+key = "vul-horbachevskoho-40b"
+name = "вул. Горбачевського, 40Б"
+district = "pasichna"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [7216]
+lun_ids = []
+aliases = []
+
+# 6 оголошень DOM.RIA (ЖК вул. Галицька, 120а 6); район: Пасічна 7/7 (100%) — DOM.RIA {'Пасічна': 6}, LUN {'Пасічна': 1}
+[[complex]]
+key = "vul-halytska-120a"
+name = "вул. Галицька, 120а"
+district = "pasichna"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9649]
+lun_ids = []
+aliases = []
+
+# 5 оголошень DOM.RIA (ЖК Вишеньки 4); район: Княгинин 5/5 (100%) — DOM.RIA {'Княгинин': 5}
+[[complex]]
+key = "vyshenky"
+name = "Вишеньки"
+district = "kniahynyn"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9662]
+lun_ids = []
+aliases = []
+
+# 5 оголошень DOM.RIA (ЖК Левада Дем'янів Лаз 5); район: Пасічна 7/7 (100%) — DOM.RIA {'Пасічна': 5}, LUN {'Пасічна': 2}
+[[complex]]
+key = "levada-demianiv-laz"
+name = "Левада Дем'янів Лаз"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5465]
+lun_ids = []
+aliases = ["Дем'янів Лаз"]
+
+# 5 оголошень DOM.RIA (ЖК Квартал Різдвяний 5); район: Пасічна 5/5 (100%) — DOM.RIA {'Пасічна': 5}
+[[complex]]
+key = "kvartal-rizdvianyi"
+name = "Квартал Різдвяний"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3792]
+lun_ids = []
+aliases = ["Різдвяний"]
+
+# 4 оголошень DOM.RIA (ЖК вул. Пасічна, 52 4); район: Пасічна 4/4 (100%) — DOM.RIA {'Пасічна': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-pasichna-52"
+name = "вул. Пасічна, 52"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [7281]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК вул. Гарбарська 4); район: Княгинин 3/4 (75%) — DOM.RIA {'Княгинин': 3, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-harbarska"
+name = "вул. Гарбарська"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9653]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Ozero 4); район: Набережна 3/4 (75%) — DOM.RIA {'Набережна': 2, 'Бам': 1}, LUN {'Набережна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "ozero"
+name = "Ozero"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9214]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Галицька Академія 4); район: Позитрон 4/4 (100%) — DOM.RIA {'Позитрон': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "halytska-akademiia"
+name = "Галицька Академія"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5784]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК вул. Стуса / вул. Миколайчука 4); район: Каскад 2/2 (100%) — DOM.RIA {'Каскад': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-stusa-vul-mykolaichuka"
+name = "вул. Стуса / вул. Миколайчука"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [3715]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Ювілейний 4); район: Рінь 1/1 (100%) — DOM.RIA {'Рінь': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "iuvileinyi"
+name = "Ювілейний"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6225]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Пасічнянський Двір 4); район: Пасічна 4/4 (100%) — DOM.RIA {'Пасічна': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "pasichnianskyi-dvir"
+name = "Пасічнянський Двір"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9540]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК вул. Тролейбусна, 24 4); район: Пасічна 4/4 (100%) — DOM.RIA {'Пасічна': 4} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-troleibusna-24"
+name = "вул. Тролейбусна, 24"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9674]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Квартал Галицький-2 4); район: Пасічна 7/7 (100%) — DOM.RIA {'Пасічна': 4}, LUN {'Пасічна': 3}
+[[complex]]
+key = "kvartal-halytskyi-2"
+name = "Квартал Галицький-2"
+district = "pasichna"
+kind = "named"
+within = ""
+group = "kvartal-halytskyi"
+ria_ids = [7134]
+lun_ids = []
+aliases = ["Галицький 2"]
+
+# 4 оголошень DOM.RIA (ЖК на Софіївці 4); район: Софіївка 1/1 (100%) — DOM.RIA {'Софіївка': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "na-sofiivtsi"
+name = "на Софіївці"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [6703]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК на Панаса Мирного 4); район: Центр 5/5 (100%) — DOM.RIA {'Центр': 4}, LUN {'Центр': 1}
+[[complex]]
+key = "na-panasa-myrnoho"
+name = "на Панаса Мирного"
+district = "tsentr"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [11561]
+lun_ids = []
+aliases = []
+
+# 4 оголошень DOM.RIA (ЖК Водограй 4); район: Каскад 1/1 (100%) — DOM.RIA {'Каскад': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vodohrai"
+name = "Водограй"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9185]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК по вул. Вовчинецькій 3); район: Гірка 2/3 (67%) — DOM.RIA {'Гірка': 2, 'Софіївка': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "po-vul-vovchynetskii"
+name = "по вул. Вовчинецькій"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [3260]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК Світанковий 3); район: Пасічна 5/5 (100%) — DOM.RIA {'Пасічна': 2}, LUN {'Пасічна': 3}
+[[complex]]
+key = "svitankovyi"
+name = "Світанковий"
+district = "pasichna"
+kind = "named"
+within = ""
+group = ""
+ria_ids = [4528]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК Левада Затишна 3); район: Бам 1/1 (100%) — DOM.RIA {'Бам': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "levada-zatyshna"
+name = "Левада Затишна"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5674]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК вул. Бельведерська, 32а 3); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-belvederska-32a"
+name = "вул. Бельведерська, 32а"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9526]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК по вул. Миру 58 3); район: Будівельників 4/5 (80%) — DOM.RIA {'Будівельників': 2, 'Гірка': 1}, LUN {'Будівельників': 2}
+[[complex]]
+key = "po-vul-myru-58"
+name = "по вул. Миру 58"
+district = "budivelnykiv"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [7743]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК Надрічна алея 3); район: Пасічна 2/3 (67%) — DOM.RIA {'Пасічна': 2, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "nadrichna-aleia"
+name = "Надрічна алея"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9689]
+lun_ids = []
+aliases = []
+
+# 3 оголошень DOM.RIA (ЖК вул. Івасюка 3); район: Позитрон 1/1 (100%) — DOM.RIA {'Позитрон': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-ivasiuka"
+name = "вул. Івасюка"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [3210]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Хотинська 2); район: Центр 2/2 (100%) — DOM.RIA {'Центр': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-khotynska"
+name = "вул. Хотинська"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [3643]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Липська вежа 2); район: Арсенал 1/2 (50%) — DOM.RIA {'Арсенал': 1, 'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "lypska-vezha"
+name = "Липська вежа"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6517]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК GREEN PARK 1, GREEN PARK 1); район: Будівельників 3/3 (100%) — DOM.RIA {'Будівельників': 2}, LUN {'Будівельників': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "green-park"
+name = "GREEN PARK"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12574]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Шевченка, 52 2); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-shevchenka-52"
+name = "вул. Шевченка, 52"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [7217]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Коновальця, 124 2); район: Арсенал 2/2 (100%) — DOM.RIA {'Арсенал': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-konovaltsia-124"
+name = "вул. Коновальця, 124"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9670]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Івасюка, 2 2); район: Каскад 1/1 (100%) — DOM.RIA {'Каскад': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-ivasiuka-2"
+name = "вул. Івасюка, 2"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [3640]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Пилипа Орлика, 7-7a 2); район: Центр 2/2 (100%) — DOM.RIA {'Центр': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-pylypa-orlyka-7-7a"
+name = "вул. Пилипа Орлика, 7-7a"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9595]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Квартал Левада 2); район: Каскад 2/2 (100%) — DOM.RIA {'Каскад': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "kvartal-levada"
+name = "Квартал Левада"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3791]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Елітний 2); район: Центр 1/2 (50%) — DOM.RIA {'Центр': 1, 'Брати': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "elitnyi"
+name = "Елітний"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7197]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Перлина 2); район: Центр 1/2 (50%) — DOM.RIA {'Центр': 1, 'Княгинин': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "perlyna"
+name = "Перлина"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3369]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Цитадель-2 2); район: Пасічна 4/4 (100%) — DOM.RIA {'Пасічна': 2}, LUN {'Пасічна': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "tsytadel-2"
+name = "Цитадель-2"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [6586]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Целевича, 4а 2); район: Пасічна 5/5 (100%) — DOM.RIA {'Пасічна': 2}, LUN {'Пасічна': 3}
+[[complex]]
+key = "vul-tselevycha-4a"
+name = "вул. Целевича, 4а"
+district = "pasichna"
+kind = "address"
+within = ""
+group = ""
+ria_ids = [6949]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Перспектива Хол 2); район: Вокзал 2/2 (100%) — DOM.RIA {'Вокзал': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "perspektyva-khol"
+name = "Перспектива Хол"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3469]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Central Avenue 2); район: Вокзал 1/2 (50%) — DOM.RIA {'Вокзал': 1, 'Набережна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "central-avenue"
+name = "Central Avenue"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9825]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Квартал Патріот 3 2); район: Бам 2/2 (100%) — DOM.RIA {'Бам': 1}, LUN {'Бам': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "kvartal-patriot-3"
+name = "Квартал Патріот 3"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9638]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Залізнична, 4 2); район: Залізничний 3/4 (75%) — DOM.RIA {'Центр': 1}, LUN {'Залізничний': 3} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-zaliznychna-4"
+name = "вул. Залізнична, 4"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9603]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Національної Гвардії, 3А 2); район: Арсенал 2/3 (67%) — DOM.RIA {'Бам': 1, 'Арсенал': 1}, LUN {'Арсенал': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-natsionalnoi-hvardii-3a"
+name = "вул. Національної Гвардії, 3А"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9594]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Івасюка-Любачівського 2); район: Софіївка 1/1 (100%) — DOM.RIA {'Софіївка': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-ivasiuka-liubachivskoho"
+name = "вул. Івасюка-Любачівського"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9643]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Довга 2); район: Княгинин 2/2 (100%) — DOM.RIA {'Княгинин': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-dovha"
+name = "вул. Довга"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [6705]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Зелений берег 2); район: Пасічна 3/3 (100%) — DOM.RIA {'Пасічна': 2}, LUN {'Пасічна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "zelenyi-bereh"
+name = "Зелений берег"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9839]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Тролейбусна, 32 2); район: Пасічна 4/4 (100%) — DOM.RIA {'Пасічна': 2}, LUN {'Пасічна': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-troleibusna-32"
+name = "вул. Тролейбусна, 32"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9672]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Авторський 2); район: Центр 2/2 (100%) — DOM.RIA {'Центр': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "avtorskyi"
+name = "Авторський"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7132]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК Затишна Оселя 1); район: Кішлак 1/1 (100%) — DOM.RIA {'Кішлак': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "zatyshna-oselia"
+name = "Затишна Оселя"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5513]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Лемківська, 3 2); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-lemkivska-3"
+name = "вул. Лемківська, 3"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [8580]
+lun_ids = []
+aliases = []
+
+# 2 оголошень DOM.RIA (ЖК вул. Залізнична, 3 2); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-zaliznychna-3"
+name = "вул. Залізнична, 3"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [5625]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК Калинова свобода 1); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "kalynova-svoboda"
+name = "Калинова свобода"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [3204]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Вовчинецька / вул. Коломийської 1); район: Софіївка 2/2 (100%) — DOM.RIA {'Софіївка': 1}, LUN {'Софіївка': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-vovchynetska-vul-kolomyiskoi"
+name = "вул. Вовчинецька / вул. Коломийської"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9584]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК Green Side 1); район: Опришівці 1/1 (100%) — DOM.RIA {'Опришівці': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "green-side"
+name = "Green Side"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12834]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Галицька, 92 1); район: Пасічна 1/1 (100%) — DOM.RIA {'Пасічна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-halytska-92"
+name = "вул. Галицька, 92"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [8574]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Коновальця, 110-114 1); район: Арсенал 2/2 (100%) — DOM.RIA {'Арсенал': 1}, LUN {'Арсенал': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-konovaltsia-110-114"
+name = "вул. Коновальця, 110-114"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [3642]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК King Hall 1); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "king-hall"
+name = "King Hall"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9153]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Берегова 18/1, 18/2, 20, вул. Чиста, 23 1); район: Княгинин 1/1 (100%) — DOM.RIA {'Княгинин': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-berehova-18-1-18-2-20-vul-chysta-23"
+name = "вул. Берегова 18/1, 18/2, 20, вул. Чиста, 23"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9608]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК Статус 1); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "status"
+name = "Статус"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9577]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (Сонячний 1); район: Городок 1/2 (50%) — DOM.RIA {'Городок': 1}, LUN {'Бам': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "soniachnyi"
+name = "Сонячний"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [5785]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Коновальця, 260 1); район: Опришівці 2/2 (100%) — DOM.RIA {'Опришівці': 1}, LUN {'Опришівці': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-konovaltsia-260"
+name = "вул. Коновальця, 260"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9677]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Ленкавського, 28а 1); район: Набережна 1/1 (100%) — DOM.RIA {'Набережна': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-lenkavskoho-28a"
+name = "вул. Ленкавського, 28а"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9688]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК по вул. Дорошенка 1); район: Бам 1/1 (100%) — DOM.RIA {'Бам': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "po-vul-doroshenka"
+name = "по вул. Дорошенка"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [5773]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Бельведерська, 35 1); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-belvederska-35"
+name = "вул. Бельведерська, 35"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9680]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК Сhocolate 1); район: Рінь 2/2 (100%) — DOM.RIA {'Рінь': 1}, LUN {'Рінь': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "shocolate"
+name = "Сhocolate"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [7721]
+lun_ids = []
+aliases = ["Шоколад"]
+
+# 1 оголошень DOM.RIA (ЖК Вишневий 1); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vyshnevyi"
+name = "Вишневий"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9395]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Мазепи 1); район: Центр 2/2 (100%) — DOM.RIA {'Центр': 1}, LUN {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-mazepy"
+name = "вул. Мазепи"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9633]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК SKY центр 1); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "sky-tsentr"
+name = "SKY центр"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [9567]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Короля Данила, 11 1); район: голосів немає → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-korolia-danyla-11"
+name = "вул. Короля Данила, 11"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9598]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК Smart House 1); район: Опришівці 1/1 (100%) — DOM.RIA {'Опришівці': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "smart-house"
+name = "Smart House"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [10948]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Набережна ім. Стефаника 1); район: Княгинин 2/3 (67%) — DOM.RIA {'Набережна': 1}, LUN {'Княгинин': 2} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-naberezhna-im-stefanyka"
+name = "вул. Набережна ім. Стефаника"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9635]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (ЖК вул. Миколайчука, 6 1); район: Каскад 2/2 (100%) — DOM.RIA {'Каскад': 1}, LUN {'Каскад': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "vul-mykolaichuka-6"
+name = "вул. Миколайчука, 6"
+district = ""
+kind = "address"
+within = ""
+group = ""
+ria_ids = [9648]
+lun_ids = []
+aliases = []
+
+# 1 оголошень DOM.RIA (Бізнес-центр А5 1); район: Центр 1/1 (100%) — DOM.RIA {'Центр': 1} → не прив'язано (< 80% чи n < 5)
+[[complex]]
+key = "biznes-tsentr-a5"
+name = "Бізнес-центр А5"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = [12242]
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "noveli"
+name = "Noveli"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "bydlen-pra-sk"
+name = "Bydlení Pražská"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "dolishnii"
+name = "Долішній"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "krakivskyi"
+name = "Краківський"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "ievropeiskyi-siti"
+name = "Європейський Сіті"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "astoriia"
+name = "Асторія"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "wawel"
+name = "Wawel"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = ["Вавель"]
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "royal-hall"
+name = "Royal Hall"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "perfect-house"
+name = "Perfect House"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "misto-mrii"
+name = "Місто Мрій"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "novator"
+name = "Новатор"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "veselka-richkova"
+name = "Веселка Річкова"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "premiere"
+name = "Premiere"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "komfort-zona"
+name = "Комфорт Зона"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "kalynova-sloboda"
+name = "Калинова Слобода"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; лише Благо / LUN / текст (Етап 0) — без району
+[[complex]]
+key = "vynahorodnyi"
+name = "Винагородний"
+district = ""
+kind = "named"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []
+
+# 0 оголошень DOM.RIA; парасолька з geoEntities LUN (проба Етапу 0)
+[[complex]]
+key = "manhattan-district"
+name = "Житловий район Manhattan"
+district = ""
+kind = "umbrella"
+within = ""
+group = ""
+ria_ids = []
+lun_ids = []
+aliases = []

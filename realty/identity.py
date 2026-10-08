@@ -93,10 +93,26 @@ def from_olx_page(html: str) -> dict:
     })
 
 
+def _flombu_geo(location: dict) -> str | None:
+    """Точність точки flombu — за тим, до чого геокодовано адресу (рецензія E10).
+
+    Точка є завжди, але точна лише з номером будинку (routeNumber): лише вулиця —
+    точка десь на вулиці, лише населений пункт — його центр (проба: 3 з 12 точок —
+    «Тернопіль, …, 46002», 4 — лише вулиця, 1 — з будинком). У PRECISE (вето відстані
+    зведення, перевірка «geo», координати Блоку 4) — лише «building»."""
+    if location.get("latitude") is None:
+        return None
+    if str(location.get("routeNumber") or "").strip():
+        return "building"
+    if str(location.get("route") or "").strip():
+        return "street"
+    return "locality"
+
+
 def from_flombu(attrs: dict, location: dict) -> dict:
     return _clean({
         "lat": _num(location.get("latitude")), "lon": _num(location.get("longitude")),
-        "geo": "point" if location.get("latitude") else None,
+        "geo": _flombu_geo(location),
         "seller": _pref("flombu", attrs.get("ownerPhoneId")),
     })
 

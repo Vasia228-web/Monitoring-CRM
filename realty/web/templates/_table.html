@@ -60,7 +60,12 @@
             <a class="addr" href="{{ r.original_url }}" target="_blank" rel="noopener noreferrer">
               {{ r.location or r.title or 'Без адреси' }}
             </a>
-            {% if r.district and r.district != r.location %}
+            {#- Район і ЖК квартири з довідника (Блок 4, E10, D57), а не сирий district:
+                у LUN там найближчий POI («ТЦ Арсен»). Без довідника — як до E10. #}
+            {% set pl = place_rows.get(r.id) if place_rows is not none else none %}
+            {% if pl is not none %}
+              {% if pl.district %}<span class="sub">{{ pl.district }}{% if pl.complex %} · {{ pl.complex }}{% endif %}{% if pl.tag %} · <span class="tag">{{ pl.tag }}</span>{% endif %}</span>{% else %}<span class="sub unk">{{ pl.unknown }}{% if pl.complex %} · {{ pl.complex }}{% endif %}</span>{% endif %}
+            {% elif r.district and r.district != r.location %}
               <span class="sub">{{ r.district }}</span>
             {% endif %}
             {% if r.property_id %}

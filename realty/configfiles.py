@@ -913,6 +913,349 @@ class PrivacyConfig:
     apply: PrivacyApply
 
 
+# --- Райони й ЖК (Блок 4, крок E10, D57) ------------------------------------------------------
+# Три файли в config/places/: довідник районів (districts.toml), довідник ЖК
+# (complexes.toml) і правила (rules.toml). Ключі — стабільні латинські слаги: вони
+# стоять в адресах (?district=…) і в базі (listings.district_key), тож перейменування
+# назви ключа не змінює. Узгодженість ДОВІДНИКА між файлами (псевдонім веде до однієї
+# сутності, район ЖК існує, id DOM.RIA не дублюються) перевіряє PlacesComplexesConfig
+# через realty/places/directory.py — так `config check` зупиняє розгортання з колізією.
+
+PLACE_AREAS = ("city", "hromada", "outside")
+PLACE_IGNORE_KINDS = ("landmark", "poi", "street", "city", "complex", "region")
+PLACE_COMPLEX_KINDS = ("named", "address", "umbrella")
+PLACE_DISTRICT_TIERS = ("complex_src", "addr", "src", "complex_weak", "coords")
+PLACE_COMPLEX_TIERS = ("src_id", "src_name", "coords", "text")
+PLACE_KEY_MAX = 48
+PLACE_COMPLEX_KEY_MAX = 64
+
+
+def _slug_problems(where: str, key: str, limit: int) -> list[str]:
+    import re
+
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", key or ""):
+        return [f"{where}: ключ {key!r} — лише a-z, 0-9 і дефіс (стабільний слаг)"]
+    if len(key) > limit:
+        return [f"{where}: ключ {key!r} довший за {limit}"]
+    return []
+
+
+@dataclass(frozen=True)
+class PlaceDistrict:
+    key: str
+    name: str
+    # city — місто; hromada — село міської громади (рішення власника 4, D46: окремий
+    # «район» з позначкою «громада»); outside — поза громадою (Лисець, аномалія «інша
+    # область»): видно в «усе», не видно в «тільки місто».
+    area: str = field(**_limits(choices=PLACE_AREAS))
+    # Батьківський район — лише за доказом (rules.link: ≥80% при n≥5; D57); "" — немає.
+    parent: str
+    # false — склад не звірено з КАТОТТГ (села громади, Етап 0); показується як є.
+    verified: bool
+    aliases: tuple[str, ...]
+    ria_ids: tuple[int, ...]
+    lun_ids: tuple[int, ...]
+
+    def problems(self) -> list[str]:
+        out = _slug_problems("key", self.key, PLACE_KEY_MAX)
+        if not self.name.strip():
+            out.append("name: порожня назва")
+        if self.parent == self.key:
+            out.append("parent: район не може бути батьком сам собі")
+        return out
+
+
+@dataclass(frozen=True)
+class PlaceIgnore:
+    """Відома назва, що НЕ є районом (орієнтир, POI, вулиця, місто): не стає районом і
+    не потрапляє в «нерозпізнані» на /status."""
+
+    name: str
+    kind: str = field(**_limits(choices=PLACE_IGNORE_KINDS))
+
+
+@dataclass(frozen=True)
+class PlacesDistrictsConfig:
+    """`config/places/districts.toml` — райони міста, села громади, ігноровані назви (E10, D57)."""
+
+    district: tuple[PlaceDistrict, ...] = field(**_limits(min_len=1))
+    ignore: tuple[PlaceIgnore, ...]
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        keys = [d.key for d in self.district]
+        dup = sorted({k for k in keys if keys.count(k) > 1})
+        if dup:
+            out.append(f"district: ключі повторюються: {', '.join(dup)}")
+        known = set(keys)
+        by_key = {d.key: d for d in self.district}
+        for d in self.district:
+            if d.parent and d.parent not in known:
+                out.append(f"district {d.key}: parent {d.parent!r} — такого району немає")
+            elif d.parent and by_key[d.parent].parent:
+                out.append(f"district {d.key}: parent {d.parent!r} сам має батька — "
+                           f"лише один рівень")
+            elif d.parent and by_key[d.parent].area != d.area:
+                out.append(f"district {d.key}: area {d.area!r} ≠ area батька "
+                           f"{by_key[d.parent].area!r}")
+        return out
+
+
+@dataclass(frozen=True)
+class PlaceComplex:
+    key: str
+    name: str
+    # Район ЖК — лише за доказом (rules.link: ≥80% при n≥5; голоси — у коментарі над
+    # записом); "" — не прив'язано (видно на /status як «ЖК без району»).
+    district: str
+    # named — звичайний; address — «ЖК вул. …» DOM.RIA (збіг лише за id і точною назвою,
+    # текстовий ступінь їх не шукає); umbrella — «житловий район», усередині якого є
+    # конкретні ЖК (поступається їм у квартирі, протиріччям не вважається).
+    kind: str = field(**_limits(choices=PLACE_COMPLEX_KINDS))
+    within: str           # ключ парасольки або ""
+    group: str            # спільна група черг (Family Plaza / Family Plaza 2) або ""
+    ria_ids: tuple[int, ...]
+    lun_ids: tuple[int, ...]
+    aliases: tuple[str, ...]
+
+    def problems(self) -> list[str]:
+        out = _slug_problems("key", self.key, PLACE_COMPLEX_KEY_MAX)
+        if not self.name.strip():
+            out.append("name: порожня назва")
+        if self.key.startswith("_"):
+            out.append("key: «_…» зарезервовано (_none, _unknown)")
+        if self.within == self.key:
+            out.append("within: ЖК не може бути всередині себе")
+        return out
+
+
+@dataclass(frozen=True)
+class PlacesComplexesConfig:
+    """`config/places/complexes.toml` — ЖК: написання, id DOM.RIA і LUN, район (E10, D57)."""
+
+    # id ЖК DOM.RIA з кількома різними назвами: для них ЖК визначається за назвою, а не
+    # за id (Етап 0: ria:6420 SHEPIT/Стожари, ria:8732 Афини/River Stone, ria:7845 …).
+    ria_id_by_name: tuple[int, ...]
+    complex: tuple[PlaceComplex, ...] = field(**_limits(min_len=1))
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        keys = [c.key for c in self.complex]
+        dup = sorted({k for k in keys if keys.count(k) > 1})
+        if dup:
+            out.append(f"complex: ключі повторюються: {', '.join(dup)}")
+        by_key = {c.key: c for c in self.complex}
+        for c in self.complex:
+            if c.within and c.within not in by_key:
+                out.append(f"complex {c.key}: within {c.within!r} — такого ЖК немає")
+            elif c.within and by_key[c.within].kind != "umbrella":
+                out.append(f"complex {c.key}: within {c.within!r} — не парасолька "
+                           f"(kind = umbrella)")
+            if c.kind == "umbrella" and c.within:
+                out.append(f"complex {c.key}: парасолька не буває всередині іншої")
+        out += self._directory_problems()
+        return out
+
+    def _directory_problems(self) -> list[str]:
+        """Перевірка довідника цілком (з districts.toml і rules.toml): колізії псевдонімів,
+        райони ЖК, id. Помилки самих тих файлів покаже їхня власна перевірка."""
+        try:
+            districts = load("places/districts")
+            rules = load("places/rules")
+        except ConfigError:
+            return []
+        from .places.directory import DirectoryError, Directory
+
+        try:
+            Directory.build(districts, self, rules)
+        except DirectoryError as e:
+            return [f"довідник: {line}" for line in e.problems]
+        return []
+
+
+@dataclass(frozen=True)
+class PlacesNormalize:
+    # Префікси, що прибираються перед порівнянням назв, — окремо для районів і для ЖК.
+    # «житловий район» — НЕ префікс ЖК: «Житловий район Manhattan» — парасолька, а не
+    # ЖК Manhattan (D57).
+    district_prefixes: tuple[str, ...]
+    complex_prefixes: tuple[str, ...]
+    strip_suffixes: tuple[str, ...]
+    quotes: str
+    # Пари «латинська літера + кирилична двійниця» («ii», «aа»): у змішаному слові
+    # літери зводяться до письма більшості (Пасiчна → Пасічна, Comfогt → Comfort).
+    homoglyphs: tuple[str, ...] = field(**_limits(min_len=1))
+
+    def problems(self) -> list[str]:
+        return [f"homoglyphs: {p!r} — дві літери: латинська, потім кирилична"
+                for p in self.homoglyphs if len(p) != 2]
+
+
+@dataclass(frozen=True)
+class PlacesTiers:
+    district: tuple[str, ...] = field(**_limits(min_len=1, choices=PLACE_DISTRICT_TIERS))
+    complex: tuple[str, ...] = field(**_limits(min_len=1, choices=PLACE_COMPLEX_TIERS))
+    # Слабкі ступені вмикаються лише після нічного проходу LUN і заміру точності (E11).
+    coords_enabled: bool
+    text_enabled: bool
+
+
+@dataclass(frozen=True)
+class PlacesCoords:
+    precise_geo: tuple[str, ...] = field(**_limits(min_len=1))
+    district_k: int = field(**_limits(min=1))
+    district_radius_m: float = field(**_limits(min=1))
+    district_min_refs: int = field(**_limits(min=1))
+    district_agree: float = field(**_limits(min=0.5, max=1))
+    complex_radius_m: float = field(**_limits(min=1))
+    complex_min_refs: int = field(**_limits(min=1))
+    complex_sources: tuple[str, ...]
+    complex_markets: tuple[str, ...] = field(**_limits(choices=("primary", "secondary",
+                                                                  "unknown")))
+    validate_exclude_m: float = field(**_limits(min=0))
+    validate_sample: int = field(**_limits(min=10))
+    min_precision_district: float = field(**_limits(min=0, max=1))
+    min_precision_complex: float = field(**_limits(min=0, max=1))
+
+
+@dataclass(frozen=True)
+class PlacesText:
+    fields: tuple[str, ...] = field(**_limits(min_len=1, choices=("title", "description")))
+    markers: tuple[str, ...] = field(**_limits(min_len=1))
+    min_precision: float = field(**_limits(min=0, max=1))
+
+
+@dataclass(frozen=True)
+class PlacesLink:
+    min_share: float = field(**_limits(min=0.5, max=1))
+    min_n: int = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class PlacesSecondary:
+    # [] — «не в ЖК» вимкнено (рецензія E10: точність 59% — тимчасово, до перевіреної
+    # вибірки власника; D57).
+    markets: tuple[str, ...] = field(**_limits(choices=("primary", "secondary", "unknown")))
+    forbid_zhk_words: bool
+
+
+@dataclass(frozen=True)
+class PlacesAddr:
+    # Мітка села LUN відкидається, якщо стільки оголошень DOM.RIA ІНШИХ квартир того самого
+    # будинку кладуть його в міський район (рецензія E10: Фізкультурна 27 — «Крихівці»
+    # LUN проти 176 «Бам» DOM.RIA).
+    village_veto_min_ria: int = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class PlacesReassign:
+    # `places reassign --apply` відмовляє без успішного бекапу, свіжішого за це (хв).
+    backup_max_age_min: float = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class PlacesArea:
+    unknown_counts_as_city: bool
+
+
+@dataclass(frozen=True)
+class PlacesGuard:
+    # Чи можна кроку змінювати НЕПОРОЖНІ ключі (ні: зміна лише рахується як
+    # would_change і видна на /status; інтеграція, конфлікт 13).
+    allow_changes: bool
+
+    def problems(self) -> list[str]:
+        if self.allow_changes:
+            return ["allow_changes: true — лише за рішенням власника (D57); код такого "
+                    "режиму не має"]
+        return []
+
+
+@dataclass(frozen=True)
+class PlacesAssign:
+    batch_rows: int = field(**_limits(min=1, max=200))
+
+
+@dataclass(frozen=True)
+class PlacesStatus:
+    unknown_limit: int = field(**_limits(min=1))
+    unknown_min_count: int = field(**_limits(min=1))
+    examples: int = field(**_limits(min=0, max=10))
+
+
+@dataclass(frozen=True)
+class PlacesAudit:
+    core_kinds: tuple[str, ...] = field(**_limits(min_len=1))
+    complex_min_audits: int = field(**_limits(min=1))
+
+
+@dataclass(frozen=True)
+class PlacesSources:
+    lun_geo_types: tuple[str, ...] = field(**_limits(min_len=1))
+    # flombu: місто чи ні — за координатами (BBOX, як normalize.in_ivano_frankivsk), а не
+    # за текстом адреси (внутрішнє рішення D47 п. 8; збір flombu 27 → ~400, D57).
+    flombu_city_by_coords: bool
+
+
+@dataclass(frozen=True)
+class PlacesLabels:
+    hromada: str
+    outside: str
+    unknown_district: str
+    unknown_complex: str
+    none_complex: str
+    area_city: str
+    area_all: str
+    how: dict[str, str]
+
+
+@dataclass(frozen=True)
+class PlacesRulesConfig:
+    """`config/places/rules.toml` — нормалізація назв, драбина ступенів, пороги (E10, D57)."""
+
+    normalize: PlacesNormalize
+    tiers: PlacesTiers
+    coords: PlacesCoords
+    text: PlacesText
+    link: PlacesLink
+    secondary: PlacesSecondary
+    addr: PlacesAddr
+    area: PlacesArea
+    guard: PlacesGuard
+    reassign: PlacesReassign
+    assign: PlacesAssign
+    status: PlacesStatus
+    audit: PlacesAudit
+    sources: PlacesSources
+    labels: PlacesLabels
+
+    def problems(self) -> list[str]:
+        known = (set(PLACE_DISTRICT_TIERS) | set(PLACE_COMPLEX_TIERS)
+                 | {"secondary", "addr_area"})
+        return [f"labels.how.{k}: невідомий ступінь" for k in self.labels.how
+                if k not in known]
+
+
+@dataclass(frozen=True)
+class CyclePlaces:
+    timeout_min: float = field(**_limits(min=1, max=60))
+    # Крок «райони й ЖК» у циклі — лише після перегляду вибірки власником (`places
+    # sample` → перегляд → ручний `places assign` → true; рецензія E10, D57): ключі
+    # «лише туди, де порожньо» потім не виправити без `places reassign`.
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class CycleConfig:
+    """`config/cycle.toml` — стелі НОВИХ кроків циклу (інтеграція, конфлікт 11; E10, D57).
+
+    Старі кроки — як і досі, runner.TASK_TIMEOUTS (їх не переносили, щоб не міняти
+    робочого). Зламаний файл не зупиняє циклу: крок без стелі не запускається (журнал).
+    """
+
+    places: CyclePlaces
+
+
 # Реєстр тем: ім'я файлу без .toml (з підтекою, якщо є) → схема.
 SCHEMAS: dict[str, type] = {
     "speed": SpeedConfig,
@@ -920,6 +1263,10 @@ SCHEMAS: dict[str, type] = {
     "links": LinksConfig,
     "privacy": PrivacyConfig,
     "night": NightConfig,
+    "places/districts": PlacesDistrictsConfig,
+    "places/complexes": PlacesComplexesConfig,
+    "places/rules": PlacesRulesConfig,
+    "cycle": CycleConfig,
 }
 
 

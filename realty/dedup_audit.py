@@ -29,6 +29,10 @@ KINDS = {
     "floor": "різні поверхи",
     "condition": "«з ремонтом» і «без ремонту»",
     "geo": "точні координати далі, ніж 250 м",
+    # Блок 4 (E10, D57): ЖК оголошень із довідника районів і ЖК. Парасолька й ЖК
+    # усередині неї, «не в ЖК» і ЖК — не протиріччя.
+    "complex": "різні ЖК",
+    "complex_phase": "різні черги одного ЖК",
 }
 MISSED = {"ria_flat": "той самий id квартири DIM.RIA в різних квартирах",
           "url": "те саме посилання в різних квартирах"}
@@ -38,9 +42,15 @@ AREA_SPREAD = 1.5
 QUEUE_LIMIT = 300
 
 
-def contradictions(a: dedup.Shape, b: dedup.Shape) -> set[str]:
+def contradictions(a: dedup.Shape, b: dedup.Shape, directory=None) -> set[str]:
     """Що в цій парі свідчить «це різні квартири»."""
     out = set()
+    if directory is not None and a.complex and b.complex:
+        rel = directory.related(a.complex, b.complex)
+        if rel == "different":
+            out.add("complex")
+        elif rel == "phase":
+            out.add("complex_phase")
     if a.flat and b.flat and a.flat != b.flat:
         out.add("ria_flat")
     if a.korpus and b.korpus and a.korpus != b.korpus:
@@ -64,10 +74,24 @@ def contradictions(a: dedup.Shape, b: dedup.Shape) -> set[str]:
     return out
 
 
+def _core_kinds() -> frozenset:
+    """Види для suspicious_core (config/places/rules.toml audit.core_kinds); без конфігу —
+    усі види, крім нових (complex, complex_phase) — так тривога не міняється."""
+    from . import configfiles
+
+    try:
+        return frozenset(configfiles.load("places/rules").audit.core_kinds)
+    except configfiles.ConfigError:
+        return frozenset(KINDS) - {"complex", "complex_phase"}
+
+
 def audit(session) -> dict:
     listings = list(session.scalars(select(Listing).where(Listing.property_id.is_not(None))))
     shapes = dedup.load_shapes(session, listings)
     manual = dedup.Manual.load(session)
+    directory = dedup._place_directory()
+    core = _core_kinds()
+    core_n = 0
     pid_of = {l.id: l.property_id for l in listings}
     by_prop: dict[int, list] = defaultdict(list)
     for sh in shapes:
@@ -84,9 +108,10 @@ def audit(session) -> dict:
             for b in members[i + 1:]:
                 if manual and manual.relation(a.id, b.id) == "same":
                     continue
-                kinds.update(contradictions(a, b))
+                kinds.update(contradictions(a, b, directory))
         if kinds:
             counts.update(kinds.keys())
+            core_n += bool(core & set(kinds))
             queue.append({"property_id": pid, "n": len(members),
                           "kinds": sorted(kinds, key=lambda k: -kinds[k])})
     # Спершу — найбільше видів протиріч, далі — найбільші квартири.
@@ -107,7 +132,8 @@ def audit(session) -> dict:
                               for x in ids for y in ids if pid_of[x] != pid_of[y]):
                 continue
             missed.append({"kind": kind, "key": key, "properties": pids})
-    return {"properties": multi, "suspicious": len(queue), "by_kind": dict(counts),
+    return {"properties": multi, "suspicious": len(queue), "suspicious_core": core_n,
+            "by_kind": dict(counts),
             "missed": len(missed), "queue": queue[:QUEUE_LIMIT], "missed_list": missed[:QUEUE_LIMIT],
             "missed_by_kind": dict(Counter(m["kind"] for m in missed))}
 
@@ -117,7 +143,8 @@ def record(result: dict, rules) -> None:
     with ops.ops_session() as s:
         s.add(ops.DedupAudit(
             rules=",".join(sorted(rules)) or None, properties=result["properties"],
-            suspicious=result["suspicious"], missed=result["missed"],
+            suspicious=result["suspicious"], suspicious_core=result.get("suspicious_core"),
+            missed=result["missed"],
             by_kind=json.dumps(result["by_kind"], ensure_ascii=False),
             queue=json.dumps(result["queue"], ensure_ascii=False),
             missed_list=json.dumps(result["missed_list"], ensure_ascii=False)))

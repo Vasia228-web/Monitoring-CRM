@@ -112,6 +112,14 @@ def migrate(*, dry_run: bool, wait_min: float) -> int:
     print("\nПЛАН ЗМІН СХЕМИ" + (" (нічого не пишу)" if dry_run else ""))
     for line in plan.ddl or ["— схема вже відповідає моделі"]:
         print(f"  {line}")
+    try:
+        ops_plan = ops.pending_schema()
+    except Exception as e:                              # noqa: BLE001 — лише показ
+        ops_plan = [f"(не прочитано: {e})"]
+    print("ops.db (застосує init_ops() будь-якого процесу — сайт, сторож, крок; не ця "
+          "транзакція):")
+    for line in ops_plan or ["— схема вже відповідає моделі"]:
+        print(f"  {line}")
     if dry_run:
         return 0
 

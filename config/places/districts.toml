@@ -1,0 +1,634 @@
+# Райони Івано-Франківська, села міської громади, відомі назви, що не є районом
+# (Блок 4, крок E10, D57). Чернетку зроблено scripts/places_seed.py з копії бази Етапу 0
+# (лише читання) і переглянуто очима; далі правиться тут — нове написання додається
+# псевдонімом з рядком у implementation-notes.md (Deviations).
+#
+# key — стабільний латинський ключ (стоїть в адресах ?district=… і в базі); name — як
+# показувати; area: city | hromada (село громади, рішення власника 4, D46) | outside
+# (поза громадою — видно в «усе»); parent — батьківський район лише за доказом (≥80% при
+# n≥5, rules.link; D57); verified = false — склад не звірено з КАТОТТГ; aliases — інші
+# написання (латинську «i» нормалізація зводить сама, тут — те, що лише довідник знає);
+# ria_ids / lun_ids — id району DOM.RIA і мікрорайону LUN (порожньо, доки не з'являться
+# в place_raw: на копії Етапу 0 їх немає).
+
+
+# DOM.RIA: 1888 оголошень за весь час; мітки LUN (Центр): 238; у квартирах з DOM.RIA збіг 90/93 (97%)
+[[district]]
+key = "tsentr"
+name = "Центр"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 1176 оголошень за весь час; мітки LUN (Княгинин): 477; у квартирах з DOM.RIA збіг 118/127 (93%)
+[[district]]
+key = "kniahynyn"
+name = "Княгинин"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 982 оголошень за весь час; мітки LUN (Пасічна, Пасiчна): 522; у квартирах з DOM.RIA збіг 142/142 (100%)
+[[district]]
+key = "pasichna"
+name = "Пасічна"
+area = "city"
+parent = ""
+verified = true
+aliases = ["Пасiчна", "Пасечная"]
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 970 оголошень за весь час; мітки LUN (Набережна): 41; у квартирах з DOM.RIA збіг 40/40 (100%)
+[[district]]
+key = "naberezhna"
+name = "Набережна"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 755 оголошень за весь час; мітки LUN (Каскад): 128; у квартирах з DOM.RIA збіг 51/52 (98%)
+[[district]]
+key = "kaskad"
+name = "Каскад"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 570 оголошень за весь час; мітки LUN (Майзлі): 236; у квартирах з DOM.RIA збіг 79/81 (98%)
+[[district]]
+key = "maizli"
+name = "Майзлі"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 292 оголошень за весь час; мітки LUN (Арсенал): 101; у квартирах з DOM.RIA збіг 19/23 (83%)
+[[district]]
+key = "arsenal"
+name = "Арсенал"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 281 оголошень за весь час; мітки LUN (Бам, БАМ): 75; у квартирах з DOM.RIA збіг 30/34 (88%)
+[[district]]
+key = "bam"
+name = "Бам"
+area = "city"
+parent = ""
+verified = true
+aliases = ["БАМ"]
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 266 оголошень за весь час; мітки LUN (Брати): 113; у квартирах з DOM.RIA збіг 27/31 (87%)
+[[district]]
+key = "braty"
+name = "Брати"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 238 оголошень за весь час; мітки LUN (Софіївка): 180; у квартирах з DOM.RIA збіг 41/45 (91%)
+[[district]]
+key = "sofiivka"
+name = "Софіївка"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 191 оголошень за весь час; мітки LUN (Опришівці, Опришівцi): 223; у квартирах з DOM.RIA збіг 24/33 (73%)
+[[district]]
+key = "opryshivtsi"
+name = "Опришівці"
+area = "city"
+parent = ""
+verified = true
+aliases = ["Опришівцi"]
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 162 оголошень за весь час; мітки LUN (Кант): 39; у квартирах з DOM.RIA збіг 9/10 (90%)
+[[district]]
+key = "kant"
+name = "Кант"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 156 оголошень за весь час; мітки LUN (Коновальця Чорновола): 13; у квартирах з DOM.RIA збіг 3/3 (100%)
+[[district]]
+key = "konovaltsia-chornovola"
+name = "Коновальця Чорновола"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 86 оголошень за весь час; мітки LUN (Позитрон): 22; у квартирах з DOM.RIA збіг 5/5 (100%)
+[[district]]
+key = "pozytron"
+name = "Позитрон"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 67 оголошень за весь час; мітки LUN (Рінь, Рiнь): 27; у квартирах з DOM.RIA збіг 4/4 (100%)
+[[district]]
+key = "rin"
+name = "Рінь"
+area = "city"
+parent = ""
+verified = true
+aliases = ["Рiнь"]
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 58 оголошень за весь час; мітки LUN (Будівельників): 34; у квартирах з DOM.RIA збіг 9/10 (90%)
+[[district]]
+key = "budivelnykiv"
+name = "Будівельників"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 53 оголошень за весь час; мітки LUN (Городок): 24; у квартирах з DOM.RIA збіг 6/7 (86%)
+[[district]]
+key = "horodok"
+name = "Городок"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 47 оголошень за весь час; мітки LUN (Гірка): 16; у квартирах з DOM.RIA збіг 4/4 (100%)
+[[district]]
+key = "hirka"
+name = "Гірка"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 40 оголошень за весь час; мітки LUN (Вокзал): 4; у квартирах з DOM.RIA збіг 4/4 (100%)
+[[district]]
+key = "vokzal"
+name = "Вокзал"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# DOM.RIA: 14 оголошень за весь час; мітки LUN (Кішлак): 5; у квартирах з DOM.RIA збіг 1/2 (50%)
+[[district]]
+key = "kishlak"
+name = "Кішлак"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 82 оголошень; у квартирах з DOM.RIA: Центр 12, Майзлі 1 → батько Центр (12/13 = 92% ≥ 80%, n ≥ 5)
+[[district]]
+key = "nimetska-koloniia"
+name = "Німецька колонія"
+area = "city"
+parent = "tsentr"
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 21 оголошень; у квартирах з DOM.RIA: немає → окремий район (доказу немає)
+[[district]]
+key = "belveder"
+name = "Бельведер"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 144 оголошень; у квартирах з DOM.RIA: Бам 7, Городок 1 → батько Бам (7/8 = 88% ≥ 80%, n ≥ 5)
+[[district]]
+key = "patriot"
+name = "Патріот"
+area = "city"
+parent = "bam"
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 45 оголошень; у квартирах з DOM.RIA: Майзлі 1, Гірка 1 → окремий район (доказ 1/2 < 80% чи n < 5)
+[[district]]
+key = "novyi-svit"
+name = "Новий світ"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 10 оголошень; у квартирах з DOM.RIA: Центр 2 → окремий район (доказ 2/2 < 80% чи n < 5)
+[[district]]
+key = "pivdennyi-bulvar"
+name = "Південний бульвар"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 90 оголошень; у квартирах з DOM.RIA: Рінь 2, Майзлі 1 → окремий район (доказ 2/3 < 80% чи n < 5)
+[[district]]
+key = "tysmenytska"
+name = "Тисменицька"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 171 оголошень; у квартирах з DOM.RIA: Княгинин 17, Каскад 2, Гірка 2, Софіївка 2 → окремий район (доказ 17/27 < 80% чи n < 5)
+[[district]]
+key = "nadrichna"
+name = "Надрічна"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 63 оголошень; у квартирах з DOM.RIA: Центр 8, Вокзал 3, Княгинин 2 → окремий район (доказ 8/13 < 80% чи n < 5)
+[[district]]
+key = "zaliznychnyi"
+name = "Залізничний"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# лише LUN: 79 оголошень; у квартирах з DOM.RIA: Арсенал 5, Центр 4 → окремий район (доказ 5/9 < 80% чи n < 5)
+[[district]]
+key = "chornovola"
+name = "Чорновола"
+area = "city"
+parent = ""
+verified = true
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 409
+[[district]]
+key = "krykhivtsi"
+name = "Крихівці"
+area = "hromada"
+parent = ""
+verified = false
+aliases = ["Крихівці (Івано-Франківськ)"]
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 238
+[[district]]
+key = "vovchynets"
+name = "Вовчинець"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 94
+[[district]]
+key = "mykytyntsi"
+name = "Микитинці"
+area = "hromada"
+parent = ""
+verified = false
+aliases = ["Микитинці (Івано-Франківськ)"]
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 19
+[[district]]
+key = "uhornyky"
+name = "Угорники"
+area = "hromada"
+parent = ""
+verified = false
+aliases = ["Угорники (Івано-Франківськ)"]
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 1
+[[district]]
+key = "khryplyn"
+name = "Хриплин"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 14
+[[district]]
+key = "chukalivka"
+name = "Чукалівка"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 32
+[[district]]
+key = "uhryniv"
+name = "Угринів"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 5
+[[district]]
+key = "pidpechery"
+name = "Підпечери"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 5
+[[district]]
+key = "zahvizdia"
+name = "Загвіздя"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# село громади (рішення власника 4, D46); склад не звірено з КАТОТТГ; міток LUN: 1
+[[district]]
+key = "cherniiv"
+name = "Черніїв"
+area = "hromada"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# поза громадою (D57); міток LUN: 1
+[[district]]
+key = "lysets"
+name = "Лисець"
+area = "outside"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# поза громадою (D57); міток LUN: 2
+[[district]]
+key = "dnipropetrovska-oblast"
+name = "Дніпропетровська область"
+area = "outside"
+parent = ""
+verified = false
+aliases = []
+ria_ids = []
+lun_ids = []
+
+# Відомі назви, що НЕ є районом: орієнтир, POI, вулиця, місто, ЖК у полі району.
+
+[[ignore]]
+name = "Міське озеро"
+kind = "landmark"
+
+[[ignore]]
+name = "Івано-Франківськ"
+kind = "city"
+
+[[ignore]]
+name = "Івано-Франківська область"
+kind = "region"
+
+[[ignore]]
+name = "Івано-Франківський район"
+kind = "region"
+
+[[ignore]]
+name = "ЖК Винагородний"
+kind = "complex"
+
+[[ignore]]
+name = "ТЦ Панорама PLAZA"
+kind = "poi"
+
+[[ignore]]
+name = "Парк ім. Тараса Шевченка"
+kind = "poi"
+
+[[ignore]]
+name = "Франківський драмтеатр"
+kind = "poi"
+
+[[ignore]]
+name = "Драмтеатр"
+kind = "poi"
+
+[[ignore]]
+name = "Собор Преображення Господнього"
+kind = "poi"
+
+[[ignore]]
+name = "ТЦ \"Велмарт\""
+kind = "poi"
+
+[[ignore]]
+name = "Велмарт"
+kind = "poi"
+
+[[ignore]]
+name = "ТРЦ \"Велес\""
+kind = "poi"
+
+[[ignore]]
+name = "ТЦ Велес"
+kind = "poi"
+
+[[ignore]]
+name = "ТЦ \"Арсен\""
+kind = "poi"
+
+[[ignore]]
+name = "Залізничний вокзал"
+kind = "poi"
+
+[[ignore]]
+name = "Парк воїнів-визволителів"
+kind = "poi"
+
+[[ignore]]
+name = "Парк Воїнів-інтернаціоналістів"
+kind = "poi"
+
+[[ignore]]
+name = "Івано-Франківська ратуша"
+kind = "poi"
+
+[[ignore]]
+name = "Ратуша"
+kind = "poi"
+
+[[ignore]]
+name = "Стометрівка"
+kind = "poi"
+
+[[ignore]]
+name = "ТЦ White"
+kind = "poi"
+
+[[ignore]]
+name = "ТЦ Пасаж"
+kind = "poi"
+
+[[ignore]]
+name = "ТЦ Флагман"
+kind = "poi"
+
+[[ignore]]
+name = "Епіцентр"
+kind = "poi"
+
+[[ignore]]
+name = "Metro"
+kind = "poi"
+
+[[ignore]]
+name = "Меморіальний сквер"
+kind = "poi"
+
+[[ignore]]
+name = "Площа Ринок"
+kind = "poi"
+
+[[ignore]]
+name = "Пам'ятник Степану Бандері"
+kind = "poi"
+
+[[ignore]]
+name = "Кладовище"
+kind = "poi"
+
+[[ignore]]
+name = "Ковзанка Цунамі"
+kind = "poi"
+
+[[ignore]]
+name = "Набережна вулиця ім. Василя Стефаника"
+kind = "street"
+
+[[ignore]]
+name = "Набережна імені Василя Стефаника вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Набережна р. Бистриця Надвірнянська"
+kind = "street"
+
+[[ignore]]
+name = "Галицька вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Левинського І. вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Хриплинська вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Стуса Василя вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Ленкавського вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Комунальна вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Надрічна вулиця"
+kind = "street"
+
+[[ignore]]
+name = "Княгинин вулиця"
+kind = "street"

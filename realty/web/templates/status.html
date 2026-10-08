@@ -547,6 +547,80 @@ td a,.row a{color:var(--accent)}
 })();
 </script>
 <!--/liveness-panel-->
+{#- Панель «Райони й ЖК» (Блок 4, крок E10, D57): охоплення району й ЖК до/після за
+    джерелами, would_change (зміни вже визначених ключів — НЕ застосовано, чекають
+    рішення), нерозпізнані назви з підказкою «схоже на…», ЖК без району. Дані — GET
+    /api/status/places: готове зведення останнього прогону кроку, раз на
+    `status_poll.panels_s`. Позначено <!--places-panel-->. -#}
+<!--places-panel-->
+  <section>
+    <h2>Райони й ЖК</h2>
+    <p class="hint">Крок циклу «райони й ЖК» заповнює район і ЖК лише там, де їх ще немає;
+      якщо довідник чи нові докази змінили б уже визначене значення, це лише рахується тут
+      («змінилось би») і чекає вашого рішення (`cli.py places reassign` — що саме; з
+      `--apply` і свіжим бекапом — виправити). Нова назва з джерела, якої немає в довіднику,
+      — у списку нерозпізнаних: додається псевдонімом у config/places/.</p>
+    <div class="rows" id="pl-run" style="margin:10px 0"></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Джерело</th><th class="r">Актуальних</th><th class="r">Район</th>
+          <th class="r">ЖК (з «не в ЖК»)</th><th class="r">«Не в ЖК»</th></tr></thead>
+        <tbody id="pl-cov"><tr><td colspan="5" style="color:var(--muted)">завантаження…</td></tr></tbody>
+      </table>
+    </div>
+    <h3 style="font-size:14px;margin:16px 0 6px">Нерозпізнані назви</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Назва (як у джерелі)</th><th>Поле</th><th class="r">Актуальних / усього</th>
+          <th>Схоже на</th><th>Приклад</th></tr></thead>
+        <tbody id="pl-unknown"><tr><td colspan="5" style="color:var(--muted)">—</td></tr></tbody>
+      </table>
+    </div>
+    <p class="hint" id="pl-legend"></p>
+  </section>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? "—").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const n = (v) => v === null || v === undefined ? "—" : Number(v).toLocaleString("uk-UA");
+  const pct = (a, b) => b ? (100 * a / b).toLocaleString("uk-UA", {maximumFractionDigits: 1}) + "%" : "—";
+  const when = (iso) => iso ? new Date(iso).toLocaleString("uk-UA", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "—";
+  async function load(){
+    try{
+      const r = await fetch("/api/status/places", {cache: "no-store"});
+      if (!r.ok) return;
+      const L = (await r.json()).last;
+      if (!L){ $("pl-cov").innerHTML = `<tr><td colspan="5" style="color:var(--muted)">прогонів кроку ще не було</td></tr>`; return; }
+      const wc = L.would_change_detail || {};
+      $("pl-run").innerHTML = [
+        ["Останній прогін", when(L.at) + " · " + esc(L.kind) + " · " + esc(L.status) + " · " + n(L.seconds) + " с"],
+        ["Заповнено", Object.entries(L.filled || {}).map(([k, v]) => esc(k) + " " + n(v)).join(", ") || "0"],
+        ["Змінилось би (не застосовано)", n(L.would_change) + (Object.keys(wc.by_field || {}).length ? " (" + Object.entries(wc.by_field).map(([k, v]) => esc(k) + " " + n(v)).join(", ") + ")" : "")],
+        ["Доказ зник (значення лишилось, без тривоги)", Object.entries(wc.lost || {}).map(([k, v]) => esc(k) + " " + n(v)).join(", ") || "0"],
+        ["Мітку села LUN відкинуто (будинок у місті за DOM.RIA)", n((wc.area_conflicts || {}).n || 0) + ((wc.area_conflicts || {}).by_label ? " (" + Object.entries(wc.area_conflicts.by_label).slice(0, 6).map(([k, v]) => esc(k) + " " + n(v)).join(", ") + ")" : "")],
+        ["ЖК без району (з актуальними оголошеннями)", n((L.unlinked || []).length)],
+      ].map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("");
+      const after = (L.coverage || {}).after || {};
+      $("pl-cov").innerHTML = Object.keys(after).sort((a, b) => (a === "_all") - (b === "_all") || a.localeCompare(b)).map(s => {
+        const c = after[s];
+        return `<tr><td class="src">${s === "_all" ? "усі" : esc(s)}</td><td class="r num">${n(c.active)}</td>
+          <td class="r num">${pct(c.district || 0, c.active)}</td><td class="r num">${pct(c.complex || 0, c.active)}</td>
+          <td class="r num">${n(c.none || 0)}</td></tr>`;
+      }).join("") || `<tr><td colspan="5" style="color:var(--muted)">даних немає</td></tr>`;
+      $("pl-unknown").innerHTML = (L.unknown || []).slice(0, 50).map(e => `<tr><td>${esc(e.name)}</td>
+        <td class="mono">${esc(e.field)}</td><td class="r num">${n(e.active)} / ${n(e.all)}</td>
+        <td>${esc(e.suggest || "")}</td><td>${(e.examples || []).map(i => `<span class="mono">#${n(i)}</span>`).join(" ")}</td></tr>`).join("")
+        || `<tr><td colspan="5" style="color:var(--muted)">усі назви з джерел є в довіднику</td></tr>`;
+      const rows = (L.coverage || {}).rows_after || (L.coverage || {}).rows_before || {};
+      $("pl-legend").textContent = (rows.rows ? `Рядки сайту (квартири): ${n(rows.rows)}, з районом ${pct(rows.district || 0, rows.rows)}, з ЖК (разом із «не в ЖК») ${pct(rows.complex || 0, rows.rows)}. ` : "") +
+        `Довідник ${L.directory_ver || "—"}. Ступені: ` + Object.entries(L.tiers || {}).map(([k, v]) => k + " " + n(v)).join(", ") + ".";
+    }catch(e){ /* панель просто не оновиться */ }
+  }
+  load();
+  setInterval(load, {{ (poll.panels_s * 1000)|int if poll else 60000 }});
+})();
+</script>
+<!--/places-panel-->
 
 </div>
 

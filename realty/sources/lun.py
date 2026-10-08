@@ -16,6 +16,7 @@ from .. import identity
 from ..fetcher import FetchError
 from ..models import Condition, MarketType
 from ..normalize import classify_condition, classify_market, in_ivano_frankivsk, parse_date
+from ..places import extract as place_extract
 from . import rieltor
 from .base import BaseSource
 
@@ -108,6 +109,22 @@ def iter_json_objects(payload: str, marker: str = '{"id":') -> Iterator[dict]:
 class LunSource(BaseSource):
     name = "lun"
 
+    def _geo_types(self) -> tuple:
+        """Які geoEntities зберігати в place_raw (config/places/rules.toml
+        sources.lun_geo_types); зламаний конфіг — не зберігаємо нічого."""
+        cached = getattr(self, "_geo_types_cache", None)
+        if cached is None:
+            from .. import configfiles
+
+            try:
+                cached = tuple(configfiles.load("places/rules").sources.lun_geo_types)
+            except configfiles.ConfigError as e:
+                log.error("config/places/rules.toml не читається — geoEntities LUN не "
+                          "зберігаю: %s", e)
+                cached = ()
+            self._geo_types_cache = cached
+        return cached
+
     def enrich(self, rec: dict, html: str) -> dict:
         """Рівень 2: добір із картки на сайті-першоджерелі.
 
@@ -122,6 +139,12 @@ class LunSource(BaseSource):
             return rec
         filled = False
         for field, value in found.items():
+            if field == "place_raw":
+                # Докази місця — лише нові ключі (як FILL_ONLY_JSON у pipeline).
+                merged = dict(rec.get("place_raw") or {})
+                merged.update({k: v for k, v in value.items() if k not in merged})
+                rec["place_raw"] = merged
+                continue
             if rec.get(field) in (None, "", MarketType.UNKNOWN, Condition.UNKNOWN):
                 rec[field] = value
                 filled = True
@@ -200,6 +223,10 @@ class LunSource(BaseSource):
             "condition": condition,
             "description": text[:2000] or None,
             "identity": identity.from_lun(d),
+            # Докази місця (Блок 4, E10, D57): geoEntities — мікрорайон, ЖК (з geoId),
+            # село. district лишається poi.name, як і було (сирі поля не змінюємо).
+            "place_raw": place_extract.from_lun_item(
+                d, self._geo_types(), lambda v: deref(v, rows)) or None,
             # Телефони й контакти навмисно не зберігаємо.
             "raw": {
                 "id": d.get("id"), "price": d.get("price"), "priceSqm": d.get("priceSqm"),

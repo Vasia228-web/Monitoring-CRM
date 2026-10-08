@@ -32,6 +32,62 @@
       </select>
     </label>
 
+    {#- Район, ЖК, місцевість (Блок 4, E10, D57). Число біля варіанта — скільки рядків
+        покаже список із цим варіантом (той самий запит, один GROUP BY). -#}
+    {% if place %}
+    <label class="field">
+      <span>Район</span>
+      <select name="district" data-auto data-district style="max-width:260px">
+        <option value="">Усі ({{ place.district_all }})</option>
+        {% for g in place.district_groups if g.options %}
+          <optgroup label="{{ g.name }}">
+          {% for o in g.options %}
+            <option value="{{ o.key }}" {% if o.selected %}selected{% endif %}>{{ o.label }} ({{ o.n }})</option>
+            {% for c in o.children %}
+            <option value="{{ c.key }}" {% if c.selected %}selected{% endif %}>{{ o.label }} ({{ c.label }}) ({{ c.n }})</option>
+            {% endfor %}
+          {% endfor %}
+          </optgroup>
+        {% endfor %}
+        <option value="_unknown" {% if f.district == '_unknown' %}selected{% endif %}>Не визначено ({{ place.district_unknown }})</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>ЖК</span>
+      <select name="complex" data-auto data-complex style="max-width:260px">
+        <option value="">Усі ({{ place.complex_all }})</option>
+        {#- Список ЖК — лише для вибраного району (план Блоку 4): без району — лише вже
+            вибраний ЖК (з посилання), «не в ЖК» і «не визначено». -#}
+        {% for o in place.complexes if f.district or o.selected or o.children | selectattr('selected') | list %}
+          <option value="{{ o.key }}" {% if o.selected %}selected{% endif %}>{{ o.label }} ({{ o.n }})</option>
+          {% for c in o.children if f.district or c.selected %}
+          <option value="{{ c.key }}" {% if c.selected %}selected{% endif %}>&nbsp;&nbsp;{{ c.label }} ({{ c.n }})</option>
+          {% endfor %}
+        {% endfor %}
+        {% if not f.district %}<option value="" disabled>— ЖК: спершу виберіть район —</option>{% endif %}
+        <option value="_none" {% if f.complex == '_none' %}selected{% endif %}>Не в ЖК ({{ place.complex_none }})</option>
+        <option value="_unknown" {% if f.complex == '_unknown' %}selected{% endif %}>Не визначено ({{ place.complex_unknown }})</option>
+      </select>
+      {#- Без JS зміна району не скидає ЖК (сервер скидає лише ЖК, якого в районі немає). -#}
+      <noscript><small style="color:var(--muted)">Змінюючи район, виберіть ЖК «Усі».</small></noscript>
+    </label>
+
+    <div class="field">
+      <span>Місцевість</span>
+      <div class="seg">
+        <label>
+          <input type="radio" name="area" value="" data-auto {% if not f.area %}checked{% endif %}>
+          <span>{{ place.labels.area_all }} ({{ place.area_all }})</span>
+        </label>
+        <label>
+          <input type="radio" name="area" value="city" data-auto {% if f.area == 'city' %}checked{% endif %}>
+          <span>{{ place.labels.area_city }} ({{ place.area_city }})</span>
+        </label>
+      </div>
+    </div>
+    {% endif %}
+
     <label class="field">
       <span>Джерело</span>
       <select name="source" data-auto>

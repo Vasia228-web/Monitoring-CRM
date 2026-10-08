@@ -126,6 +126,10 @@ class Shape:
     start: datetime | None = None        # коли оголошення з'явилось
     end: datetime | None = None          # до коли висіло (зараз — якщо активне)
     prices: tuple = ()                   # ((коли, ціна $), …) за зростанням часу
+    # ЖК оголошення з довідника (listings.complex_key, без «не в ЖК»; Блок 4, E10, D57) —
+    # лише для перевірки зведення (види complex / complex_phase). match_score і вето його
+    # НЕ бачать: правила зведення (варіант E) не змінюються (внутрішнє рішення D47 п. 7).
+    complex: str | None = None
 
 
 def _naive(dt: datetime | None) -> datetime | None:
@@ -151,7 +155,8 @@ def shape_of(r: Listing, prices: tuple = (), now: datetime | None = None) -> Sha
                  lat=ident.get("lat"), lon=ident.get("lon"), geo=ident.get("geo"),
                  photo=ident.get("photo"),
                  primary=r.market_type == MarketType.PRIMARY, condition=r.condition,
-                 start=start, end=end, prices=prices)
+                 start=start, end=end, prices=prices,
+                 complex=r.complex_key if r.complex_key and r.complex_key != "_none" else None)
 
 
 def load_shapes(session, listings: list[Listing]) -> list[Shape]:
@@ -869,6 +874,37 @@ def resolve_property_id(session, pid: int, hops: int = 10) -> int | None:
     return None
 
 
+_PLACE_UNSET = object()
+
+
+def _place_directory():
+    """Довідник районів і ЖК для зведення — один на процес; зламаний конфіг — None
+    (тоді поля місця квартири не чіпаємо: це кеш, його перерахує наступний прогін)."""
+    cached = getattr(_place_directory, "value", _PLACE_UNSET)
+    if cached is not _PLACE_UNSET:
+        return cached
+    try:
+        from .places import directory
+        value = directory.load()
+    except Exception as e:                       # noqa: BLE001 — зведення важливіше
+        log.error("довідник районів і ЖК не завантажився — місце квартир не оновлюю: %s", e)
+        value = None
+    _place_directory.value = value
+    return value
+
+
+def _place_attrs(members: list[Listing]) -> dict:
+    """Район і ЖК квартири з ключів її оголошень (Блок 4, E10, D57); {} — без довідника."""
+    d = _place_directory()
+    if d is None:
+        return {}
+    from .places.resolve import property_place
+
+    dk, ck, area, conflict = property_place(
+        [(m.district_key, m.district_how, m.complex_key, m.complex_how) for m in members], d)
+    return dict(district_key=dk, complex_key=ck, place_area=area, place_conflict=conflict)
+
+
 def _attrs(members: list[Listing]) -> dict:
     prices = [m.price_usd for m in members if m.price_usd]
     street, houses = next(
@@ -876,6 +912,7 @@ def _attrs(members: list[Listing]) -> dict:
         (None, frozenset()),
     )
     return dict(
+        **_place_attrs(members),
         fingerprint="|".join(sorted(f"{m.source}:{m.external_id}" for m in members))[:128],
         rooms=_pick([m.rooms for m in members]),
         area_total=_pick([m.area_total for m in members]),
@@ -935,6 +972,61 @@ def _move(session, listing_ids, pid: int) -> None:
                         .execution_options(synchronize_session=False))
 
 
+# --- Район і ЖК квартири на її оголошеннях (row_*; Блок 4, E10, D57) -------------------------
+# ОДНА точка синхронізації кешу row_* (інтеграція, конфлікт 21): перебудова (лише змінені),
+# «розділити», «злити», крок «райони й ЖК» і (Блок 5) вставка нового оголошення.
+# Оголошення квартири — значення квартири; без квартири — власні ключі. Прямий UPDATE лише
+# трьох колонок row_*: last_seen та інші поля не змінюються (D43).
+
+_ROW_DESIRED = """
+SELECT l.id, l.row_district, l.row_complex, l.row_area,
+       CASE WHEN l.property_id IS NULL THEN l.district_key ELSE p.district_key END,
+       CASE WHEN l.property_id IS NULL THEN l.complex_key ELSE p.complex_key END,
+       CASE WHEN l.property_id IS NULL THEN l.place_area ELSE p.place_area END
+FROM listings l LEFT JOIN properties p ON p.id = l.property_id"""
+_ROW_UPDATE = ("UPDATE listings SET row_district = :d, row_complex = :c, row_area = :a "
+               "WHERE id = :id")
+
+
+def row_updates(session, property_ids=None) -> list[dict]:
+    """Оголошення, у яких row_* відстає від квартири (або від власних ключів без квартири)."""
+    sql = _ROW_DESIRED
+    params: dict = {}
+    if property_ids is not None:
+        ids = sorted({int(p) for p in property_ids if p is not None})
+        if not ids:
+            return []
+        sql += f" WHERE l.property_id IN ({', '.join(str(i) for i in ids)})"
+    out = []
+    for lid, rd, rc, ra, d, c, a in session.execute(text(sql), params):
+        if (rd, rc, ra) != (d, c, a):
+            out.append({"id": lid, "d": d, "c": c, "a": a})
+    return out
+
+
+def _sync_rows(session, property_ids=None, *, batch: int | None = None, wrap=None) -> int:
+    """Перенести район і ЖК квартир на їхні оголошення (лише там, де відрізняються).
+
+    `property_ids` — лише ці квартири (None — усі оголошення, і без квартири теж).
+    `batch` і `wrap` — для кроку «райони й ЖК»: пакети по `batch` рядків, кожен
+    виконується через `wrap(ids, run)` (окрема транзакція з перевіркою відбитка інших
+    колонок); зведення пише все в своїй транзакції.
+    """
+    ups = row_updates(session, property_ids)
+    size = batch or 500
+    for start in range(0, len(ups), size):
+        chunk = ups[start:start + size]
+
+        def run(chunk=chunk) -> None:
+            session.execute(text(_ROW_UPDATE), chunk)
+
+        if wrap is None:
+            run()
+        else:
+            wrap([u["id"] for u in chunk], run)
+    return len(ups)
+
+
 def split_off(session, property_id: int, listing_ids: list[int]) -> int:
     """«Це різні квартири»: вибрані оголошення стають окремою квартирою.
 
@@ -960,6 +1052,7 @@ def split_off(session, property_id: int, listing_ids: list[int]) -> int:
     for k, v in _attrs(rest).items():
         setattr(prop, k, v)
     session.flush()
+    _sync_rows(session, [property_id, new_pid])
     return new_pid
 
 
@@ -996,6 +1089,7 @@ def merge_into(session, property_id: int, other_id: int) -> int:
     for k, v in _attrs(mine + theirs).items():
         setattr(prop, k, v)
     session.flush()
+    _sync_rows(session, [pid])
     return pid
 
 
@@ -1114,4 +1208,7 @@ def rebuild(session, dry_run: bool = False, rules=None) -> dict:
                 chained.new_id = target
             stats["redirected"] += 1
         stats["removed"] += 1
+    # Район і ЖК квартир — на їхні оголошення (лише там, де змінилось; Блок 4, E10).
+    session.flush()
+    stats["rows_synced"] = _sync_rows(session)
     return stats

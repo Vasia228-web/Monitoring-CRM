@@ -148,6 +148,13 @@ def parse_detail(html: str) -> dict:
     if ident:
         out["identity"] = ident
 
+    # «Назва ЖК» (вільний текст продавця; Етап 0 — 45% живих сторінок) — у place_raw
+    # (Блок 4, E10, D57): нових запитів немає, сторінку деталей збір і так відкриває.
+    from datetime import date
+
+    from ..places import extract as place_extract
+    out["place_raw"] = place_extract.from_olx_params(params, date.today().isoformat())
+
     return {k: v for k, v in out.items() if v is not None}
 
 
@@ -161,6 +168,13 @@ class OlxSource(BaseSource):
             return rec
         filled = []
         for field, value in found.items():
+            if field == "place_raw":
+                # Докази місця — лише нові ключі (FILL_ONLY_JSON); «збагаченим зі сторінки»
+                # запис від них не стає (Блок 4, E10, D57).
+                merged = dict(rec.get("place_raw") or {})
+                merged.update({k: v for k, v in value.items() if k not in merged})
+                rec["place_raw"] = merged
+                continue
             current = rec.get(field)
             if current in (None, "", MarketType.UNKNOWN, Condition.UNKNOWN):
                 rec[field] = value

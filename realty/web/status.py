@@ -276,6 +276,20 @@ def api_liveness():
     return JSONResponse(body)
 
 
+@router.get("/api/status/places")
+def api_places():
+    """Панель «Райони й ЖК» (Блок 4, E10, D57) — лише власник (префікс /api/status).
+
+    Готове зведення останнього прогону кроку «райони й ЖК» з ops.places_runs (його
+    рахує сам крок): охоплення до/після, ступені, точність, would_change (зміни
+    непорожніх ключів, НЕ застосовані), нерозпізнані назви, ЖК без району. Одне
+    читання ops.db, без агрегацій на запит (інтеграція, конфлікт 10).
+    """
+    from ..places import commands
+
+    return JSONResponse({"last": commands.last_run()})
+
+
 @router.post("/api/status/liveness-fuse")
 def api_liveness_fuse(payload: dict = Body(default={})):
     """Зняти запобіжник джерела (лише власник; same-origin — як для будь-якого POST).

@@ -113,7 +113,7 @@ async def lifespan(_: FastAPI):
     # це станеться до першого запиту, а не в ньому. Знімок «Аналітики» й типові
     # списки рахуються фоном: перша людина після перезапуску їх не чекає.
     for name in ("index.html", "processing.html", "analytics.html", "property.html",
-                 "status.html", "property_missing.html", "login.html"):
+                 "status.html", "property_missing.html", "login.html", "places.html"):
         try:
             templates.env.get_template(name)
         except Exception as e:                      # noqa: BLE001 — лише прогрів
@@ -150,6 +150,11 @@ app.include_router(status_router)
 from .analytics_routes import router as analytics_router  # noqa: E402
 
 app.include_router(analytics_router)
+
+# «Райони й ЖК» (Блок 4, E10, D57): розподіл за районами й ЖК — обидві ролі.
+from .places_routes import router as places_router  # noqa: E402
+
+app.include_router(places_router)
 
 # Ручне виправлення зведення квартир (лише власник).
 from .dedup_routes import router as dedup_router  # noqa: E402
@@ -350,12 +355,150 @@ def _peer_comparison(row, thresholds) -> dict:
             "direction": "дорожче" if delta > 0 else "дешевше" if delta < 0 else "як у схожих"}
 
 
+def _places():
+    """(довідник, правила) районів і ЖК для сайту або (None, None) — зламаний конфіг не
+    валить список: фільтри місця тоді не діють (попередження), рядки — як до E10."""
+    from ..places import directory
+
+    d = directory.current()
+    if d is None:
+        return None, None
+    return d, d.rules
+
+
+def places_ready(s, dk: tuple) -> bool:
+    """Чи крок «райони й ЖК» уже щось визначив (хоч один row_* не NULL).
+
+    До першого `places assign` (він чекає перегляду вибірки власником — рецензія E10)
+    сайт показує все як до E10: сирий район біля рядка, без фільтрів місця, — а не
+    «район не визначено» на кожному рядку. Раз на покоління; після кроку — один крок
+    покритого індексу до першого знайденого."""
+    from sqlalchemy import text
+
+    return speedcache.flag(s, "places_ready", lambda: bool(s.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM listings WHERE row_district IS NOT NULL "
+        "OR row_complex IS NOT NULL)")).scalar()), dk=dk)
+
+
+def _raw_rows(s, stmt) -> list:
+    """Рядки Core-запиту курсором драйвера, без обробки рядків SQLAlchemy (для 12–22
+    тис. рядків «id + row_*» — ≈2 мс із 19; значення — int і str, перетворювати нічого)."""
+    res = s.connection().execute(stmt)
+    try:
+        return res.cursor.fetchall()
+    finally:
+        res.close()
+
+
+def _build_place_map() -> tuple[tuple, dict]:
+    """(ключ даних, id → (row_district, row_complex, row_area)) рядків, які можуть бути
+    в списку: чисті й актуальні (ті самі умови, що й у list_ids_select). Лише фон
+    (прогрів після покоління; speedcache.place_map_schedule) — на шляху запиту ні."""
+    from ..models import Listing, effective_active, is_clean
+
+    with SessionLocal() as s:
+        dk = speedcache.data_key(s)
+        interned: dict = {}
+        m = {}
+        for lid, d_, c_, a_ in _raw_rows(s, select(
+                Listing.id, Listing.row_district, Listing.row_complex, Listing.row_area)
+                .where(is_clean(), effective_active().is_(True))):
+            t = (d_, c_, a_)
+            m[lid] = interned.setdefault(t, t)
+    return dk, m
+
+
+def _ids_with_groups(s, stmt) -> tuple[list, list]:
+    """Список id і групи лічильників ОДНИМ проходом: row_* поруч з id у тому самому
+    запиті (покривний ix_listings_place) — замість окремого GROUP BY, коли карти id →
+    row_* ще немає (холодний «/»: +2–4 мс замість +7 мс на M4; рецензія E10)."""
+    from collections import Counter
+
+    from ..models import Listing
+
+    rows = _raw_rows(s, stmt.with_only_columns(
+        Listing.id, Listing.row_district, Listing.row_complex, Listing.row_area))
+    counts = Counter((r[1], r[2], r[3]) for r in rows)
+    return [r[0] for r in rows], [(*k, n) for k, n in counts.items()]
+
+
+def _groups_from_ids(m: dict, ids) -> list | None:
+    """Групи лічильників за готовим списком id (той самий список, що й рядки сторінки).
+    None — у карті бракує id (карта з іншого моменту) — тоді GROUP BY."""
+    from collections import Counter
+
+    try:
+        return [(*k, n) for k, n in Counter(m[i] for i in ids).items()]
+    except KeyError:
+        return None
+
+
+def _base_groups(s, base_query: dict, base_key: tuple, ids=None, *, dk: tuple,
+                 groups=None) -> tuple:
+    """Лічильники фільтрів місця (Блок 4, E10, D57) — групи вибірки БЕЗ фільтрів місця.
+
+    Кеш за ключем даних `dk` (прочитаним запитом один раз — speedcache.data_key) і
+    фільтром. Якщо обчислювати: є карта id → row_* (будує лише фон) і список id
+    вибірки без фільтрів місця (цього ж перегляду або з кешу) — Counter за картою; інакше
+    один GROUP BY над тим самим запитом, а карта ставиться у фон. `groups` — уже
+    пораховані тим самим проходом, що й список id (_ids_with_groups). Замір на копії
+    (M4): Counter за 12 355 id — 0,6 мс; GROUP BY — ≈7 мс; карта — ≈10 мс, лише фоном
+    (рецензія E10).
+    """
+    def compute():
+        if groups is not None:
+            if speedcache.place_map_peek(dk) is None:
+                speedcache.place_map_schedule(_build_place_map)
+            return groups
+        m = speedcache.place_map_peek(dk)
+        if m is None:
+            speedcache.place_map_schedule(_build_place_map)
+        else:
+            base_ids = ids if ids is not None else speedcache.cached_list_ids(
+                s, base_key, dk=dk)
+            if base_ids is not None:
+                got = _groups_from_ids(m, base_ids)
+                if got is not None:
+                    return got
+        from ..places import facets
+        return [tuple(r) for r in s.execute(
+            facets.grouped_select(list_ids_select(**base_query))).all()]
+
+    return speedcache.facets(s, base_key, compute, dk=dk)
+
+
+def _place_rows(rows, d, rules) -> dict | None:
+    """Підпис місця біля рядка: район (з довідника), ЖК, «громада»/«поза громадою».
+
+    Район квартири, а не сирий district (у LUN там найближчий POI — «ТЦ Арсен»)."""
+    if d is None:
+        return None
+    from ..places.directory import NONE
+
+    out = {}
+    for r in rows:
+        label = d.label(r.row_district)
+        area = r.row_area
+        tag = (rules.labels.hromada if area == "hromada" else
+               rules.labels.outside if area == "outside" else None)
+        cplx = d.complex_label(r.row_complex) if r.row_complex != NONE else None
+        out[r.id] = {"district": label,
+                     "complex": d.complex_display(r.row_complex) if cplx else None,
+                     "tag": tag,
+                     "unknown": rules.labels.unknown_district if not label else None}
+    return out
+
+
 def _render_list(request: Request, template: str, *, in_progress: bool | None,
                  condition: str, market: str, source: str, rooms: str,
                  price_min: str | None, price_max: str | None, sort: str,
                  page: str | None = None, per_page: str | None = None,
-                 all_ads: str = "", path: str = "/"):
+                 all_ads: str = "", path: str = "/", district: str = "",
+                 complex_: str = "", area: str = ""):
     """Спільна збірка будь-якої сторінки зі списком оголошень."""
+    from ..places import facets
+    from ..places.directory import NONE, UNKNOWN
+
     lo, hi = _num(price_min), _num(price_max)
     warning = None
     if lo is not None and hi is not None and lo > hi:
@@ -363,6 +506,13 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         warning = (f"Ціна «від» (${lo:,.0f}) більша за «до» (${hi:,.0f}) — "
                    f"нічого не може потрапити в такий діапазон.")
         lo = hi = None
+    # Район, ЖК, «тільки місто» (Блок 4, E10, D57): невідомий ключ — попередження, і
+    # фільтр не діє (як «від» > «до»).
+    d, rules = _places()
+    sel, place_warnings = facets.selection(d, rules, district=district, complex_=complex_,
+                                           area=area)
+    if place_warnings:
+        warning = " ".join(filter(None, [warning, *place_warnings]))
 
     collapse = all_ads != "1"
     # Відхилення ціни за м² рахується в межах сегмента, а не по всій базі.
@@ -379,11 +529,51 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
     query = dict(condition=condition, market=market, source=source, rooms=rooms,
                  price_min=lo, price_max=hi, sort=sort, in_progress=in_progress,
                  collapse=collapse)
-    key = speedcache.list_key({**query, "all_ads": all_ads}, in_progress=in_progress,
-                              collapse=collapse)
+    place_state = {"district": sel.district, "complex": sel.complex, "area": sel.area}
+    key = speedcache.list_key({**query, **place_state, "all_ads": all_ads},
+                              in_progress=in_progress, collapse=collapse)
+    place = None
+    base_key = speedcache.list_key(
+        {**query, "district": "", "complex": "", "area": "", "all_ads": all_ads,
+         "sort": DEFAULT_SORT}, in_progress=in_progress, collapse=collapse)
     with SessionLocal() as s:
-        ids = speedcache.list_ids(
-            s, key, lambda: s.execute(list_ids_select(**query)).scalars().all())
+        # Ключ даних — один на запит: список id, лічильники й варіанти з одного покоління.
+        dk = speedcache.data_key(s)
+        if d is not None and not places_ready(s, dk):
+            # Райони й ЖК ще не визначались: сторінка — як до E10.
+            if sel.active:
+                warning = " ".join(filter(None, [warning, "Райони й ЖК ще не визначено — "
+                                                 "фільтр за місцем не застосовано."]))
+            d = rules = None
+            sel = facets.Selection()
+            key = speedcache.list_key({**query, "district": "", "complex": "", "area": "",
+                                       "all_ads": all_ads}, in_progress=in_progress,
+                                      collapse=collapse)
+        if d is not None and sel.district and sel.complex not in ("", NONE, UNKNOWN):
+            # Без JS зміна району не скидає ЖК: ЖК, якого у вибраному районі немає,
+            # скидаємо самі — інакше число біля району (без ЖК) ≠ видачі (район ∩ ЖК).
+            groups = _base_groups(s, {**query, "sort": DEFAULT_SORT}, base_key, dk=dk)
+            in_district = facets.predicate(sel)
+            if not any(n for rd, rc, ra, n in groups if in_district(rd, rc, ra)):
+                warning = " ".join(filter(None, [
+                    warning, "ЖК скинуто — його немає у вибраному районі."]))
+                sel = facets.without_complex(sel)
+                key = speedcache.list_key(
+                    {**query, "district": sel.district, "complex": "", "area": sel.area,
+                     "all_ads": all_ads}, in_progress=in_progress, collapse=collapse)
+        hint: dict = {}
+
+        def compute_ids():
+            stmt = list_ids_select(**query, place=sel)
+            if (d is not None and not sel.active and collapse
+                    and speedcache.place_map_peek(dk) is None
+                    and speedcache.facets_peek(base_key, dk) is None):
+                # Холодно й карти немає: лічильники — з того самого проходу, що й id.
+                got, hint["groups"] = _ids_with_groups(s, stmt)
+                return got
+            return s.execute(stmt).scalars().all()
+
+        ids = speedcache.list_ids(s, key, compute_ids, dk=dk)
         matched = len(ids)
         pager = build_page(matched, page, per_page)
         rows = _page_rows(s, ids[pager.offset:pager.offset + pager.size])
@@ -392,6 +582,17 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         # Благо не перевіряється (рішення власника 3, D46): позначка біля рядка
         # квартири, жодне актуальне оголошення якої не можна перевірити (E8, D52).
         unconfirmed = liveness_ui.list_rows(s, rows, collapse=collapse)
+        if d is not None:
+            groups = _base_groups(s, {**query, "sort": DEFAULT_SORT}, base_key,
+                                  None if sel.active else ids, dk=dk,
+                                  groups=hint.get("groups"))
+            place = speedcache.facet_options(
+                s, (base_key, sel, d.version),
+                lambda: facets.options(groups, sel, d, rules), dk=dk)
+    if place is not None and sel.district and sel.complex and not matched:
+        # «Не в ЖК» / «не визначено» у районі, де таких немає: порожній список пояснюємо.
+        warning = " ".join(filter(None, [warning, "У вибраному районі немає оголошень "
+                                         "цього ЖК — скиньте ЖК."]))
     peers = {row.id: _peer_comparison(row, thresholds) for row in rows}
     return templates.TemplateResponse(request, template, {
         "rows": rows, "stats": stats, "sources": sorted(stats["by_source"]),
@@ -399,14 +600,16 @@ def _render_list(request: Request, template: str, *, in_progress: bool | None,
         "unconfirmed_marker": liveness_ui.marker() if unconfirmed else None,
         "matched": matched, "warning": warning, "pager": pager,
         "page_sizes": PAGE_SIZES, "collapse": collapse,
-        "in_work": in_work,
+        "in_work": in_work, "place": place, "place_rows": _place_rows(rows, d, rules),
         # Сортування теж є станом: без нього кнопка скидання зникала саме тоді,
         # коли вибірка вже не була типовою.
         "active_filters": any((condition, market, source, rooms, price_min,
-                               price_max, sort != DEFAULT_SORT)),
+                               price_max, sort != DEFAULT_SORT, sel.district,
+                               sel.complex, sel.area)),
         "path": path,
         "f": {"condition": condition, "market": market, "source": source,
-              "rooms": rooms, "price_min": price_min or "", "price_max": price_max or "",
+              "rooms": rooms, "district": sel.district, "complex": sel.complex,
+              "area": sel.area, "price_min": price_min or "", "price_max": price_max or "",
               "sort": sort, "page": str(pager.number), "per_page": str(pager.size),
               "all_ads": all_ads},
     })
@@ -419,6 +622,9 @@ def index(
     market: str = Query(""),
     source: str = Query(""),
     rooms: str = Query(""),
+    district: str = Query(""),
+    complex_: str = Query("", alias="complex"),
+    area: str = Query(""),
     price_min: str | None = Query(None),
     price_max: str | None = Query(None),
     sort: str = Query(DEFAULT_SORT),
@@ -429,7 +635,8 @@ def index(
     return _render_list(request, "index.html", in_progress=None, path="/",
                         condition=condition, market=market, source=source, rooms=rooms,
                         price_min=price_min, price_max=price_max, sort=sort,
-                        page=page, per_page=per_page, all_ads=all_ads)
+                        page=page, per_page=per_page, all_ads=all_ads,
+                        district=district, complex_=complex_, area=area)
 
 
 @app.get("/processing", response_class=HTMLResponse)
@@ -439,6 +646,9 @@ def processing(
     market: str = Query(""),
     source: str = Query(""),
     rooms: str = Query(""),
+    district: str = Query(""),
+    complex_: str = Query("", alias="complex"),
+    area: str = Query(""),
     price_min: str | None = Query(None),
     price_max: str | None = Query(None),
     sort: str = Query(DEFAULT_SORT),
@@ -450,7 +660,8 @@ def processing(
     return _render_list(request, "processing.html", in_progress=True, path="/processing",
                         condition=condition, market=market, source=source, rooms=rooms,
                         price_min=price_min, price_max=price_max, sort=sort,
-                        page=page, per_page=per_page, all_ads=all_ads)
+                        page=page, per_page=per_page, all_ads=all_ads,
+                        district=district, complex_=complex_, area=area)
 
 
 @app.get("/api/listings")
@@ -458,13 +669,22 @@ def api_listings(
     condition: str = "", market: str = "", source: str = "", rooms: str = "",
     price_min: str | None = None, price_max: str | None = None,
     sort: str = DEFAULT_SORT, in_progress: bool | None = None,
+    district: str = "", complex_: str = Query("", alias="complex"), area: str = "",
     limit: int = Query(500, le=MAX_ROWS),
 ):
     """JSON-зріз тих самих даних."""
+    from ..places import facets
+
     price_min, price_max = _num(price_min), _num(price_max)
+    d, rules = _places()
+    sel, warn = facets.selection(d, rules, district=district, complex_=complex_, area=area)
+    if warn:
+        # Невідомий район/ЖК/місцевість (друкарська помилка) — не «відфільтрований» повний
+        # список, а явна відмова (рецензія E10).
+        return JSONResponse({"error": " ".join(warn), "warnings": warn}, status_code=400)
     stmt = listing_query(condition=condition, market=market, source=source, rooms=rooms,
                          price_min=price_min, price_max=price_max, sort=sort,
-                         in_progress=in_progress)
+                         in_progress=in_progress, place=sel)
     with SessionLocal() as s:
         rows = s.scalars(stmt.limit(limit)).all()
         return JSONResponse([{
@@ -487,6 +707,12 @@ def api_listings(
             "delisted_at": r.delisted_at.isoformat() if r.delisted_at else None,
             "in_progress": r.in_progress,
             "in_progress_at": r.in_progress_at.isoformat() if r.in_progress_at else None,
+            # Район і ЖК квартири (Блок 4, E10, D57) — лише додані поля.
+            "district_key": r.row_district,
+            "district_label": d.label(r.row_district) if d is not None else None,
+            "complex_key": r.row_complex,
+            "complex_label": d.complex_label(r.row_complex) if d is not None else None,
+            "place_area": r.row_area,
         } for r in rows])
 
 
@@ -580,6 +806,7 @@ def api_properties(
     limit: int = Query(200, le=MAX_ROWS),
 ):
     """Майстер-записи: один об'єкт — один рядок із посиланнями на всі оголошення."""
+    d, _rules = _places()
     with SessionLocal() as s:
         stmt = select(Property).where(Property.sources_count >= min_sources)
         if condition in {c.value for c in Condition}:
@@ -607,6 +834,12 @@ def api_properties(
             "market_type": p.market_type.value,
             "condition": p.condition.value,
             "sources_count": p.sources_count,
+            # Район і ЖК квартири (Блок 4, E10, D57) — лише додані поля.
+            "district_key": p.district_key,
+            "district_label": d.label(p.district_key) if d is not None else None,
+            "complex_key": p.complex_key,
+            "complex_label": d.complex_label(p.complex_key) if d is not None else None,
+            "place_area": p.place_area,
             # Масив посилань на всі оригінальні оголошення цього об'єкта.
             "sources": [{"source": l.source, "url": l.original_url,
                          "price_usd": l.price_usd,
@@ -651,15 +884,26 @@ def _warm_lists() -> None:
     Той самий шлях, що й у запиті (ключ, запит id, зведення), тож прогрітий
     кеш — рівно те, що запит узяв би сам.
     """
+    from ..places import facets
+
+    d, _rules = _places()
     with SessionLocal() as s:
+        dk = speedcache.data_key(s)
+        if d is not None:
+            # Карта id → row_* — тут, у фоні, а не в першому запиті після покоління.
+            speedcache.place_map_build(dk, _build_place_map)
         for in_progress in (None, True):
             query = dict(condition="", market="", source="", rooms="", price_min=None,
                          price_max=None, sort=DEFAULT_SORT, in_progress=in_progress,
                          collapse=True)
-            key = speedcache.list_key({**query, "all_ads": ""}, in_progress=in_progress,
+            key = speedcache.list_key({**query, "district": "", "complex": "", "area": "",
+                                       "all_ads": ""}, in_progress=in_progress,
                                       collapse=True)
-            speedcache.list_ids(s, key,
-                                lambda q=query: s.execute(list_ids_select(**q)).scalars().all())
+            ids = speedcache.list_ids(s, key, lambda q=query: s.execute(
+                list_ids_select(**q, place=facets.Selection())).scalars().all(), dk=dk)
+            # Лічильники фільтрів «Район»/«ЖК» типової сторінки — теж фоном (Блок 4, E10).
+            if d is not None:
+                _base_groups(s, query, key, ids, dk=dk)
         _cached_stats(s)
 
 

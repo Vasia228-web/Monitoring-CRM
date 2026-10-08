@@ -241,9 +241,12 @@ def build_items(session, property_ids, *, now: datetime) -> list[Item]:
     результаті немає.
     """
     ids = None if property_ids is None else sorted(set(property_ids))
+    # Район — нормалізований ключ довідника (Блок 4, E10, D57), а не сирий district:
+    # у LUN там найближчий POI («ТЦ Арсен»), і «схожі» порівнювались у кошику ТЦ
+    # (Етап 0: 3 370 квартир), а «Пасiчна» з латинською «i» була окремим кошиком.
     props_stmt = (select(Property.id, Property.rooms, Property.area_total,
                          Property.price_usd_min, Property.price_per_sqm, Property.condition,
-                         Property.market_type, Property.district).order_by(Property.id))
+                         Property.market_type, Property.district_key).order_by(Property.id))
     # Дату публікації і джерела беремо з оголошень: у майстер-записі їх немає,
     # а «скільки днів на ринку» рахується від найранішої публікації серед усіх
     # склеєних оголошень — інакше переклеєне оголошення виглядало б новим.
@@ -341,6 +344,17 @@ class Level:
     match: object          # callable(Item) -> bool
 
 
+def place_label(key: str | None) -> str | None:
+    """Назва району для підпису щабля: з довідника (сайт перечитує його раз на 60 с);
+    без довідника — сам ключ (порівняння від підпису не залежить)."""
+    if not key:
+        return None
+    from ..places import directory
+
+    d = directory.current()
+    return (d.label(key) if d is not None else None) or key
+
+
 def ladder(item: Item, cfg: Settings) -> list[Level]:
     """Щаблі від найвужчого до найширшого — для конкретного об'єкта.
 
@@ -370,6 +384,8 @@ def ladder(item: Item, cfg: Settings) -> list[Level]:
     def with_district(o: Item) -> bool:
         return base(o) and o.district == item.district
 
+    district_label = place_label(item.district)
+
     narrow, wide = area_match(cfg.area_band_pct), area_match(cfg.area_band_max_pct)
     rooms_only = lambda o: o.band == band                      # noqa: E731
     rooms_market = lambda o: o.band == band and o.market == item.market  # noqa: E731
@@ -378,13 +394,13 @@ def ladder(item: Item, cfg: Settings) -> list[Level]:
     if item.district and area is not None:
         levels.append(Level(
             "district_area", f"{rooms_label(band)}, {COND_LABEL[item.condition]}, "
-            f"{MARKET_LABEL[item.market]}, {item.district}, "
+            f"{MARKET_LABEL[item.market]}, {district_label}, "
             f"площа {area * (1 - cfg.area_band_pct):.0f}–{area * (1 + cfg.area_band_pct):.0f} м²",
             lambda o: with_district(o) and narrow(o)))
     if item.district:
         levels.append(Level(
             "district", f"{rooms_label(band)}, {COND_LABEL[item.condition]}, "
-            f"{MARKET_LABEL[item.market]}, {item.district}", with_district))
+            f"{MARKET_LABEL[item.market]}, {district_label}", with_district))
     if area is not None:
         levels.append(Level(
             "area", f"{rooms_label(band)}, {COND_LABEL[item.condition]}, "

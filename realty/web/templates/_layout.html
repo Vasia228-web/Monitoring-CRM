@@ -131,6 +131,8 @@ td.r{text-align:right}
   display:inline-block;max-width:30ch}
 .addr:hover{text-decoration:underline;text-underline-offset:2px}
 .sub{display:block;font-size:11.5px;color:var(--muted);margin-top:3px}
+.sub .tag{font-style:italic}
+.sub.unk{font-style:italic;opacity:.8}
 
 .state{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;white-space:nowrap}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none}
@@ -270,6 +272,7 @@ tr.taken td{background:var(--accent-soft)}
       <a href="{{ carry('/', f) }}" class="{{ 'on' if page == 'list' }}">Моніторинг</a>
       <a href="{{ carry('/processing', f) }}" class="{{ 'on' if page == 'processing' }}">В обробці<span class="count">{{ in_work or 0 }}</span></a>
       <a href="{{ carry('/analytics', f) }}" class="{{ 'on' if page == 'analytics' }}">Аналітика</a>
+      <a href="{{ carry('/places', f) }}" class="{{ 'on' if page == 'places' }}">Райони й ЖК</a>
     </span>
     <span class="spacer"></span>
     {% set role = current_role(request) %}

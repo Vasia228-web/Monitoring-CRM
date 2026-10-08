@@ -44,6 +44,12 @@ LIVENESS_STATE_FIELDS = frozenset({"is_active", "delisted_at", "last_checked", "
                                    "last_attempt", "check_failures"})
 FILL_ONLY_JSON = frozenset({"place_raw", "seller_evidence"})
 FILL_ONLY_SCALAR = frozenset({"seller_profile"})
+# PLACE — район і ЖК (Блок 4, E10, D57): ключі пише лише крок «райони й ЖК»
+# (`cli.py places assign`, лише туди, де порожньо), row_* — лише dedup._sync_rows (кеш
+# квартири). Запис джерела їх не задає й не чіпає — сирі докази йдуть у place_raw.
+PLACE_FIELDS = frozenset({"district_key", "district_how", "complex_key", "complex_how",
+                          "place_area", "place_at", "place_sig", "row_district",
+                          "row_complex", "row_area"})
 
 
 def _fill_only(existing, rec: dict) -> None:
@@ -277,7 +283,7 @@ class Pipeline:
         повторні прогони оновлюють запис, а не створюють новий.
         """
         fields = {c.name for c in Listing.__table__.columns} - {"id", "first_seen"} \
-            - DERIVED_FIELDS - LIVENESS_FIELDS - LIVENESS_STATE_FIELDS
+            - DERIVED_FIELDS - LIVENESS_FIELDS - LIVENESS_STATE_FIELDS - PLACE_FIELDS
         payload = {k: v for k, v in rec.items() if k in fields}
         existing = session.scalar(
             select(Listing).where(
@@ -376,7 +382,7 @@ class Pipeline:
         updatable = [c.name for c in Listing.__table__.columns
                      if c.name not in ("id", "source", "external_id", "first_seen")
                      and c.name not in DERIVED_FIELDS and c.name not in LIVENESS_FIELDS
-                     and c.name not in LIVENESS_STATE_FIELDS
+                     and c.name not in LIVENESS_STATE_FIELDS and c.name not in PLACE_FIELDS
                      and c.name not in FILL_ONLY_JSON and c.name not in FILL_ONLY_SCALAR]
         with session_scope() as s:
             stmt = select(Listing).where(or_(

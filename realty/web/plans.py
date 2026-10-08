@@ -41,6 +41,22 @@ LIST_FILTERS: list[tuple[str, dict]] = [
     ("усі оголошення", {"collapse": False}),
 ]
 
+
+def _place_filters() -> list[tuple[str, dict]]:
+    """Фільтри місця (Блок 4, E10, D57): район (з дитиною), ЖК, «не визначено», місто."""
+    from ..places.facets import Selection
+
+    return [
+        ("район", {"place": Selection(district="tsentr",
+                                      districts=("tsentr", "nimetska-koloniia"))}),
+        ("район не визначено", {"place": Selection(district="_unknown")}),
+        ("ЖК", {"place": Selection(complex="comfort-park", complexes=("comfort-park",))}),
+        ("не в ЖК", {"place": Selection(complex="_none")}),
+        ("тільки місто", {"place": Selection(area="city")}),
+        ("район + кімнат 2", {"rooms": "2", "place": Selection(district="pasichna",
+                                                                districts=("pasichna",))}),
+    ]
+
 _LISTINGS = re.compile(r"^(SCAN|SEARCH) listings(_\d+)?\b")
 
 
@@ -57,7 +73,7 @@ def is_bad(line: str, *, strict: bool = False) -> bool:
 def list_queries():
     """(назва, запит) — запит id списку для кожного сортування × фільтра."""
     for sort in SORTS:
-        for label, kw in LIST_FILTERS:
+        for label, kw in LIST_FILTERS + _place_filters():
             yield f"список id: {sort}, {label}", list_ids_select(sort=sort, **kw)
 
 
@@ -76,6 +92,12 @@ def request_queries(now, sample_ids: list[int]):
     yield "зведення: оновлено", select(func.max(Listing.last_seen))
     yield "зведення: неактуальних", (select(func.count()).select_from(Listing)
                                      .where(effective_active().is_(False)))
+    # Лічильники фільтрів «Район»/«ЖК» (Блок 4, E10): один GROUP BY над запитом id —
+    # раз на покоління й фільтр, але й тут без проходу рядків таблиці.
+    from ..places.facets import grouped_select
+
+    yield "лічильники району й ЖК", grouped_select(list_ids_select())
+    yield "лічильники району й ЖК, кімнат 2", grouped_select(list_ids_select(rooms="2"))
 
 
 def explain(session, stmt) -> list[str]:

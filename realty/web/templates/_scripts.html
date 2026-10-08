@@ -3,7 +3,14 @@
   // інакше список смикається на кожну введену цифру.
   var form = document.querySelector('form.filters');
   document.querySelectorAll('.filters [data-auto]').forEach(function (el) {
-    el.addEventListener('change', function () { form.requestSubmit(); });
+    el.addEventListener('change', function () {
+      // Зміна району скидає ЖК: список ЖК звужений до району (Блок 4, E10).
+      if (el.hasAttribute('data-district')) {
+        var c = form.querySelector('[data-complex]');
+        if (c) c.value = '';
+      }
+      form.requestSubmit();
+    });
   });
   form?.querySelectorAll('input[type=number]').forEach(function (el) {
     el.addEventListener('keydown', function (ev) {

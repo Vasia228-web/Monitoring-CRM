@@ -33,8 +33,9 @@ def masters(session) -> dict:
         select(func.count(Listing.id)).where(Listing.property_id.is_(None))) or 0
     with_rooms = session.scalar(
         select(func.count(Property.id)).where(Property.rooms.isnot(None))) or 0
+    # Район — ключ довідника (Блок 4, E10, D57); сирий district LUN — найближчий POI.
     with_district = session.scalar(
-        select(func.count(Property.id)).where(Property.district.isnot(None))) or 0
+        select(func.count(Property.id)).where(Property.district_key.isnot(None))) or 0
     return {"properties": total, "merged_from_several_sources": multi,
             "listings_without_master": orphan,
             "with_rooms": with_rooms, "with_district": with_district}
@@ -128,7 +129,7 @@ def segments(session, min_size: int = REPORT_MIN) -> dict:
     """
     rows = session.execute(
         select(Property.rooms, Property.condition, Property.market_type,
-               Property.district, Property.price_per_sqm, Property.area_total)
+               Property.district_key, Property.price_per_sqm, Property.area_total)
         .where(Property.price_per_sqm.isnot(None))).all()
 
     by3: dict[tuple, list] = defaultdict(list)

@@ -72,6 +72,8 @@ POLICY: dict[tuple[str, str], str] = {
     # Стан перевірки при відкритті квартири (Блок 2, крок E5, D50): банер на
     # сторінці квартири, яку бачать обидві ролі. Лише читання ops.db.
     ("GET", "/api/property/{property_id}/liveness"): FRIEND,
+    # «Райони й ЖК» (Блок 4, E10, D57): розподіл за районами й ЖК — обидві ролі.
+    ("GET", "/places"): FRIEND,
     # Документація API — за входом, як і все, що не відкрите явно.
     ("GET", "/openapi.json"): FRIEND,
     ("GET", "/api/docs"): FRIEND,
@@ -86,6 +88,7 @@ POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/status/speed"): OWNER,                    # зведення «Швидкість» (D49)
     ("GET", "/api/status/liveness"): OWNER,                 # «Зняті оголошення» (E8, D52)
     ("POST", "/api/status/liveness-fuse"): OWNER,           # зняти запобіжник (E8, D52)
+    ("GET", "/api/status/places"): OWNER,                   # «Райони й ЖК» (E10, D57)
     ("POST", "/api/status/run"): OWNER,                     # запуск збору
     ("GET", "/api/auth/blocks"): OWNER,
     ("POST", "/api/auth/blocks/{ip}/unblock"): OWNER,

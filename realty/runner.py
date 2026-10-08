@@ -119,6 +119,9 @@ def default_steps(trigger: str = "schedule", sources: list[str] | None = None,
     steps += [
         Step("різниця списків", _cli("snapshot"), TASK_TIMEOUTS["snapshot"]),
         Step("перевірка актуальності", _cli("verify"), TASK_TIMEOUTS["verify"]),
+        # Райони й ЖК (Блок 4, E10, D57) — перед «дублі»: зведення переносить ключі
+        # оголошень на квартири (інтеграція, конфлікт 11: єдиний порядок кроків).
+        *_places_step(),
         Step("дублі", _cli("dedup"), TASK_TIMEOUTS["dedup"]),
         Step(f"контроль якості ({routine})", _cli("quality", routine),
              TASK_TIMEOUTS["quality"]),
@@ -128,6 +131,32 @@ def default_steps(trigger: str = "schedule", sources: list[str] | None = None,
         Step("бекап", _cli("backup", "--if-due"), TASK_TIMEOUTS["backup"]),
     ]
     return steps
+
+
+PLACES_STEP = "райони й ЖК"
+
+
+def _places_step() -> list[Step]:
+    """Крок «райони й ЖК» зі стелею з config/cycle.toml (інтеграція, конфлікт 11).
+
+    Лише з `[places] enabled = true`: до перегляду вибірки власником (`places sample` →
+    перегляд → ручний `places assign`) кроку в циклі немає — ключі пишуться «лише туди,
+    де порожньо», і хибні потім виправляє лише `places reassign --apply` (рецензія E10,
+    D57). Зламаний cycle.toml не зупиняє циклу: кроку без стелі немає (помилка в журналі;
+    `config check` мав зупинити таке ще до розгортання) — збір важливіший.
+    """
+    from . import configfiles
+
+    try:
+        cfg = configfiles.load("cycle").places
+    except configfiles.ConfigError as e:
+        log.error("config/cycle.toml не читається — крок «%s» пропущено: %s", PLACES_STEP, e)
+        return []
+    if not cfg.enabled:
+        log.info("крок «%s» вимкнено до перегляду вибірки (config/cycle.toml [places] "
+                 "enabled = false)", PLACES_STEP)
+        return []
+    return [Step(PLACES_STEP, _cli("places", "assign"), cfg.timeout_min * 60)]
 
 
 # --- Процеси ---------------------------------------------------------------------
@@ -467,7 +496,7 @@ def run_cycle(trigger: str = "schedule", sources: list[str] | None = None,
 
 # Кроки, після яких застаріває знімок «Аналітики» (а не лише список): квартири
 # перебудовано. Інші кроки змінюють оголошення — для них досить «lists».
-ANALYTICS_STEPS = ("дублі",)
+ANALYTICS_STEPS = ("дублі", PLACES_STEP)
 
 
 def _bump_after(step: Step, result: StepResult) -> None:

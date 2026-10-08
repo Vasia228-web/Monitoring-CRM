@@ -180,6 +180,27 @@ class Listing(Base):
     seller_evidence_at: Mapped[datetime | None] = mapped_column(DateTime)
     place_raw: Mapped[dict | None] = mapped_column(JSON)
 
+    # --- Район і ЖК (Блок 4, схема S4, крок E10, D57) -------------------------------
+    # Нормалізовані ключі довідника config/places/*.toml. Пише ЛИШЕ крок «райони й ЖК»
+    # (`cli.py places assign`) і ЛИШЕ туди, де порожньо (complex_key '_none' — «не в
+    # ЖК» — дозволено уточнити конкретним ЖК); зміна вже визначеного лише рахується
+    # (would_change, /status). Сирі district/complex_name/location не змінюються.
+    # NULL — «не визначено». how — яким ступенем визначено (rules.tiers).
+    district_key: Mapped[str | None] = mapped_column(String(48))
+    district_how: Mapped[str | None] = mapped_column(String(16))
+    complex_key: Mapped[str | None] = mapped_column(String(64))       # '_none' — не в ЖК
+    complex_how: Mapped[str | None] = mapped_column(String(16))
+    place_area: Mapped[str | None] = mapped_column(String(8))         # city|hromada|outside
+    place_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Відбиток входів (докази, версії довідника й правил): чим визначено нинішні ключі.
+    place_sig: Mapped[str | None] = mapped_column(String(16))
+    # Значення КВАРТИРИ на кожному її оголошенні (рядок без квартири — власні ключі):
+    # фільтр «Район»/«ЖК» і лічильники списку беруть їх із покривного індексу
+    # ix_listings_place без з'єднання з properties. Кеш: пише лише dedup._sync_rows.
+    row_district: Mapped[str | None] = mapped_column(String(48))
+    row_complex: Mapped[str | None] = mapped_column(String(64))
+    row_area: Mapped[str | None] = mapped_column(String(8))
+
     # --- Робочий процес -------------------------------------------------------
     # «Взято в обробку» — позначка користувача про те, що об'єктом займаються.
     # Свідомо окреме поле, а не `manual_active`: те відповідає за життєвий цикл
@@ -254,6 +275,17 @@ Index("ix_listings_keeper", Listing.property_id, Listing.quality_status, effecti
 # додаємо; запити списку й кроків циклу цього індексу не бачать — умова інша).
 Index("ix_listings_absent_since", Listing.absent_since,
       sqlite_where=Listing.absent_since.isnot(None))
+# Фільтри «Район», «ЖК», «тільки місто» і їхні лічильники (Блок 4, схема S4, E10, D57):
+# ПОКРИВНИЙ для запиту id списку з цими фільтрами й для GROUP BY лічильників — ті самі
+# поля, що й ix_listings_visible, плюс row_*. План інтеграції називав складений
+# (row_district, row_complex); охоронець планів Блоку 2 (tests/test_list_plans.py)
+# вимагає для запиту id лише покривного індексу, тож row_* стоять тут одразу після
+# виразу актуальності й якості (рівність за районом звужує прохід). Без фільтрів місця
+# планувальник лишається на вужчому ix_listings_visible (перевіряє той самий тест).
+Index("ix_listings_place", effective_active(), Listing.quality_status, Listing.row_district,
+      Listing.row_complex, Listing.row_area, Listing.property_id, Listing.in_progress,
+      Listing.source, Listing.rooms, Listing.condition, Listing.market_type,
+      Listing.price_usd, Listing.price_per_sqm, Listing.published_at)
 
 
 # --- Слухачі ORM: ключ site_key і телефони (крок E6, D51) --------------------------------------
@@ -534,6 +566,14 @@ class Property(Base):
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Найсвіжіше «бачили» серед оголошень квартири — ставить перебудова.
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Район і ЖК квартири (Блок 4, схема S4, E10, D57): найсильніший ступінь серед її
+    # оголошень, усередині — більшість (places.resolve.property_place); нічия — NULL і
+    # place_conflict. Кеш квартири, як і решта полів: будує зведення й крок «райони й ЖК».
+    # Аналітика порівнює «схожі» за district_key (а не за сирим district із POI LUN).
+    district_key: Mapped[str | None] = mapped_column(String(48))
+    complex_key: Mapped[str | None] = mapped_column(String(64))
+    place_area: Mapped[str | None] = mapped_column(String(8))
+    place_conflict: Mapped[dict | None] = mapped_column(JSON)
 
     listings: Mapped[list["Listing"]] = relationship(
         "Listing", backref="property", lazy="selectin"

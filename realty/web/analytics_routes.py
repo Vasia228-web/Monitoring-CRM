@@ -157,6 +157,32 @@ def property_rows(session, property_id: int) -> list[Listing]:
                            .order_by(Listing.price_usd.desc(), Listing.id)).all()
 
 
+def place_summary(prop, rows) -> dict | None:
+    """Район і ЖК квартири для сторінки (Блок 4, E10, D57): назва з довідника, позначка
+    «громада»/«поза громадою» і «звідки» — ступінь, яким визначено (з її оголошень)."""
+    from ..places import directory
+    from ..places.directory import NONE
+
+    d = directory.current()
+    if d is None or prop is None:
+        return None
+    labels = d.rules.labels
+    dk, ck = prop.district_key, prop.complex_key
+    d_how = next((r.district_how for r in rows if r.district_key == dk and dk), None)
+    c_how = next((r.complex_how for r in rows if r.complex_key == ck and ck), None)
+    area = prop.place_area
+    return {
+        "district": d.label(dk),
+        "district_how": labels.how.get(d_how) if d_how else None,
+        "complex": d.complex_display(ck),
+        "complex_how": labels.how.get(c_how) if c_how and ck != NONE else None,
+        "none": labels.none_complex if ck == NONE else None,
+        "tag": labels.hromada if area == "hromada" else labels.outside if area == "outside"
+        else None,
+        "unknown": labels.unknown_district if not dk else None,
+    }
+
+
 def _analyse(session, property_id: int, cfg) -> dict | None:
     """analyse() за знімком; квартира, якої знімок ще не знає, — точкове оновлення.
 
@@ -203,6 +229,12 @@ def property_page(request: Request, property_id: int, verify: str = Query("1")):
                 status_code=404)
         # Оголошення потрібні шаблону для кнопки «взяти в обробку».
         data["rows"] = property_rows(s, property_id)
+        from . import speedcache
+        from .app import places_ready
+
+        # До першого `places assign` — як до E10 (сирий район), а не «не визначено».
+        data["place"] = (place_summary(data.get("property"), data["rows"])
+                         if places_ready(s, speedcache.data_key(s)) else None)
         # Об'єкт вважаємо взятим в обробку, якщо позначене хоч одне з оголошень:
         # інакше статус, поставлений зі списку, не було б видно на цій сторінці.
         data["in_progress"] = any(r.in_progress for r in data["rows"])
