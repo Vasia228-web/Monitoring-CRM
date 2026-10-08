@@ -42,14 +42,15 @@ def row_from_json(d: dict) -> Row:
 def item_to_json(item: WorkItem) -> dict:
     return {"key": item.key, "host": item.host, "url": item.url, "tier": item.tier,
             "rows": [row_to_json(r) for r in item.rows],
-            "streak404": [_iso(t) for t in item.streak404], "jobs": list(item.jobs)}
+            "streak404": [_iso(t) for t in item.streak404], "jobs": list(item.jobs),
+            "body_cap": int(item.body_cap)}
 
 
 def item_from_json(d: dict) -> WorkItem:
     return WorkItem(key=d["key"], host=d["host"], url=d["url"], tier=d["tier"],
                     rows=tuple(row_from_json(r) for r in d["rows"]),
                     streak404=tuple(_dt(t) for t in d["streak404"]),
-                    jobs=tuple(d.get("jobs") or ()))
+                    jobs=tuple(d.get("jobs") or ()), body_cap=int(d.get("body_cap") or 0))
 
 
 def verdict_to_json(v: Verdict) -> dict:

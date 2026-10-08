@@ -66,6 +66,7 @@ class HostPlan:
     overdue_share: float | None = None
     held_keys: int = 0                                    # ключів під запобіжником — не питаємо
     attempted_tonight: int = 0                            # уже пробували цієї ночі
+    body_gets: int = 0                                    # GET замість HEAD — для доказів (E11)
 
     @property
     def requests(self) -> int:
@@ -81,7 +82,7 @@ class HostPlan:
                 "seconds": round(self.seconds, 1), "tiers": dict(self.tiers),
                 "identity": self.identity, "skipped": self.skipped,
                 "overdue_share": self.overdue_share, "held_keys": self.held_keys,
-                "attempted_tonight": self.attempted_tonight}
+                "attempted_tonight": self.attempted_tonight, "body_gets": self.body_gets}
 
 
 @dataclass
@@ -237,7 +238,27 @@ def build(session, lcfg, ncfg, *, now: datetime, held=frozenset(),
             if late:
                 fill(job, [k for k in queue.due_keys(u, lcfg, session, held=held, exclude=taken)
                            if u.key_host[k] in late])
+    _mark_body_gets(session, lcfg, plans)
     return NightPlan(hosts=plans, held=held, now=now)
+
+
+def _mark_body_gets(session, lcfg, plans: dict[str, HostPlan]) -> None:
+    """Ключі хостів capture.body_hosts, рядкам яких бракує доказів Блоків 3/4, — GET
+    замість HEAD у тому самому слоті (класифікація та сама; інтеграція, конфлікт 4: «для
+    rieltor у M3 замість HEAD робимо GET»; E11, D60). Кількість запитів не змінюється."""
+    from ..liveness import capture
+
+    if not lcfg.capture.enabled:
+        return
+    for host, cap in lcfg.capture.body_hosts.items():
+        p = plans.get(host)
+        if p is None or not p.items:
+            continue
+        need = capture.body_need_keys(session, lcfg, host)
+        for item in p.items:
+            if item.key in need:
+                item.body_cap = int(cap)
+                p.body_gets += 1
 
 
 def _m2_keys(u: queue.Universe, cfg, tier: str, legacy: set[int], by_404: set[int]) -> list[str]:

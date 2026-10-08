@@ -77,9 +77,19 @@ def check_one(item: queue.WorkItem, net, *, cfg, ctx: existence.Context, hooks=(
     запити; `late()` — чи минула стеля часу (тоді перевірок існування не починаємо).
     """
     spec = cfg.hosts[item.host]
-    result = net.check(item.url, method=spec.method, delay=delay, max_bytes=spec.max_bytes)
+    judged = result = None
+    if item.body_cap and spec.signature == "code":
+        # Уночі ключ, якому бракує доказів Блоків 3/4: GET замість HEAD у тому самому
+        # слоті смуги (запитів не більше). Вердикт — ЯК У HEAD: лише код і переадресації
+        # (тіло, «завелике» чи обірване посеред читання — не вердикт); тіло — гачкам
+        # (інтеграція, конфлікт 4; E11, D60).
+        result = net.check(item.url, method="GET", delay=delay, max_bytes=item.body_cap)
+        judged = replace(result, body=None, error=None) if result.code else result
+    else:
+        result = net.check(item.url, method=spec.method, delay=delay, max_bytes=spec.max_bytes)
+        judged = result
     at = now_fn()
-    verdict = classify(spec, cfg.ria_page, item.key, result)
+    verdict = classify(spec, cfg.ria_page, item.key, judged)
     if verdict.kind == NOT_FOUND and not pol.is_row_key(item.key):
         streak = queue.counted_404s((*item.streak404, at), cfg.repeat_404.min_interval_hours)
         # Після стелі часу перевірок існування не починаємо (2–3 запити ще):
