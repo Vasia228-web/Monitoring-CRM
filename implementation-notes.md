@@ -3241,3 +3241,179 @@ CHECKPOINTS.md); тривоги на два рівні й щоденне зве�
   «/» +3 мс на M4), сторож — раз на стан, flombu: точність точки й населений пункт;
   строгий класифікатор рівності сторінок (ІНШЕ 0; аналітика — 216 сторінок, вердикт
   перевертається на 21); новий еталон golden_e10; 1 697 тестів. Нічого не розгорнуто.
+
+### D58. Промт 11, хвиля W3: тривоги на два рівні, щоденне зведення, права друга, контрольна вибірка (08.10.2026)
+- **Що зроблено (закомічено в гілці хвилі, нічого не розгорнуто).** Рішення власника
+  08.10 (D55 пп. 5–7):
+  - *Тривоги на два рівні* (`realty/watchdog.py`, `config/alerts.toml`). Кожен ключ
+    тривоги має рівень за найдовшим префіксом із `[levels]` (ключ == префікс або
+    «префікс:…»); ключ без рядка — **critical** (обережний бік). Критичне — одразу, як і
+    досі (повтор раз на ALERT_REPEAT_HOURS, «✅ Відновилось»), але перший рядок
+    «🚨 КРИТИЧНО — потрібна дія» і рядок «👉 Що робити» з `[actions]` ({arg} — джерело,
+    хост, служба). Попередження НЕ надсилаються: вони в стані сторожа (data/alerts.json:
+    з коли, коли востаннє, текст, рівень; зникле — у `_resolved` на 72 год).
+    `watchdog.ALERT_KEYS` — усі префікси; тест звіряє його з літералами ключів у коді й
+    вимагає явний рядок у alerts.toml для кожного.
+  - *Щоденне зведення* (`realty/digest.py`): сторож (`cli.py watchdog`, таймер) на
+    першому запуску після `digest.at` (08:40, Europe/Kyiv) шле «📋 Щоденне зведення ·
+    09.10 (пт)» за місцеву дату, якщо його ще не було; не вдалось — дата не ставиться,
+    наступний запуск повторить. Вікно — від попереднього зведення (24–72 год). Розділи —
+    реєстр `SECTIONS` (`digest.register` — для інших хвиль; None — пропуск; виняток —
+    рядок «розділ X не зібрано»): попередження (активні, зниклі, критичні, що тривають чи
+    минули, служби, що падали), «✅ Усе гаразд», ніч (по хостах: перевірено ключів, знято,
+    повернуто, полагоджено, без висновку, зупинка блокуваннями; M2/M3 — у плані,
+    перевірено, лишилось; запобіжник; `night.report.evidence_summary(session)` — якщо
+    вже є, через getattr, session — SessionLocal основної бази), цикли (статуси, нових
+    по джерелах), бекапи (по сховищах ✅/❌ і останній успіх), цілісність бази,
+    контрольна вибірка, райони й ЖК (змінилось би, нерозпізнаних назв — з ops.places_runs).
+    Довжина ≤ 3 900 (хвіст «… ще N рядків»). `cli.py alert digest [--dry-run|--send]`
+    (ручне надсилання розкладу не змінює), `cli.py alert levels`.
+  - *Нові перевірки сторожа:* site-local (127.0.0.1:8000/healthz) і site-public
+    (data/public_url + /healthz) — критичні після 2 невдалих запусків поспіль;
+    db-integrity:<база> — PRAGMA quick_check realty.db і ops.db раз на місцеву добу після
+    07:40, з'єднання лише для читання, спільна стеля 120 с (progress handler); «не
+    встигла» — рядок у зведенні, не тривога; запасна — db-integrity:backup, коли копія
+    бекапу не пройшла integrity_check; low:<джерело> — нових за добу < 20% медіани 7
+    діб (не нуль записаних); liveness-sample-* — контрольна вибірка; на прохання
+    оркестратора — liveness-canary-genuine:<хост> (у звіті прогону непорожній
+    `canary_genuine`) і liveness-no-canary:<хост> (3 прогони циклу поспіль без жодного
+    запланованого контрольного при canaries_per_run > 0) — обидва попередження; поля
+    гілки запобіжника читаються обережно (немає — мовчки пропуск).
+  - *Впала служба:* `deploy/fedora/systemd/realty-alert@.service` (`cli.py alert
+    unit-failed %i`) і `OnFailure=realty-alert@%n.service` у realty-cycle, realty-night,
+    realty-backup, realty-web, realty-liveness-sample. Повідомлення критичне одразу, з
+    останніми 15 рядками `journalctl --user -u <юніт>` (значення секретних змінних
+    оточення, токени Telegram, «password=…», «Authorization …», довгі непрозорі рядки →
+    «***»); не частіше ніж раз на 60 хв на службу (далі лічильник, data/unit_failures.json);
+    не надіслалось — черга data/alerts_outbox.json, сторож шле її першою. Сама команда
+    ніколи не падає (код 1, рядок у stderr).
+  - *Права друга* (D55 п. 5): /openapi.json, /api/docs, /redoc — префікси
+    `auth.OWNER_ONLY`; oauth2-redirect Swagger перенесено з /docs/oauth2-redirect під
+    /api/docs/oauth2-redirect (той самий префікс); POST /api/listings/{id}/status —
+    `auth.OWNER_ONLY_RE` (повний збіг шляху) усередині спільного /api/listings,
+    `auth.owner_only(path)`. Друг — 403 (кука й Basic), рядок у базі не змінюється;
+    власник — 200. Кнопки, що кличе цей POST, у шаблонах немає (grep: лише /api/status) —
+    ховати нічого.
+  - *Контрольна вибірка Блоку 1* (`realty/liveness/sample.py`, `config/sample.toml`,
+    `cli.py liveness sample [--per-source N] [--dry-run] [--report [--last N]]`): по 100
+    випадкових актуальних (як на сайті: is_clean і effective_active) оголошень кожного
+    джерела, що перевіряється, + до 10 контрольних на хост (`queue.canary_keys` за ім'ям).
+    Спершу контрольні (усі хости разом), потім випадкові — `engine.run_items` (той самий
+    підпис, повторний 404 з перевіркою існування, смуги хостів, темп `delay`), під замком
+    циклу (`dbmigrate.wait_cycle_lock`, ≤ 30 хв, далі — «lock_timeout» і попередження),
+    стеля мережі 60 хв. Результати — ops.liveness_sample_runs і ops.liveness_sample_checks
+    (джерело, оголошення, ключ, хост, random/canary, alive/removed/not_found/unknown/
+    not_reached/stopped, підпис, код, безпечна адреса, доказ, last_seen, last_checked,
+    last_attempt, hinted). Вердикт джерела: «знято» серед випадкових з відповіддю ≤ 5% —
+    pass; > 5% — fail (попередження; кожен випадок — «бачили в стрічці X год тому,
+    звичайна перевірка Y год тому»); > fuse.share (20%) при n ≥ fuse.min_checked —
+    fuse_share (критичне «рішення власника», нічого автоматично); контрольне «знято» —
+    canary (критичне, решту вибірки джерела й сайту не питаємо). «Знято» (pass/fail/
+    too_few) — підказка: відкладене завдання «opened» квартири в ops.lookup_checks
+    (найближчий цикл бере його ярусом opened через запобіжник; без дублів). Таймер
+    `realty-liveness-sample.timer` — щосереди 10:20 (перший запуск 14.10.2026),
+    Persistent=false, TimeoutStartSec=1h40min, пріоритети — як у realty-lookup@.
+- **Рівні тривог (alerts.toml):** критичні — silence, drop, write, backup-none,
+  db-integrity, site-local, site-public, unit-failed, liveness-fuse,
+  liveness-sample-canary, liveness-sample-share, night-failed (і «завислий» запис ночі),
+  night-backup, night-missing, night-skipped, night-hold, watchdog:check_silence,
+  watchdog:check_backup, watchdog:check_site, watchdog:check_db_integrity,
+  watchdog:check_sources, watchdog:check_liveness, watchdog:check_night,
+  watchdog:check_sample, watchdog:alerts-config; попередження — low, blocks,
+  verify-blocks, backup-partial, liveness-coverage, liveness-ria-unrecognized,
+  liveness-repeat404, liveness-snapshot-stale, liveness-sample-removed,
+  liveness-sample-skipped, liveness-canary-genuine, liveness-no-canary, night-blocked,
+  night-late, dedup-suspicious, dedup-missed, dedup-complex, places-failed,
+  places-would-change, watchdog (решта перевірок сторожа).
+- **Ключі конфігу.** `config/alerts.toml`: `[levels]`, `[actions]`, `[digest]` at,
+  timezone, max_chars, keep_resolved_hours, max_window_hours; `[site]` local_url,
+  check_public, public_path, timeout_s, fail_runs; `[integrity]` enabled, at,
+  max_seconds, databases; `[units]` repeat_minutes, log_lines. `config/sample.toml`:
+  `[run]` per_source, canaries_per_host, pace, max_minutes, lock_wait_minutes, seed;
+  `[verdict]` max_removed_share, min_checked, examples, alert_days; `[hints]` enabled.
+  Обидві теми — у `configfiles.SCHEMAS` (`config check` їх перевіряє) і config/README.md.
+- **Замір quick_check** (копія data/realty.db 64 МБ і ops.db на MacBook, кеш теплий):
+  realty 0,22 с (integrity_check повторно — 0,09 с), ops 0,001 с. Fedora повільніша в
+  6–12 разів, база там більша (check_events) — очікую 3–30 с; стеля 120 с при
+  TimeoutStartSec 5 хв сторожа. Якщо в зведенні «НЕ ВСТИГЛА» — лишається
+  db-integrity:backup (щоденний integrity_check копії в backup.py), і quick_check варто
+  перенести в нічне вікно.
+- **Рішення й відхилення (що сталося → варіанти → що обрав → що переглянути):**
+  1. *«Бекапу немає в жодному сховищі».* Остання спроба «failed», але локальна копія
+     перевірена (усі сховища поза машиною впали). (а) попередження — копія є; (б)
+     критичне. **Обрав (б)**, ключ backup-none: backup.py сам рахує це невдачею (успіх —
+     лише з копією поза машиною), а локальна копія на тому ж HDD від смерті диска не
+     захищає; текст каже «локальна копія є». Одне сховище з кількох — backup-partial
+     (попередження). Старий ключ «backup» у стані перейменовується (без хибного
+     «Відновилось»). Переглянути, якщо власник хоче (а).
+  2. *«Падіння до < 20%, але не нуль».* Правило за прогоном дало б щоденний шум:
+     DIM.RIA/OLX зупиняються після першої сторінки (20 записаних замість 160 — норма,
+     регресійний test_early_stop_is_not_a_drop). **Обрав** добу: нових за 24 год < 20%
+     медіани нових за добу 7 попередніх діб (медіана ≥ 10) — low:<джерело>,
+     попередження; нуль записаних 2 прогони — як і було, drop (критичне, «збір стоїть»).
+     Переглянути поріг після тижня зведень.
+  3. *Помилки самого сторожа.* Пропозиція — попередження. Але впала check_silence (чи
+     перевірка бекапу, сайту, бази, джерел, запобіжника, ночі, вибірки) сховала б у
+     зведенні саме ту аварію, яку мала побачити (самоперевірка, п. i). **Обрав:**
+     watchdog — warning, watchdog:check_<перевірка критичного> — critical (явні рядки в
+     alerts.toml); тест ламає кожну перевірку й перевіряє рівні. Зламаний alerts.toml —
+     усе критичне, без зведення (watchdog:alerts-config). Зламана черга чи зіпсований
+     `_resolved` критичних не зупиняють.
+  4. *write:<джерело>* (зібране не записується в базу) — критичне (дані не доходять, по
+     суті «збір стоїть»); *blocks:<джерело>* (збір) і *verify-blocks* — попередження
+     (нуль записаних і так дасть drop); *liveness-ria-unrecognized* — попередження
+     (нерозпізнане не знімається); *places-failed* — попередження (фільтри показують
+     попередній стан; у переліку власника цього немає).
+  5. *Часовий пояс зведення* — у конфігу (Europe/Kyiv), а не пояс машини: тести не
+     залежать від машини, а Fedora — у Києві. «Раз на добу» — за МІСЦЕВОЮ датою: північ
+     UTC (03:00 за Києвом) другого зведення не дає (тест).
+  6. *Сайт ззовні* — data/public_url + /healthz, як tunnel.responds; 2 запуски поспіль
+     (до ~1 год) — перезапуск realty-web на 13–15 с не тривожить. realty-web має
+     Restart=always: до failed він доходить рідко, тож OnFailure там — додатково, а
+     «сайт не піднявся» ловить site-local. У realty-cycle (Restart=on-failure) падіння
+     можуть повторюватись — повідомлення не частіше ніж раз на 60 хв.
+  7. *Контрольна вибірка — окремий config/sample.toml*, а не таблиця [sample] у
+     liveness.toml: гілка запобіжника саме змінює liveness.toml [fuse] і LivenessConfig —
+     окрема тема зливається без конфліктів; межі запобіжника читаються з liveness.toml.
+  8. *Знаменник частки вибірки* — оголошення з відповіддю (живе, знято, 404); «без
+     висновку» — окремо. Суворіше за запобіжник (той рахує всі перевірені) і для
+     критерію 5%, і для межі 20% (частка вища → тривога раніше).
+  9. *Підказка «знято»* — відкладене завдання «opened» квартири (ярус opened кроку
+     циклу — наявний механізм підказаних, через запобіжник); check_events вибірка НЕ
+     пише: незастосоване «знято» стало б ярусом held, який запобіжник не рахує.
+     Оголошення без квартири підказки не мають (дочекаються сліпого обходу) — видно в
+     «hinted».
+  10. *Код виходу вибірки* — 0 і при поганому вердикті, і при «lock_timeout» (тривоги —
+      від сторожа за записом прогону, одна на прогін); ненульовий — лише виняток
+      (OnFailure → «служба впала»), щоб одна подія не давала двох критичних.
+  11. *Контрольні — за сайтом-сімейством* (domria, olx, rieltor, lun, flombu):
+      контрольне «знято» зупиняє і джерело, і сайт (копії LUN на цьому сайті теж не
+      питаємо).
+- **Самоперевірка (окремого рецензента для інтерфейсу немає, D55 п. 8):** (i) критичне
+  не потрапляє лише в зведення — рівні явні, невідоме — critical, впалі перевірки
+  критичного — critical, зламаний конфіг — усе critical, черга недоставленого;
+  (ii) зведення — місцева дата, повтор після невдачі, північ UTC і місцева (тести);
+  (iii) друг — 403 на /openapi.json, /api/docs, /api/docs/oauth2-redirect, /redoc і POST
+  /api/listings/{id}/status (кука й Basic), власник — 200 (на коді до W3 нові тести
+  падають: друг відкривав /api/docs); (iv) вибірка стану не змінює — тест звіряє
+  відбиток усіх колонок listings і кількості check_events/listing_events до й після
+  (зокрема зі «знято» й підказками).
+- **Тести:** 1 672 → 1 721 (+49; 25 пропущено, як і досі): tests/test_alerts.py, tests/test_liveness_sample.py, нові
+  в test_route_policy.py; змінені test_watchdog.py (backup → backup-none, попередження не
+  надсилаються) і test_places_review.py (would_change — попередження; once перевірено
+  примусово критичним). conftest: сторож у тестах не ходить на 127.0.0.1:8000 і не читає
+  всю копію бази (SITE_PROBE, INTEGRITY_CHECK), черга й журнал служб — у тимчасовій теці.
+- **Перевірити руками:** `.venv/bin/python cli.py config check` · `cli.py alert levels` ·
+  `cli.py alert digest --dry-run` · `cli.py liveness sample --dry-run` · після 14.10
+  10:20 — `cli.py liveness sample --report` · `systemctl --user list-timers 'realty-*'` ·
+  друг: `curl -s -o /dev/null -w '%{http_code}' -u <друг> http://127.0.0.1:8000/api/docs`
+  → 403.
+- **Розгортання (між циклами, DEPLOY.md):** бекап → `git pull` → `config check` (нові
+  alerts.toml, sample.toml) → `db migrate --dry-run` (ops.db: liveness_sample_runs,
+  liveness_sample_checks — їх створить init_ops() першого процесу; realty.db без змін) →
+  `bash deploy/fedora/install.sh` (копіює realty-alert@.service,
+  realty-liveness-sample.*, OnFailure у юнітах; вмикає таймер вибірки, якщо таймер циклу
+  ввімкнений) → `systemctl --user restart realty-web` (права друга) → перевірка вище.
+  Перше зведення — 09.10 між 08:40 і 09:10; перша вибірка — 14.10 10:20; перша
+  перевірка цілісності — на першому запуску сторожа після розгортання (якщо вже після
+  07:40), далі щодня о 07:40.
