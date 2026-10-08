@@ -57,10 +57,10 @@ poll_ms = 1500
 wait_max_s = 180.0
 # Картка DOM.RIA (realty/data/<id>?lang_id=4): що вважати квартирою на продаж.
 # Значення — як у фільтрі пошуку збирача (realty/sources/domria.py:
-# realty_type=2 — квартира, operation_type=1 — продаж); поля картки
-# realty_type_id і advert_type_id — needs_live_verification (на зразках Етапу 0
-# ключі є, значень у зразку не записано). Невідоме значення — «не квартира на
-# продаж», без вставки (консервативно).
+# realty_type=2 — квартира, operation_type=1 — продаж); у справжній картці
+# (локальний зразок probes/_ria_sample.json на MacBook) — realty_type_id = 2
+# «Квартира», advert_type_id = 1 «продаж» (seen_in_probe, D59). Невідоме значення —
+# «не квартира на продаж», без вставки (консервативно).
 domria_flat_realty_type_ids = [2]
 domria_sale_advert_type_ids = [1]
 # Стеля тіла картки (байт): картки Етапу 0 — 5–6 КБ, з описом — до ~20 КБ.

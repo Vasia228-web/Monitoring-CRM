@@ -332,7 +332,9 @@ class LiveCheck:
                     self._watch.pop(job_id, None)
                 if job is not None and job.state == "done" and \
                         queue.changed_visibility(queue.result_of(job)):
-                    self._changed(job_id, pid)
+                    # Завдання «Перевірити зараз» квартири не має — вона в результаті.
+                    self._changed(job_id, pid if pid is not None
+                                  else queue.result_of(job).get("property_id"))
         with self._lock:
             pending = bool(self._watch)
         if not pending:
